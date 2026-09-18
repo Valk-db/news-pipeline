@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Approved Posts - News Pipeline</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Approved Posts</h1>
+            <a href="/" class="btn btn-secondary">← Back to Triage</a>
+        </header>
+
+        {% if not posts %}
+        <div class="empty-state">
+            <p>No approved posts yet.</p>
+        </div>
+        {% else %}
+        <div class="posts-list">
+            {% for post in posts %}
+            <div class="post-card">
+                <div class="post-header">
+                    <span class="platform-badge">{{ post.platform }}</span>
+                    <span class="post-date">{{ post.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</span>
+                </div>
+
+                <div class="post-caption">
+                    {{ post.caption }}
+                </div>
+
+                <div class="post-sources">
+                    <small>Sources:</small>
+                    <ul>
+                        {% for url in post.source_urls %}
+                        <li><a href="{{ url }}" target="_blank">{{ url }}</a></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+
+                <div class="post-actions">
+                    <button class="btn btn-success"
+                            hx-post="/post/{{ post.id }}/mark-posted"
+                            hx-target="closest .post-card"
+                            hx-swap="outerHTML">
+                        Mark as Posted
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

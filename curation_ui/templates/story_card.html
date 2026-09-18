@@ -1,0 +1,50 @@
+<div class="story-card" data-story-id="{{ item.story.id }}" tabindex="0">
+    <div class="story-header">
+        <span class="badge badge-{{ 'success' if item.story.status == 'QUEUED' else 'warning' }}">
+            {{ item.story.status }}
+        </span>
+        <span class="story-day">{{ item.story.day.strftime('%Y-%m-%d') }}</span>
+        <span class="story-gate">{{ item.story.gate_reason or 'Pending review' }}</span>
+    </div>
+
+    <div class="story-entities">
+        {% for entity in item.story.primary_entities %}
+        <span class="entity-tag">{{ entity }}</span>
+        {% endfor %}
+    </div>
+
+    <div class="story-sources">
+        {% for article in item.articles %}
+        <div class="source-item">
+            <a href="{{ article.url }}" target="_blank" class="source-title">
+                {{ article.title[:120] }}{% if article.title|length > 120 %}...{% endif %}
+            </a>
+            <span class="source-meta">
+                {{ article.source_domain }} •
+                {% if article.published_at %}{{ article.published_at.strftime('%H:%M UTC') }}{% endif %}
+                • Tier: {{ article.source_tier.value }}
+            </span>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="story-units">
+        <small>
+            {{ item.units|length }} reporting unit{% if item.units|length != 1 %}s{% endif %} •
+            {{ item.story.tier1_unit_count }} tier-1 •
+            {{ item.story.distinct_owners }} owner{% if item.story.distinct_owners != 1 %}s{% endif %}
+        </small>
+    </div>
+
+    <div class="story-actions">
+        <button class="btn btn-success" hx-post="/story/{{ item.story.id }}/approve" hx-target="#stories" hx-swap="outerHTML">
+            Approve (A)
+        </button>
+        <button class="btn btn-danger" hx-post="/story/{{ item.story.id }}/reject" hx-target="#stories" hx-swap="outerHTML">
+            Reject (R)
+        </button>
+        <a href="/story/{{ item.story.id }}/edit" class="btn btn-primary">
+            Edit (E)
+        </a>
+    </div>
+</div>

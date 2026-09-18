@@ -1,0 +1,28 @@
+{
+  "buildCommand": "cd curation_ui && uv sync --frozen",
+  "installCommand": "cd curation_ui && uv sync --frozen",
+  "framework": "fastapi",
+  "rewrites": [
+    {
+      "source": "/static/(.*)",
+      "destination": "/curation_ui/static/$1"
+    }
+  ],
+  "crons": [],
+  "headers": [
+    {
+      "source": "/static/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=604800, immutable"
+        }
+      ]
+    }
+  ],
+  "functions": {
+    "curation_ui/main.py": {
+      "maxDuration": 300
+    }
+  }
+}

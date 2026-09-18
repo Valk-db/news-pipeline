@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>News Pipeline - Curation</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>News Pipeline Curation</h1>
+            <div class="header-actions">
+                <a href="/posts" class="btn btn-secondary">View Posts ({{ posts_count }})</a>
+                <span class="keyboard-hint">Keys: A=Approve, R=Reject, E=Edit</span>
+            </div>
+        </header>
+
+        {% include "story_grid.html" %}
+    </div>
+
+    <script>
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            const key = e.key.toLowerCase();
+            const focused = document.querySelector('.story-card:focus-within') ||
+                           document.querySelector('.story-card:hover') ||
+                           document.querySelector('.story-card');
+
+            if (!focused) return;
+
+            const storyId = focused.dataset.storyId;
+            if (!storyId) return;
+
+            if (key === 'a') {
+                e.preventDefault();
+                htmx.ajax('POST', `/story/${storyId}/approve`, { target: '#stories', swap: 'outerHTML' });
+            } else if (key === 'r') {
+                e.preventDefault();
+                htmx.ajax('POST', `/story/${storyId}/reject`, { target: '#stories', swap: 'outerHTML' });
+            } else if (key === 'e') {
+                e.preventDefault();
+                window.location.href = `/story/${storyId}/edit`;
+            }
+        });
+
+        // Focus first card on load
+        document.addEventListener('DOMContentLoaded', () => {
+            const firstCard = document.querySelector('.story-card');
+            if (firstCard) firstCard.focus();
+        });
+    </script>
+</body>
+</html>

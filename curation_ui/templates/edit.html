@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit Story - News Pipeline</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container edit-page">
+        <header>
+            <h1>Edit Story</h1>
+            <a href="/" class="btn btn-secondary">← Back</a>
+        </header>
+
+        <form hx-post="/story/{{ story.id }}/save" hx-target="body" hx-swap="outerHTML">
+            <input type="hidden" name="platform" value="twitter">
+
+            <div class="form-group">
+                <label>Platform</label>
+                <select name="platform" id="platform">
+                    <option value="twitter" selected>Twitter/X</option>
+                    <option value="instagram">Instagram</option>
+                    <option value="linkedin">LinkedIn</option>
+                    <option value="threads">Threads</option>
+                    <option value="bluesky">Bluesky</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Caption <span class="char-count">(<span id="char-count">0</span>/280)</span></label>
+                <textarea name="caption" id="caption" rows="6" required>{{ draft_caption }}</textarea>
+                <div class="caption-hint">
+                    Paraphrase only. One source link. No verbatim article text.
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Source URLs (for attribution)</label>
+                <div class="source-urls">
+                    {% for url in source_urls %}
+                    <div class="source-url">{{ url }}</div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Key Facts</label>
+                <div class="key-facts">
+                    {% for fact in key_facts %}
+                    <div class="fact-item">{{ fact }}</div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-success">Save & Queue</button>
+                <a href="/" class="btn btn-secondary">Cancel</a>
+            </div>
+        </form>
+
+    </div>
+
+    <script>
+        const caption = document.getElementById('caption');
+        const charCount = document.getElementById('char-count');
+        const platform = document.getElementById('platform');
+
+        const limits = { twitter: 280, instagram: 2200, linkedin: 3000, threads: 500, bluesky: 300 };
+
+        function updateCount() {
+            const limit = limits[platform.value] || 280;
+            charCount.textContent = caption.value.length;
+            charCount.style.color = caption.value.length > limit ? 'red' : 'inherit';
+        }
+
+        caption.addEventListener('input', updateCount);
+        platform.addEventListener('change', updateCount);
+        updateCount();
+    </script>
+</body>
+</html>

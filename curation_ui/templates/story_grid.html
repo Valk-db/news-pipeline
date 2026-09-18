@@ -1,0 +1,11 @@
+{% if not stories %}
+<div class="empty-state">
+    <p>No pending stories. Run the ingestion pipeline or check back later.</p>
+</div>
+{% else %}
+<div class="stories-grid" id="stories">
+    {% for item in stories %}
+    {% include "story_card.html" %}
+    {% endfor %}
+</div>
+{% endif %}

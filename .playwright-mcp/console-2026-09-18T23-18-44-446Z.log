@@ -1,0 +1,2 @@
+[     435ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://news-pipe.vercel.app/:0
+[     560ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://news-pipe.vercel.app/favicon.ico:0
