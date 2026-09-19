@@ -21,4 +21,4 @@ dependencies = [
 ]
 
 [tool.vercel]
-entrypoint = "main:app"
+entrypoint = "curation_ui.main:app"

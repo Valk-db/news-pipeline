@@ -16,7 +16,9 @@ This guide walks through deploying the FastAPI curation UI to Vercel with a Supa
    CREATE EXTENSION IF NOT EXISTS vector;
    ```
 3. Go to **Settings → Database** and copy the **Connection string** (URI format)
-   - Format: `postgresql+asyncpg://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres`
+   - **Direct (IPv6, may fail in CI/GitHub Actions):** `postgresql+asyncpg://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres`
+   - **Pooler (IPv4, RECOMMENDED for CI/edge):** `postgresql+asyncpg://postgres.[PROJECT-REF]:[YOUR-PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres`
+   - Use the **Pooler** string for GitHub Actions and Vercel deployments
 4. Run the database initialization locally to create tables:
    ```bash
    cd news-pipeline
