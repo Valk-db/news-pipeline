@@ -1,13 +1,14 @@
 """Source tier definitions and tier-1 gate logic."""
 
-from sqlalchemy import select, func
+import uuid
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import (
-    ReportingUnit, Story, StoryUnitLink, SourceTier, Story
+    ReportingUnit, Story, StoryUnitLink, SourceTier
 )
+from src.verification.units import get_owner_group
 from src.shared.config import get_settings
-from datetime import datetime, timezone
-from collections import defaultdict
+from typing import List, Optional, Tuple
 
 
 # Tier-1 sources (verified editorial standards)
@@ -45,16 +46,45 @@ def classify_source_tier(domain: str) -> SourceTier:
     return SourceTier.TIER3
 
 
-async def apply_tier1_gate(session: AsyncSession) -> dict:
+def evaluate_tier1_gate(units: List[ReportingUnit]) -> Tuple[bool, str]:
+    """
+    Pure function to evaluate if a story passes the tier-1 gate.
+
+    Gate passes iff:
+    - At least 2 units with source_tier == TIER1
+    - Those units have ≥2 distinct ownership groups
+
+    Returns (should_queue, reason).
+    """
+    from src.verification.units import get_owner_group
+
+    tier1_units = [u for u in units if u.source_tier == SourceTier.TIER1]
+    if len(tier1_units) < 2:
+        return False, f"Only {len(tier1_units)} tier-1 units (need ≥2)"
+
+    owners = {get_owner_group(u.source_domain) for u in tier1_units}
+    if len(owners) < 2:
+        return False, f"Tier-1 units from only {len(owners)} owner(s) (need ≥2 distinct)"
+
+    return True, "Gate passed"
+
+
+async def apply_tier1_gate(
+    session: AsyncSession,
+    story_ids: Optional[List[uuid.UUID]] = None
+) -> dict:
     """
     Apply the tier-1 gate: stories need ≥2 tier-1 reporting units
     from distinct ownership groups.
-    """
-    settings = get_settings()
-    min_units = settings.min_reporting_units_per_story
 
-    # Get pending stories
-    stmt = select(Story).where(Story.status == Story.Status.PENDING)
+    If story_ids provided, only evaluate those stories (including BLOCKED).
+    Otherwise evaluate all PENDING stories.
+    """
+    # Build query - if story_ids provided, get those (any status), else get PENDING
+    if story_ids:
+        stmt = select(Story).where(Story.id.in_(story_ids))
+    else:
+        stmt = select(Story).where(Story.status == Story.Status.PENDING)
     result = await session.execute(stmt)
     stories = result.scalars().all()
 
@@ -71,41 +101,26 @@ async def apply_tier1_gate(session: AsyncSession) -> dict:
         result = await session.execute(stmt)
         units = result.scalars().all()
 
-        # Count tier-1 units by distinct owner groups
-        tier1_owners = set()
-        tier1_count = 0
-        tier2_count = 0
+        # Use pure function for gate decision
+        should_queue, reason = evaluate_tier1_gate(list(units))
 
-        for unit in units:
-            tiers = unit.source_tiers or {}
-            if tiers.get("tier1", 0) > 0:
-                tier1_count += tiers["tier1"]
-                # Add distinct owners from TIER-1 articles only
-                for owner, count in (unit.tier1_owner_groups or {}).items():
-                    if count > 0:
-                        tier1_owners.add(owner)
-
-            tier2_count += tiers.get("tier2", 0)
-
-        distinct_owners = len(tier1_owners)
+        # Count for storage
+        tier1_count = sum(1 for u in units if u.source_tier == SourceTier.TIER1)
+        tier2_count = sum(1 for u in units if u.source_tier == SourceTier.TIER2)
+        distinct_owners = len({get_owner_group(u.source_domain) for u in units if u.source_tier == SourceTier.TIER1})
 
         # Update story
         story.tier1_unit_count = tier1_count
         story.tier2_unit_count = tier2_count
         story.distinct_owners = distinct_owners
 
-        if tier1_count >= min_units and distinct_owners >= 2:
+        if should_queue:
             story.status = Story.Status.QUEUED
             story.gate_reason = f"Passed: {tier1_count} tier-1 units, {distinct_owners} distinct owners"
             queued += 1
         else:
             story.status = Story.Status.BLOCKED
-            reasons = []
-            if tier1_count < min_units:
-                reasons.append(f"only {tier1_count} tier-1 units (need {min_units})")
-            if distinct_owners < 2:
-                reasons.append(f"only {distinct_owners} distinct tier-1 owners (need 2)")
-            story.gate_reason = "Blocked: " + "; ".join(reasons)
+            story.gate_reason = f"Blocked: {reason}"
             blocked += 1
 
     await session.commit()

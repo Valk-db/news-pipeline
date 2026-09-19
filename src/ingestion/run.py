@@ -85,14 +85,15 @@ async def run_ingestion(dry_run: bool = False) -> dict:
 
         # Phase 3: Build stories (semantic grouping)
         print("Phase 3: Building stories...")
-        stories_created = await build_stories(session)
-        print(f"  Stories created: {stories_created}")
-        results["phases"]["stories"] = {"created": stories_created}
-        await log_status(session, "group", "ok", {"stories_created": stories_created})
+        modified_story_ids = await build_stories(session)
+        stories_created = len(modified_story_ids)
+        print(f"  Stories created/modified: {stories_created}")
+        results["phases"]["stories"] = {"created_or_modified": stories_created, "modified_story_ids": [str(sid) for sid in modified_story_ids]}
+        await log_status(session, "group", "ok", {"stories_created_or_modified": stories_created})
 
-        # Phase 4: Apply tier-1 gate
+        # Phase 4: Apply tier-1 gate (re-evaluate modified stories)
         print("Phase 4: Applying tier-1 gate...")
-        gated = await apply_tier1_gate(session)
+        gated = await apply_tier1_gate(session, story_ids=modified_story_ids)
         print(f"  Stories queued: {gated['queued']}, blocked: {gated['blocked']}")
         results["phases"]["gate"] = gated
         await log_status(session, "gate", "ok", gated)
