@@ -4,7 +4,7 @@ import asyncio
 import sys
 from datetime import datetime, timezone
 from src.ingestion.rss import ingest_rss_feeds
-from src.ingestion.gdelt import ingest_gdelt
+from src.ingestion.gdelt import ingest_gdelt, GDELT_TIER1_CRITICAL_DOMAINS
 from src.ingestion.reddit import ingest_reddit
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
@@ -38,7 +38,7 @@ async def run_ingestion(dry_run: bool = False) -> dict:
         # Phase 1: Ingestion
         print("Phase 1: Ingesting articles...")
         rss_articles = await ingest_rss_feeds(settings.max_articles_per_feed)
-        gdelt_articles = await ingest_gdelt(hours_back=24, max_per_domain=50)
+        gdelt_articles, gdelt_health = await ingest_gdelt(hours_back=24, max_per_domain=50)
         reddit_articles = await ingest_reddit(limit_per_sub=25)
 
         all_articles = rss_articles + gdelt_articles + reddit_articles
@@ -58,12 +58,20 @@ async def run_ingestion(dry_run: bool = False) -> dict:
         print(f"  New articles (after dedup): {len(new_articles)}")
         print(f"  Duplicates skipped: {len(all_articles) - len(new_articles)}")
 
+        # Check for tier-1 critical GDELT domains down
+        tier1_critical_down = sorted(
+            GDELT_TIER1_CRITICAL_DOMAINS & set(gdelt_health["failed"] + gdelt_health["skipped"])
+        )
+        ingest_status = "degraded" if tier1_critical_down else "ok"
+
         results["phases"]["ingestion"] = {
             "rss": len(rss_articles),
             "gdelt": len(gdelt_articles),
             "reddit": len(reddit_articles),
             "total_fetched": len(all_articles),
             "total_new": len(new_articles),
+            "gdelt_health": gdelt_health,
+            "tier1_critical_down": tier1_critical_down,
         }
 
         if dry_run:
@@ -74,7 +82,7 @@ async def run_ingestion(dry_run: bool = False) -> dict:
         for art in new_articles:
             session.add(art)
         await session.commit()
-        await log_status(session, "ingest", "ok", results["phases"]["ingestion"])
+        await log_status(session, "ingest", ingest_status, results["phases"]["ingestion"])
 
         # Phase 2: Build reporting units (near-dup clustering)
         print("Phase 2: Building reporting units...")
@@ -113,6 +121,14 @@ async def main():
         results = await run_ingestion(dry_run=dry_run)
         print("\nPipeline completed successfully.")
         print(json.dumps(results, indent=2))
+
+        # Exit non-zero if tier-1 critical GDELT domains are down (not dry run)
+        if not dry_run:
+            tier1_critical_down = results["phases"].get("ingestion", {}).get("tier1_critical_down", [])
+            if tier1_critical_down:
+                print(f"\nWARNING: tier-1 critical GDELT domains down: {tier1_critical_down}")
+                sys.exit(1)
+
     except Exception as e:
         print(f"\nPipeline failed: {e}")
         raise

@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     rss_fetch_timeout: int = 30
     max_articles_per_feed: int = 50
     gdelt_throttle_seconds: float = 5.0
+    gdelt_circuit_breaker_threshold: int = 3
     article_cache_hours: int = 24
 
     # Verification settings

@@ -3,7 +3,8 @@
 import httpx
 import asyncio
 from typing import List, Dict, Optional
-from datetime import datetime, timezone, timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
 from src.utils.ner import extract_entities
 from src.schema.models import RawArticle, SourceTier
@@ -14,6 +15,15 @@ import random
 
 GDELT_API = "https://api.gdeltproject.org/api/v2/doc/doc"
 DOMAIN_FILTERS = ["apnews.com", "reuters.com", "bbc.com", "theguardian.com", "npr.org"]
+GDELT_TIER1_CRITICAL_DOMAINS = {"apnews.com", "reuters.com"}  # no RSS backup for these
+
+
+@dataclass
+class DomainResult:
+    domain: str
+    articles: List[RawArticle] = field(default_factory=list)
+    ok: bool = True
+    error: Optional[str] = None
 
 
 async def fetch_with_retry(
@@ -43,10 +53,11 @@ async def fetch_gdelt_articles(
     hours_back: int = 24,
     max_records: int = 100,
     throttle_seconds: float = 5.0,
-) -> List[RawArticle]:
+) -> DomainResult:
     """
     Fetch articles from GDELT DOC API for a specific domain.
-    Rate limited to 1 request per 5 seconds.
+    Rate limited to 1 request per throttle_seconds.
+    Returns DomainResult with ok/error classification.
     """
     settings = get_settings()
     throttle = settings.gdelt_throttle_seconds
@@ -61,7 +72,7 @@ async def fetch_gdelt_articles(
         "sort": "datedesc",
     }
 
-    articles = []
+    articles: List[RawArticle] = []
 
     async with httpx.AsyncClient(timeout=60) as client:
         try:
@@ -70,21 +81,18 @@ async def fetch_gdelt_articles(
 
             # Check for empty response
             if not response.text.strip():
-                print(f"GDELT empty response for {domain}")
-                return articles
+                return DomainResult(domain=domain, ok=False, error="empty response")
 
             # Validate JSON response (GDELT sometimes returns error text instead of JSON)
             content_type = response.headers.get("content-type", "")
             if "application/json" not in content_type:
-                print(f"GDELT non-JSON response for {domain}: {content_type} - {response.text[:200]}")
-                return articles
+                return DomainResult(domain=domain, ok=False, error=f"non-json response: {content_type}")
 
             data = response.json()
 
-            # Check if articles key exists
+            # Check if articles key exists - valid JSON with empty/missing articles = genuine "nothing new"
             if not data.get("articles"):
-                print(f"GDELT no articles found for {domain}")
-                return articles
+                return DomainResult(domain=domain, articles=[], ok=True)
 
             for article in data.get("articles", []):
                 url = article.get("url", "")
@@ -137,26 +145,42 @@ async def fetch_gdelt_articles(
 
         except Exception as e:
             print(f"GDELT fetch failed for {domain}: {e}")
+            return DomainResult(domain=domain, ok=False, error=str(e))
 
-        # Throttle between domains
         await asyncio.sleep(throttle)
 
-    return articles
+    return DomainResult(domain=domain, articles=articles, ok=True)
 
 
-async def ingest_gdelt(hours_back: int = 24, max_per_domain: int = 50) -> List[RawArticle]:
-    """Ingest from all configured domains via GDELT."""
-    all_articles = []
+async def ingest_gdelt(hours_back: int = 24, max_per_domain: int = 50) -> tuple[List[RawArticle], dict]:
+    """Ingest from all configured domains via GDELT. Returns (articles, health)."""
+    settings = get_settings()
+    all_articles: List[RawArticle] = []
     seen_hashes = set()
+    results: List[DomainResult] = []
+    failures = 0
 
     for domain in DOMAIN_FILTERS:
-        articles = await fetch_gdelt_articles(domain, hours_back, max_per_domain)
-        for art in articles:
+        if failures >= settings.gdelt_circuit_breaker_threshold:
+            results.append(DomainResult(domain=domain, ok=False, error="circuit_open"))
+            continue
+
+        result = await fetch_gdelt_articles(domain, hours_back, max_per_domain)
+        results.append(result)
+        if not result.ok:
+            failures += 1
+
+        for art in result.articles:
             if art.url_hash not in seen_hashes:
                 all_articles.append(art)
                 seen_hashes.add(art.url_hash)
 
-    return all_articles
+    health = {
+        "succeeded": [r.domain for r in results if r.ok],
+        "failed": [r.domain for r in results if not r.ok and r.error != "circuit_open"],
+        "skipped": [r.domain for r in results if r.error == "circuit_open"],
+    }
+    return all_articles, health
 
 
 async def verify_sources() -> Dict[str, int]:
@@ -166,7 +190,7 @@ async def verify_sources() -> Dict[str, int]:
     """
     results = {}
     for domain in ["apnews.com", "reuters.com"]:
-        articles = await fetch_gdelt_articles(domain, hours_back=24, max_records=10, throttle_seconds=0)
-        results[domain] = len(articles)
-        print(f"GDELT {domain}: {len(articles)} articles in last 24h")
+        result = await fetch_gdelt_articles(domain, hours_back=24, max_records=10, throttle_seconds=0)
+        results[domain] = len(result.articles)
+        print(f"GDELT {domain}: {len(result.articles)} articles in last 24h")
     return results
