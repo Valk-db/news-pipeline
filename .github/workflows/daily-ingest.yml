@@ -41,6 +41,7 @@ jobs:
         run: uv run pytest tests/ -v
 
       - name: Run ingestion pipeline
+        id: ingest
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -51,10 +52,9 @@ jobs:
           GDELT_THROTTLE_SECONDS: "10"
         run: |
           uv run src/ingestion/run.py
-        continue-on-error: true
 
-      - name: Run verification pipeline (if ingestion succeeded)
-        if: success()
+      - name: Run verification pipeline
+        if: steps.ingest.outcome == 'success'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -84,6 +84,7 @@ asyncio.run(main())
         if: always()
         id: status_log
         run: |
+          mkdir -p logs
           # Create a compact status summary for the commit
           cat > logs/status_$(date -u +%Y-%m-%d_%H-%M).json << EOF
           {
@@ -91,7 +92,9 @@ asyncio.run(main())
             "workflow": "${{ github.workflow }}",
             "run_id": "${{ github.run_id }}",
             "commit": "${{ github.sha }}",
-            "status": "${{ job.status }}"
+            "status": "${{ job.status }}",
+            "ingest_outcome": "${{ steps.ingest.outcome }}",
+            "verification_outcome": "${{ steps.verification.outcome }}"
           }
           EOF
 
@@ -115,3 +118,4 @@ asyncio.run(main())
         if: failure()
         run: |
           echo "Pipeline failed. Check workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          exit 1
