@@ -51,7 +51,6 @@ scripts/
 
 # Source code not needed for UI
 src/ingestion/
-src/verification/
 src/utils/
 src/celery/
 src/worker/
