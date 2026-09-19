@@ -143,3 +143,37 @@ class StatusLog(Base):
     status = Column(String(20), nullable=False)  # ok, warn, error
     details = Column(JSON, nullable=True)
     commit_sha = Column(String(40), nullable=True)
+
+
+class CanonicalEntity(Base):
+    """Canonical entity representing a real-world entity with a stable ID."""
+    __tablename__ = "canonical_entities"
+    __table_args__ = (
+        Index("ix_canonical_entities_type", "entity_type"),
+        Index("ix_canonical_entities_name", "canonical_name"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    canonical_name = Column(String(255), nullable=False)  # Preferred display name
+    entity_type = Column(String(50), nullable=False)  # PERSON, ORG, GPE, LOC, EVENT, PRODUCT
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relationship
+    aliases = relationship("EntityAlias", back_populates="canonical_entity", cascade="all, delete-orphan")
+
+
+class EntityAlias(Base):
+    """Alias/alternative name for a canonical entity."""
+    __tablename__ = "entity_aliases"
+    __table_args__ = (
+        UniqueConstraint("canonical_entity_id", "alias", name="uq_canonical_alias"),
+        Index("ix_entity_aliases_alias", "alias"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    canonical_entity_id = Column(UUID(as_uuid=True), ForeignKey("canonical_entities.id", ondelete="CASCADE"), nullable=False)
+    alias = Column(String(255), nullable=False)  # Alternative surface form
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    canonical_entity = relationship("CanonicalEntity", back_populates="aliases")
