@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, Boolean, JSON
+    Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, Boolean, JSON, func
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -34,8 +34,8 @@ class RawArticle(Base):
     summary = Column(Text, nullable=True)
     source_domain = Column(String(255), nullable=False)
     source_tier = Column(Enum(SourceTier), nullable=False, default=SourceTier.TIER3)
-    published_at = Column(DateTime, nullable=True)
-    fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    published_at = Column(DateTime(timezone=True), nullable=True)
+    fetched_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     entities = Column(JSON, nullable=True)  # {"PERSON": [...], "ORG": [...], "GPE": [...]}
     minhash_signature = Column(JSON, nullable=True)  # MinHash serialized
     content_hash = Column(String(64), nullable=True)  # For exact dedup
@@ -51,13 +51,13 @@ class ReportingUnit(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    day = Column(DateTime, nullable=False)  # Date bucket (UTC midnight)
+    day = Column(DateTime(timezone=True), nullable=False)  # Date bucket (UTC midnight)
     representative_article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id"), nullable=False)
     article_count = Column(Integer, nullable=False, default=1)
     source_tiers = Column(JSON, nullable=False)  # {"tier1": 2, "tier2": 1}
     owner_groups = Column(JSON, nullable=False)  # {"AP": 1, "Sinclair": 3, ...}
     tier1_owner_groups = Column(JSON, nullable=False, default={})  # Only owners from tier-1 articles
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     representative = relationship("RawArticle", foreign_keys=[representative_article_id])
 
@@ -78,15 +78,23 @@ class Story(Base):
         BLOCKED = "blocked"      # Failed gate (e.g., single-source)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    day = Column(DateTime, nullable=False)
+    day = Column(DateTime(timezone=True), nullable=False)
     primary_entities = Column(JSON, nullable=False)  # Top-N entity sets that defined this story
     tier1_unit_count = Column(Integer, nullable=False, default=0)
     tier2_unit_count = Column(Integer, nullable=False, default=0)
     distinct_owners = Column(Integer, nullable=False, default=0)
     status = Column(Enum(Status), nullable=False, default=Status.PENDING)
     gate_reason = Column(Text, nullable=True)  # Why blocked/queued
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    units = relationship(
+        "ReportingUnit",
+        secondary="story_unit_links",
+        backref="stories",
+        lazy="selectin",
+    )
 
 
 class StoryUnitLink(Base):
@@ -117,11 +125,11 @@ class CuratedPost(Base):
     media_urls = Column(JSON, nullable=True)  # [{"type": "image", "url": "...", "alt": "..."}]
     source_urls = Column(JSON, nullable=False)  # Canonical source URLs for attribution
     status = Column(Enum(Status), nullable=False, default=Status.DRAFT)
-    scheduled_at = Column(DateTime, nullable=True)
-    posted_at = Column(DateTime, nullable=True)
+    scheduled_at = Column(DateTime(timezone=True), nullable=True)
+    posted_at = Column(DateTime(timezone=True), nullable=True)
     error = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class StatusLog(Base):
@@ -130,7 +138,7 @@ class StatusLog(Base):
     __table_args__ = (Index("ix_status_log_run_at", "run_at"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    run_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    run_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     phase = Column(String(50), nullable=False)  # ingest, verify, group, curate
     status = Column(String(20), nullable=False)  # ok, warn, error
     details = Column(JSON, nullable=True)

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>News Pipeline - Service Unavailable</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-7ZVb8xVbUOqN6W8Y8wY8W8Y8W8Y8W8Y8W8Y8W8Y8W8Y8W8Y8W8Y8W8Y8W8Y8W8" crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>News Pipeline Curation</h1>
+        </header>
+
+        <div class="error-page">
+            <div class="error-icon">⚠️</div>
+            <h2>Service Temporarily Unavailable</h2>
+            <p class="error-message">{{ message }}</p>
+
+            <div class="error-help">
+                <h3>To enable this feature:</h3>
+                <ol>
+                    <li>Go to your Vercel project dashboard</li>
+                    <li>Navigate to Settings → Environment Variables</li>
+                    <li>Add the required environment variables</li>
+                    <li>Redeploy the project</li>
+                </ol>
+            </div>
+
+            <div class="error-actions">
+                <a href="/" class="btn btn-primary" hx-get="/" hx-target="body" hx-swap="outerHTML">
+                    Try Again
+                </a>
+                <a href="/posts" class="btn btn-secondary" hx-get="/posts" hx-target="body" hx-swap="outerHTML">
+                    View Posts
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .error-page {
+            max-width: 600px;
+            margin: 60px auto;
+            padding: 40px;
+            text-align: center;
+            background: var(--surface);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        .error-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        .error-message {
+            color: var(--text-muted);
+            margin-bottom: 24px;
+            font-size: 16px;
+            line-height: 1.6;
+        }
+        .error-help {
+            text-align: left;
+            background: var(--background);
+            padding: 20px;
+            border-radius: 8px;
+            margin: 24px 0;
+        }
+        .error-help h3 {
+            margin-top: 0;
+            margin-bottom: 12px;
+        }
+        .error-help ol {
+            margin: 0;
+            padding-left: 20px;
+        }
+        .error-help li {
+            margin-bottom: 8px;
+            color: var(--text-muted);
+        }
+        .error-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-top: 24px;
+        }
+    </style>
+</body>
+</html>

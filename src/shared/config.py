@@ -6,17 +6,17 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # Database
-    database_url: str
+    database_url: str = ""
 
     # LLM providers
-    groq_api_key: str
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_api_key: str = ""
+    groq_model: str = "openai/gpt-oss-20b"
     cerebras_api_key: str = ""
     cerebras_model: str = "gpt-oss-120b"
 
     # Reddit
-    reddit_client_id: str
-    reddit_client_secret: str
+    reddit_client_id: str = ""
+    reddit_client_secret: str = ""
     reddit_user_agent: str = "news-pipeline/0.1"
 
     # YouTube (optional)
@@ -39,6 +39,52 @@ class Settings(BaseSettings):
 
     # Scheduling
     cron_schedule: str = "0 6,18 * * *"  # 6 AM and 6 PM UTC
+
+    # Feature availability checks
+    @property
+    def has_database(self) -> bool:
+        return bool(self.database_url and self.database_url.strip())
+
+    @property
+    def has_groq(self) -> bool:
+        return bool(self.groq_api_key and self.groq_api_key.strip())
+
+    @property
+    def has_cerebras(self) -> bool:
+        return bool(self.cerebras_api_key and self.cerebras_api_key.strip())
+
+    @property
+    def has_llm(self) -> bool:
+        return self.has_groq or self.has_cerebras
+
+    @property
+    def has_reddit(self) -> bool:
+        return bool(self.reddit_client_id and self.reddit_client_secret and
+                    self.reddit_client_id.strip() and self.reddit_client_secret.strip())
+
+    @property
+    def has_youtube(self) -> bool:
+        return bool(self.youtube_api_key and self.youtube_api_key.strip())
+
+    @property
+    def has_supabase(self) -> bool:
+        return bool(self.supabase_url and self.supabase_anon_key and
+                    self.supabase_url.strip() and self.supabase_anon_key.strip())
+
+    def missing_required_for(self, feature: str) -> list[str]:
+        """Return list of missing env vars for a given feature."""
+        missing = []
+        if feature == "database" and not self.has_database:
+            missing.append("DATABASE_URL")
+        elif feature == "llm" and not self.has_llm:
+            missing.extend(["GROQ_API_KEY", "CEREBRAS_API_KEY"])
+        elif feature == "reddit" and not self.has_reddit:
+            missing.extend(["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET"])
+        elif feature == "youtube" and not self.has_youtube:
+            missing.append("YOUTUBE_API_KEY")
+        elif feature == "supabase" and not self.has_supabase:
+            missing.extend(["SUPABASE_URL", "SUPABASE_ANON_KEY"])
+        return missing
 
 
 @lru_cache

@@ -3,12 +3,13 @@
 import trafilatura
 from typing import Optional, Tuple
 import hashlib
+import asyncio
 
 
-def extract_article(url: str, html: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+def _extract_article_sync(url: str, html: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
     """
-    Extract article body text and title from URL or HTML.
-    Returns (body_text, title) or (None, None) on failure.
+    Synchronous article extraction (blocking).
+    Internal function - use extract_article() for async version.
     """
     try:
         if html:
@@ -40,6 +41,15 @@ def extract_article(url: str, html: Optional[str] = None) -> Tuple[Optional[str]
 
     except Exception:
         return None, None
+
+
+async def extract_article(url: str, html: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract article body text and title from URL or HTML (async).
+    Runs blocking trafilatura call in a thread pool to avoid blocking event loop.
+    Returns (body_text, title) or (None, None) on failure.
+    """
+    return await asyncio.to_thread(_extract_article_sync, url, html)
 
 
 def extract_from_raw(url: str, html: Optional[str] = None) -> dict:

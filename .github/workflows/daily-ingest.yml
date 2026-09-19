@@ -49,6 +49,7 @@ jobs:
           uv run src/ingestion/run.py
 
       - name: Generate status log
+        if: always()
         id: status_log
         run: |
           # Create a compact status summary for the commit
@@ -58,15 +59,17 @@ jobs:
             "workflow": "${{ github.workflow }}",
             "run_id": "${{ github.run_id }}",
             "commit": "${{ github.sha }}",
-            "status": "completed"
+            "status": "${{ job.status }}"
           }
           EOF
 
       - name: Truncate old status logs (keep 30 days)
+        if: always()
         run: |
           find logs -name "status_*.json" -mtime +30 -delete
 
       - name: Commit status log
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

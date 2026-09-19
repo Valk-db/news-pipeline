@@ -1,9 +1,10 @@
 """LLM client with Groq primary, Cerebras fallback, and token accounting."""
 
 import asyncio
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Sequence
 from src.shared.config import get_settings
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential
+from httpx import HTTPStatusError, TimeoutException, ConnectError
 import json
 
 try:
@@ -36,23 +37,21 @@ class LLMClient:
         if self.settings.cerebras_api_key and AsyncCerebras:
             self.cerebras_client = AsyncCerebras(api_key=self.settings.cerebras_api_key)
 
-    async def validate_model(self, provider: str, model: str) -> bool:
-        """Check if model exists on provider."""
-        try:
-            if provider == "groq" and self.groq_client:
-                models = await self.groq_client.models.list()
-                return any(m.id == model for m in models.data)
-            if provider == "cerebras" and self.cerebras_client:
-                models = await self.cerebras_client.models.list()
-                return any(m.id == model for m in models.data)
-        except Exception:
-            pass
+    @staticmethod
+    def _is_transient_error(exception: BaseException) -> bool:
+        """Check if error is transient (rate limit, 5xx, timeout, connection)."""
+        if isinstance(exception, (TimeoutException, ConnectError)):
+            return True
+        if isinstance(exception, HTTPStatusError):
+            # HTTPStatusError has response attribute with status_code
+            status_code = getattr(exception.response, "status_code", 0)
+            return status_code >= 500 or status_code == 429
         return False
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(3),
-        retry=retry_if_exception_type((Exception,)),
+        retry=lambda e: LLMClient._is_transient_error(e),
     )
     async def _chat_completion_groq(
         self,
@@ -77,7 +76,7 @@ class LLMClient:
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(3),
-        retry=retry_if_exception_type((Exception,)),
+        retry=lambda e: LLMClient._is_transient_error(e),
     )
     async def _chat_completion_cerebras(
         self,
@@ -147,9 +146,6 @@ OUTPUT: Just the post text, nothing else."""
         # Try Groq first
         if self.groq_client:
             try:
-                # Validate model on first use
-                if not await self.validate_model("groq", self.settings.groq_model):
-                    print(f"Warning: Groq model {self.settings.groq_model} not found, trying alternative")
                 result = await self._chat_completion_groq(
                     self.settings.groq_model,
                     messages,
@@ -179,7 +175,7 @@ OUTPUT: Just the post text, nothing else."""
         self,
         title: str,
         body: str,
-        topics: List[str] = None,
+        topics: Optional[List[str]] = None,
     ) -> float:
         """Classify article relevance to target topics (0-1)."""
         if topics is None:
