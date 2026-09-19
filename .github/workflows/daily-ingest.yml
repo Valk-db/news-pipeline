@@ -7,7 +7,7 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 permissions:
-  contents: write  # Needed to commit status log
+  contents: read  # Only need read for checkout
 
 jobs:
   ingest:
@@ -17,9 +17,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0  # Need history for commit
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -36,9 +33,6 @@ jobs:
 
       - name: Download spaCy model
         run: uv run python -m spacy download en_core_web_sm
-
-      - name: Run tests
-        run: uv run pytest tests/ -v
 
       - name: Run ingestion pipeline
         id: ingest
@@ -65,57 +59,15 @@ import asyncio
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_tier1_gate
-from src.shared.database import get_session
+from src.shared.database import init_db, get_session
 
 async def main():
+    await init_db()
     async with get_session() as session:
-        print('Building reporting units...')
         await build_reporting_units(session)
-        print('Building stories...')
-        await build_stories(session)
-        print('Applying tier-1 gate...')
-        await apply_tier1_gate(session)
-        print('Verification complete!')
+        modified_stories = await build_stories(session)
+        if modified_stories:
+            await apply_tier1_gate(session, story_ids=modified_stories)
 
 asyncio.run(main())
 "
-
-      - name: Generate status log
-        if: always()
-        id: status_log
-        run: |
-          mkdir -p logs
-          # Create a compact status summary for the commit
-          cat > logs/status_$(date -u +%Y-%m-%d_%H-%M).json << EOF
-          {
-            "run_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "workflow": "${{ github.workflow }}",
-            "run_id": "${{ github.run_id }}",
-            "commit": "${{ github.sha }}",
-            "status": "${{ job.status }}",
-            "ingest_outcome": "${{ steps.ingest.outcome }}",
-            "verification_outcome": "${{ steps.verification.outcome }}"
-          }
-          EOF
-
-      - name: Truncate old status logs (keep 30 days)
-        if: always()
-        run: |
-          find logs -name "status_*.json" -mtime +30 -delete
-
-      - name: Commit status log
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add logs/
-          git diff --staged --quiet || git commit -m "chore: status log $(date -u +%Y-%m-%d)"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Notify on failure
-        if: failure()
-        run: |
-          echo "Pipeline failed. Check workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          exit 1

@@ -53,7 +53,9 @@ async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
 
     # Get recent stories (PENDING + BLOCKED) from last 48h with their aggregate entities
     cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
-    recent_stories = await _get_recent_stories_with_entities(session, cutoff)
+    recent_stories_list = await _get_recent_stories_with_entities(session, cutoff)
+    # Convert to dict for O(1) lookup and so we can add newly created stories
+    recent_stories = {story_id: entities for story_id, entities in recent_stories_list}
 
     modified_story_ids = set()
     similarity_threshold = 0.4  # Jaccard threshold for attaching to existing story
@@ -63,6 +65,8 @@ async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
         if not unit_entity_set:
             # No entities - create new story
             story = await create_story_from_units(session, unit.day, [unit], unit_entities)
+            # Add to recent_stories so subsequent units in same batch can attach to it
+            recent_stories[story.id] = set(story.primary_entities or [])
             modified_story_ids.add(story.id)
             continue
 
@@ -70,7 +74,7 @@ async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
         best_story_id = None
         best_jaccard = 0.0
 
-        for story_id, story_entities in recent_stories:
+        for story_id, story_entities in recent_stories.items():
             if not story_entities:
                 continue
             jaccard = entity_set_jaccard(unit_entity_set, story_entities)
@@ -83,10 +87,14 @@ async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
             await _attach_unit_to_story(session, unit.id, best_story_id)
             # Update story's aggregate entities
             await _update_story_entities(session, best_story_id, unit_entity_set)
+            # Also update our local cache
+            recent_stories[best_story_id].update(unit_entity_set)
             modified_story_ids.add(best_story_id)
         else:
             # Create new story
             story = await create_story_from_units(session, unit.day, [unit], unit_entities)
+            # Add to recent_stories so subsequent units in same batch can attach to it
+            recent_stories[story.id] = set(story.primary_entities or [])
             modified_story_ids.add(story.id)
 
     return list(modified_story_ids)
@@ -96,7 +104,7 @@ async def _get_recent_stories_with_entities(
     session: AsyncSession,
     cutoff: datetime
 ) -> list[tuple[uuid.UUID, set[str]]]:
-    """Get PENDING and BLOCKED stories from last 48h with their aggregate entity sets."""
+    """Get PENDING and BLOCKED stories from last 48h with their primary_entities."""
     stmt = (
         select(Story)
         .where(Story.status.in_([Story.Status.PENDING, Story.Status.BLOCKED]))
@@ -107,20 +115,8 @@ async def _get_recent_stories_with_entities(
 
     story_entities = []
     for story in stories:
-        # Get all units linked to this story
-        stmt = (
-            select(ReportingUnit)
-            .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
-            .where(StoryUnitLink.story_id == story.id)
-        )
-        result = await session.execute(stmt)
-        units = result.scalars().all()
-
-        # Aggregate entity sets
-        combined_entities = set()
-        for unit in units:
-            combined_entities.update(unit.primary_entities or [])
-
+        # Use Story.primary_entities directly (already aggregated at story level)
+        combined_entities = set(story.primary_entities or [])
         story_entities.append((story.id, combined_entities))
 
     return story_entities
@@ -151,7 +147,7 @@ async def create_story_from_units(
     day: datetime,
     units: list,
     unit_entities: dict,
-    combined_entities: set = None
+    combined_entities: set[str] | None = None
 ) -> Story:
     """Create a Story and link units to it."""
     if combined_entities is None:

@@ -46,7 +46,7 @@ def classify_source_tier(domain: str) -> SourceTier:
     return SourceTier.TIER3
 
 
-def evaluate_tier1_gate(units: List[ReportingUnit]) -> Tuple[bool, str]:
+def evaluate_tier1_gate(tier_owner_pairs: List[tuple[str, str]]) -> Tuple[bool, str]:
     """
     Pure function to evaluate if a story passes the tier-1 gate.
 
@@ -54,15 +54,18 @@ def evaluate_tier1_gate(units: List[ReportingUnit]) -> Tuple[bool, str]:
     - At least 2 units with source_tier == TIER1
     - Those units have ≥2 distinct ownership groups
 
+    Args:
+        tier_owner_pairs: List of (source_tier, owner_group) tuples extracted from ReportingUnit rows.
+                          source_tier values: "tier1", "tier2", "tier3" (strings from JSON)
+                          owner_group values: ownership group names (strings from JSON)
+
     Returns (should_queue, reason).
     """
-    from src.verification.units import get_owner_group
+    tier1_pairs = [(tier, owner) for tier, owner in tier_owner_pairs if tier == "tier1"]
+    if len(tier1_pairs) < 2:
+        return False, f"Only {len(tier1_pairs)} tier-1 units (need ≥2)"
 
-    tier1_units = [u for u in units if u.source_tier == SourceTier.TIER1]
-    if len(tier1_units) < 2:
-        return False, f"Only {len(tier1_units)} tier-1 units (need ≥2)"
-
-    owners = {get_owner_group(u.source_domain) for u in tier1_units}
+    owners = {owner for _, owner in tier1_pairs}
     if len(owners) < 2:
         return False, f"Tier-1 units from only {len(owners)} owner(s) (need ≥2 distinct)"
 
@@ -80,6 +83,8 @@ async def apply_tier1_gate(
     If story_ids provided, only evaluate those stories (including BLOCKED).
     Otherwise evaluate all PENDING stories.
     """
+    from src.verification.units import get_owner_group
+
     # Build query - if story_ids provided, get those (any status), else get PENDING
     if story_ids:
         stmt = select(Story).where(Story.id.in_(story_ids))
@@ -101,13 +106,32 @@ async def apply_tier1_gate(
         result = await session.execute(stmt)
         units = result.scalars().all()
 
+        # Convert real ReportingUnit rows to (tier, owner_group) tuples for pure function
+        tier_owner_pairs = []
+        tier1_total = 0
+        tier2_total = 0
+        tier1_owners = set()
+
+        for u in units:
+            # source_tiers is JSON like {"tier1": 2, "tier2": 1}
+            source_tiers = u.source_tiers or {}
+            for tier, count in source_tiers.items():
+                owner = get_owner_group(u.source_domain)
+                for _ in range(count):
+                    tier_owner_pairs.append((tier, owner))
+                if tier == "tier1":
+                    tier1_total += count
+                    tier1_owners.add(owner)
+                elif tier == "tier2":
+                    tier2_total += count
+
         # Use pure function for gate decision
-        should_queue, reason = evaluate_tier1_gate(list(units))
+        should_queue, reason = evaluate_tier1_gate(tier_owner_pairs)
 
         # Count for storage
-        tier1_count = sum(1 for u in units if u.source_tier == SourceTier.TIER1)
-        tier2_count = sum(1 for u in units if u.source_tier == SourceTier.TIER2)
-        distinct_owners = len({get_owner_group(u.source_domain) for u in units if u.source_tier == SourceTier.TIER1})
+        tier1_count = tier1_total
+        tier2_count = tier2_total
+        distinct_owners = len(tier1_owners)
 
         # Update story
         story.tier1_unit_count = tier1_count

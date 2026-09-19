@@ -35,7 +35,12 @@ dev = [
 ]
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "ruff", "mypy"]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "mypy",
+]
 
 [tool.ruff]
 line-length = 100

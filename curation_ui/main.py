@@ -292,7 +292,14 @@ async def save_story(
         source_urls = [a.url for a in articles]
 
         # Validate caption server-side (warning only for manual override)
-        source_texts = [story.title] + [a.title for a in articles[:3]]
+        # Use all linked article titles + summaries + body texts for paraphrase detection
+        source_texts = []
+        for a in articles:
+            source_texts.append(a.title)
+            if a.summary:
+                source_texts.append(a.summary)
+            if a.body_text:
+                source_texts.append(a.body_text)
         is_valid, error = validate_caption(caption, platform, source_texts, allow_override=override_validation)
         if not is_valid and not override_validation:
             logger.warning("Caption validation failed: %s", error)

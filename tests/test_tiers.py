@@ -1,9 +1,9 @@
 """Tests for tier classification and tier-1 gate logic."""
 
 import pytest
-from unittest.mock import MagicMock
 from src.verification.tiers import TIER1_DOMAINS, TIER2_DOMAINS, classify_source_tier, evaluate_tier1_gate
-from src.schema.models import SourceTier, ReportingUnit
+from src.verification.units import get_owner_group
+from src.schema.models import SourceTier
 
 
 class TestClassifySourceTier:
@@ -40,19 +40,12 @@ class TestTierConstants:
         assert expected.issubset(TIER1_DOMAINS)
 
 
-def make_unit(domain: str, tier: SourceTier) -> ReportingUnit:
-    """Create a mock ReportingUnit for testing."""
-    unit = MagicMock(spec=ReportingUnit)
-    unit.source_domain = domain
-    unit.source_tier = tier
-    return unit
-
-
 class TestEvaluateTier1Gate:
     def test_passes_with_two_tier1_different_owners(self):
+        # (tier, owner_group) tuples
         units = [
-            make_unit("apnews.com", SourceTier.TIER1),
-            make_unit("reuters.com", SourceTier.TIER1),
+            ("tier1", "AP"),
+            ("tier1", "Reuters"),
         ]
         should_queue, reason = evaluate_tier1_gate(units)
         assert should_queue is True
@@ -60,17 +53,17 @@ class TestEvaluateTier1Gate:
 
     def test_passes_with_three_tier1_two_owners(self):
         units = [
-            make_unit("apnews.com", SourceTier.TIER1),
-            make_unit("reuters.com", SourceTier.TIER1),
-            make_unit("bbc.com", SourceTier.TIER1),
+            ("tier1", "AP"),
+            ("tier1", "Reuters"),
+            ("tier1", "BBC"),
         ]
         should_queue, reason = evaluate_tier1_gate(units)
         assert should_queue is True
 
     def test_fails_only_one_tier1_unit(self):
         units = [
-            make_unit("apnews.com", SourceTier.TIER1),
-            make_unit("reuters.com", SourceTier.TIER2),
+            ("tier1", "AP"),
+            ("tier2", "NYT"),
         ]
         should_queue, reason = evaluate_tier1_gate(units)
         assert should_queue is False
@@ -78,8 +71,8 @@ class TestEvaluateTier1Gate:
 
     def test_fails_two_tier1_same_owner(self):
         units = [
-            make_unit("apnews.com", SourceTier.TIER1),
-            make_unit("www.apnews.com", SourceTier.TIER1),  # Same owner group
+            ("tier1", "AP"),
+            ("tier1", "AP"),  # Same owner group
         ]
         should_queue, reason = evaluate_tier1_gate(units)
         assert should_queue is False
@@ -87,8 +80,8 @@ class TestEvaluateTier1Gate:
 
     def test_fails_no_tier1_units(self):
         units = [
-            make_unit("nytimes.com", SourceTier.TIER2),
-            make_unit("washingtonpost.com", SourceTier.TIER2),
+            ("tier2", "NYT"),
+            ("tier2", "WaPo"),
         ]
         should_queue, reason = evaluate_tier1_gate(units)
         assert should_queue is False
@@ -102,8 +95,35 @@ class TestEvaluateTier1Gate:
 
     def test_fails_tier3_only(self):
         units = [
-            make_unit("randomblog.com", SourceTier.TIER3),
-            make_unit("anotherblog.com", SourceTier.TIER3),
+            ("tier3", "Independent"),
+            ("tier3", "Independent"),
         ]
         should_queue, reason = evaluate_tier1_gate(units)
+        assert should_queue is False
+
+    def test_mixed_tiers_and_owners(self):
+        # Simulates a reporting unit with {"tier1": 2, "tier2": 1}
+        units = [
+            ("tier1", "AP"),
+            ("tier1", "AP"),   # Two tier-1 from AP
+            ("tier2", "NYT"),  # One tier-2 from NYT
+        ]
+        should_queue, reason = evaluate_tier1_gate(units)
+        assert should_queue is False  # Only one distinct owner (AP) from tier-1
+        assert "owner" in reason.lower()
+
+    def test_get_owner_group_integration(self):
+        # Verify the gate uses owner groups correctly
+        units = [
+            ("tier1", get_owner_group("apnews.com")),
+            ("tier1", get_owner_group("reuters.com")),
+        ]
+        should_queue, reason = evaluate_tier1_gate(units)
+        assert should_queue is True
+
+        units_same = [
+            ("tier1", get_owner_group("apnews.com")),
+            ("tier1", get_owner_group("www.apnews.com")),  # Same owner group
+        ]
+        should_queue, reason = evaluate_tier1_gate(units_same)
         assert should_queue is False

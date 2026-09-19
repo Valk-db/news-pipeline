@@ -37,6 +37,16 @@
             </div>
 
             <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="override_validation" value="true">
+                    <span>Override validation (allow potential paraphrase issues)</span>
+                </label>
+                <div class="caption-hint">
+                    Check this to save despite n-gram overlap warnings. Use sparingly.
+                </div>
+            </div>
+
+            <div class="form-group">
                 <label>Source URLs (for attribution)</label>
                 <div class="source-urls">
                     {% for url in source_urls %}
