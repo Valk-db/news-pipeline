@@ -35,11 +35,25 @@ PLATFORM_LIMITS = {
 }
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _extract_ngrams(text: str, n: int = 7) -> set[str]:
+    """Extract word n-grams from text."""
+    words = text.lower().split()
+    if len(words) < n:
+        return set()
+    return {" ".join(words[i:i+n]) for i in range(len(words) - n + 1)}
+
+
 def validate_caption(
     caption: str,
     platform: str,
     source_texts: List[str],
-    min_similarity_threshold: float = 0.5,
+    min_ngram_overlap: int = 6,
+    allow_override: bool = False,
 ) -> Tuple[bool, str]:
     """
     Validate a generated caption.
@@ -56,14 +70,23 @@ def validate_caption(
     if len(caption) > limit:
         return False, f"Caption exceeds {platform} limit of {limit} characters ({len(caption)})"
 
-    # Check paraphrase constraint - similarity to source texts
-    for source_text in source_texts:
-        if not source_text:
-            continue
-        # Use sequence matcher for similarity
-        similarity = difflib.SequenceMatcher(None, caption.lower(), source_text.lower()).ratio()
-        if similarity > min_similarity_threshold:
-            return False, f"Caption too similar to source text (similarity: {similarity:.2f} > {min_similarity_threshold})"
+    # Check paraphrase constraint - n-gram overlap with source texts
+    caption_ngrams = _extract_ngrams(caption, min_ngram_overlap)
+    if caption_ngrams:
+        for source_text in source_texts:
+            if not source_text:
+                continue
+            source_ngrams = _extract_ngrams(source_text, min_ngram_overlap)
+            if not source_ngrams:
+                continue
+            overlap = caption_ngrams & source_ngrams
+            if overlap:
+                msg = f"Caption shares {len(overlap)} n-gram(s) with source text (min: {min_ngram_overlap} words): {', '.join(list(overlap)[:3])}"
+                logger.warning("Caption rejected: %s", msg)
+                if allow_override:
+                    logger.warning("Override enabled — allowing caption despite n-gram overlap")
+                    return True, msg  # Return True with warning message
+                return False, msg
 
     return True, ""
 

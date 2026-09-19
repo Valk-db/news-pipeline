@@ -52,17 +52,17 @@ class TestValidateCaption:
         is_valid, _ = validate_caption(caption, "Twitter", ["source"])
         assert is_valid
 
-    def test_paraphrase_violation_high_similarity(self):
-        source = "The president announced a new policy today in Washington"
+    def test_paraphrase_violation_ngram_overlap(self):
+        source = "The president announced a new policy today in Washington regarding the economy"
         caption = "The president announced a new policy today in Washington https://example.com"
-        is_valid, error = validate_caption(caption, "twitter", [source])
+        is_valid, error = validate_caption(caption, "twitter", [source], min_ngram_overlap=6)
         assert not is_valid
-        assert "similar" in error.lower()
+        assert "n-gram" in error.lower()
 
-    def test_paraphrase_ok_low_similarity(self):
+    def test_paraphrase_ok_no_ngram_overlap(self):
         source = "The president announced a new policy today in Washington regarding economic reforms"
         caption = "Biden unveils economic reform plan in Washington https://example.com"
-        is_valid, error = validate_caption(caption, "twitter", [source])
+        is_valid, error = validate_caption(caption, "twitter", [source], min_ngram_overlap=6)
         assert is_valid
         assert error == ""
 
@@ -70,9 +70,15 @@ class TestValidateCaption:
         source1 = "President Biden signed the bill into law on Monday"
         source2 = "The legislation passed with bipartisan support"
         caption = "New law enacted after presidential signature https://example.com"
-        is_valid, error = validate_caption(caption, "twitter", [source1, source2])
+        is_valid, error = validate_caption(caption, "twitter", [source1, source2], min_ngram_overlap=6)
         assert is_valid
         assert error == ""
+
+    def test_override_validation_allows_save(self):
+        source = "The president announced a new policy today in Washington regarding the economy"
+        caption = "The president announced a new policy today in Washington https://example.com"
+        is_valid, error = validate_caption(caption, "twitter", [source], min_ngram_overlap=6, allow_override=True)
+        assert is_valid  # With override, validation passes but logs warning
 
     def test_unknown_platform_defaults_to_280(self):
         caption = "a" * 281

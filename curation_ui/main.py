@@ -1,5 +1,6 @@
 """FastAPI + HTMX curation UI for story triage."""
 
+import logging
 import socket
 
 # Force IPv4-only DNS resolution to avoid Vercel's lack of outbound IPv6 routes
@@ -36,6 +37,8 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 settings = get_settings()
+
+logger = logging.getLogger(__name__)
 
 
 def check_database_available() -> tuple[bool, str]:
@@ -263,6 +266,7 @@ async def save_story(
     caption: str = Form(...),
     platform: str = Form("twitter"),
     request: Request = None,
+    override_validation: bool = Form(False),  # Allow manual override
 ):
     """Save edited story as curated post."""
     db_ok, db_msg = check_database_available()
@@ -287,15 +291,18 @@ async def save_story(
         articles = result.scalars().all()
         source_urls = [a.url for a in articles]
 
-        # Validate caption server-side
+        # Validate caption server-side (warning only for manual override)
         source_texts = [story.title] + [a.title for a in articles[:3]]
-        is_valid, error = validate_caption(caption, platform, source_texts)
-        if not is_valid:
+        is_valid, error = validate_caption(caption, platform, source_texts, allow_override=override_validation)
+        if not is_valid and not override_validation:
+            logger.warning("Caption validation failed: %s", error)
             return templates.TemplateResponse(request, "error.html", {
                 "request": request,
                 "error": "Caption validation failed",
-                "details": error,
+                "details": error + " (check 'Override validation' to save anyway)",
             }, status_code=400)
+        elif not is_valid and override_validation:
+            logger.warning("Caption validation overridden by user: %s", error)
 
         # Create curated post
         post = CuratedPost(
