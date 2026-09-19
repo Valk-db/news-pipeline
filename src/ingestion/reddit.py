@@ -1,6 +1,6 @@
-"""Reddit ingestion via PRAW."""
+"""Reddit ingestion via Async PRAW."""
 
-import praw
+import asyncpraw
 from typing import List, Optional
 from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
@@ -25,10 +25,10 @@ TARGET_SUBREDDITS = [
 ]
 
 
-def get_reddit_client() -> praw.Reddit:
-    """Create authenticated PRAW client."""
+def get_reddit_client() -> asyncpraw.Reddit:
+    """Create authenticated Async PRAW client."""
     settings = get_settings()
-    return praw.Reddit(
+    return asyncpraw.Reddit(
         client_id=settings.reddit_client_id,
         client_secret=settings.reddit_client_secret,
         user_agent=settings.reddit_user_agent,
@@ -58,7 +58,7 @@ async def process_submission(submission) -> Optional[RawArticle]:
     url_hash = compute_url_hash(url)
 
     # Extract article body
-    body_text, extracted_title = extract_article(url)
+    body_text, extracted_title = await extract_article(url)
     if not body_text or len(body_text) < 200:
         return None
 
@@ -92,32 +92,46 @@ async def process_submission(submission) -> Optional[RawArticle]:
 
 
 async def ingest_reddit(
-    subreddits: List[str] = None,
+    subreddits: Optional[List[str]] = None,
     limit_per_sub: int = 25,
     time_filter: str = "day"
 ) -> List[RawArticle]:
-    """Ingest top submissions from target subreddits."""
+    """Ingest top submissions from target subreddits using Async PRAW."""
+    settings = get_settings()
+
+    # Check if Reddit credentials are available
+    if not settings.has_reddit:
+        print("Reddit credentials not configured, skipping Reddit ingestion")
+        return []
+
     if subreddits is None:
         subreddits = TARGET_SUBREDDITS
+    else:
+        subreddits = list(subreddits)
 
     reddit = get_reddit_client()
     articles = []
     seen_hashes = set()
 
-    for sub_name in subreddits:
-        try:
-            subreddit = reddit.subreddit(sub_name)
-            for submission in subreddit.top(time_filter=time_filter, limit=limit_per_sub):
-                if not is_valid_submission(submission):
-                    continue
+    try:
+        for sub_name in subreddits:
+            try:
+                subreddit = await reddit.subreddit(sub_name)
+                # Async PRAW uses .top() as an async generator
+                async for submission in subreddit.top(time_filter=time_filter, limit=limit_per_sub):
+                    if not is_valid_submission(submission):
+                        continue
 
-                article = await process_submission(submission)
-                if article and article.url_hash not in seen_hashes:
-                    articles.append(article)
-                    seen_hashes.add(article.url_hash)
+                    article = await process_submission(submission)
+                    if article and article.url_hash not in seen_hashes:
+                        articles.append(article)
+                        seen_hashes.add(article.url_hash)
 
-        except Exception as e:
-            print(f"Reddit ingestion failed for r/{sub_name}: {e}")
+            except Exception as e:
+                print(f"Reddit ingestion failed for r/{sub_name}: {e}")
+
+    finally:
+        await reddit.close()
 
     return articles
 

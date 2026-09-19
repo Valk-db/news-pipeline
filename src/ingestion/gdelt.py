@@ -9,10 +9,33 @@ from src.utils.ner import extract_entities
 from src.schema.models import RawArticle, SourceTier
 from src.shared.config import get_settings
 import re
+import random
 
 
 GDELT_API = "https://api.gdeltproject.org/api/v2/doc/doc"
 DOMAIN_FILTERS = ["apnews.com", "reuters.com", "bbc.com", "theguardian.com", "npr.org"]
+
+
+async def fetch_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict,
+    max_retries: int = 5,
+    base_delay: float = 5.0,
+) -> httpx.Response:
+    """Fetch with exponential backoff retry for rate limits."""
+    for attempt in range(max_retries):
+        response = await client.get(url, params=params)
+        if response.status_code != 429:
+            return response
+
+        # Rate limited - exponential backoff with jitter
+        delay = base_delay * (2 ** attempt) + random.uniform(0, 2)
+        print(f"GDELT rate limited (429), attempt {attempt + 1}/{max_retries}, waiting {delay:.1f}s...")
+        await asyncio.sleep(delay)
+
+    # Final attempt without catching 429
+    return await client.get(url, params=params)
 
 
 async def fetch_gdelt_articles(
@@ -42,9 +65,26 @@ async def fetch_gdelt_articles(
 
     async with httpx.AsyncClient(timeout=60) as client:
         try:
-            response = await client.get(GDELT_API, params=params)
+            response = await fetch_with_retry(client, GDELT_API, params)
             response.raise_for_status()
+
+            # Check for empty response
+            if not response.text.strip():
+                print(f"GDELT empty response for {domain}")
+                return articles
+
+            # Validate JSON response (GDELT sometimes returns error text instead of JSON)
+            content_type = response.headers.get("content-type", "")
+            if "application/json" not in content_type:
+                print(f"GDELT non-JSON response for {domain}: {content_type} - {response.text[:200]}")
+                return articles
+
             data = response.json()
+
+            # Check if articles key exists
+            if not data.get("articles"):
+                print(f"GDELT no articles found for {domain}")
+                return articles
 
             for article in data.get("articles", []):
                 url = article.get("url", "")
@@ -54,7 +94,7 @@ async def fetch_gdelt_articles(
                 url_hash = compute_url_hash(url)
 
                 # Extract body
-                body_text, extracted_title = extract_article(url)
+                body_text, extracted_title = await extract_article(url)
                 if not body_text or len(body_text) < 200:
                     continue
 

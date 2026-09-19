@@ -47,7 +47,7 @@ TIER1_FEEDS = {
         "domain": "news.google.com",
         "tier": SourceTier.TIER1,
         "feeds": [
-            "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0JYQjBMVUpTR2dKQ1VpZ0FQAQ?hl=en-US&gl=US&ceid=US:en",  # World
+            "https://news.google.com/rss?hl=en&gl=US&ceid=US:en",  # World - main feed
         ],
     },
 }
@@ -90,7 +90,7 @@ async def process_feed_entry(
         published_at = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
 
     # Extract article body
-    body_text, extracted_title = extract_article(url)
+    body_text, extracted_title = await extract_article(url)
     if not body_text or len(body_text) < 200:  # Too short, likely not a real article
         return None
 

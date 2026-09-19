@@ -21,7 +21,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.shared.database import get_session
 from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, Story as StoryModel
-from src.shared.llm import get_llm_client
+from src.shared.llm import get_llm_client, validate_caption
 from src.shared.config import get_settings
 from datetime import datetime, timezone
 import uuid
@@ -276,7 +276,7 @@ async def save_story(
         if not story:
             raise HTTPException(404, "Story not found")
 
-        # Get source URLs
+        # Get source articles for validation
         stmt = (
             select(RawArticle)
             .join(ReportingUnit, RawArticle.id == ReportingUnit.representative_article_id)
@@ -286,6 +286,16 @@ async def save_story(
         result = await session.execute(stmt)
         articles = result.scalars().all()
         source_urls = [a.url for a in articles]
+
+        # Validate caption server-side
+        source_texts = [story.title] + [a.title for a in articles[:3]]
+        is_valid, error = validate_caption(caption, platform, source_texts)
+        if not is_valid:
+            return templates.TemplateResponse(request, "error.html", {
+                "request": request,
+                "error": "Caption validation failed",
+                "details": error,
+            }, status_code=400)
 
         # Create curated post
         post = CuratedPost(

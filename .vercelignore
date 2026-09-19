@@ -52,8 +52,12 @@ scripts/
 # Source code not needed for UI
 src/ingestion/
 src/utils/
+src/verification/
 src/celery/
 src/worker/
+# Keep src/shared and src/schema for UI imports
+!src/shared/
+!src/schema/
 
 # Node (if any)
 node_modules/

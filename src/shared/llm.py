@@ -1,7 +1,8 @@
 """LLM client with Groq primary, Cerebras fallback, and token accounting."""
 
 import asyncio
-from typing import Optional, List, Dict, Any, Sequence
+import difflib
+from typing import Optional, List, Dict, Any, Sequence, Tuple
 from src.shared.config import get_settings
 from tenacity import retry, stop_after_attempt, wait_exponential
 from httpx import HTTPStatusError, TimeoutException, ConnectError
@@ -20,6 +21,51 @@ except ImportError:
 
 class LLMError(Exception):
     pass
+
+
+# Platform character limits
+PLATFORM_LIMITS = {
+    "twitter": 280,
+    "x": 280,
+    "bluesky": 300,
+    "threads": 500,
+    "instagram": 2200,
+    "linkedin": 3000,
+    "facebook": 63206,
+}
+
+
+def validate_caption(
+    caption: str,
+    platform: str,
+    source_texts: List[str],
+    min_similarity_threshold: float = 0.5,
+) -> Tuple[bool, str]:
+    """
+    Validate a generated caption.
+
+    Returns (is_valid, error_message).
+    """
+    if not caption or not caption.strip():
+        return False, "Caption is empty"
+
+    caption = caption.strip()
+
+    # Check character limit
+    limit = PLATFORM_LIMITS.get(platform.lower(), 280)
+    if len(caption) > limit:
+        return False, f"Caption exceeds {platform} limit of {limit} characters ({len(caption)})"
+
+    # Check paraphrase constraint - similarity to source texts
+    for source_text in source_texts:
+        if not source_text:
+            continue
+        # Use sequence matcher for similarity
+        similarity = difflib.SequenceMatcher(None, caption.lower(), source_text.lower()).ratio()
+        if similarity > min_similarity_threshold:
+            return False, f"Caption too similar to source text (similarity: {similarity:.2f} > {min_similarity_threshold})"
+
+    return True, ""
 
 
 class LLMClient:
@@ -143,6 +189,9 @@ OUTPUT: Just the post text, nothing else."""
             {"role": "user", "content": prompt},
         ]
 
+        # Source texts for validation (from key_facts and story_title)
+        source_texts = [story_title] + key_facts
+
         # Try Groq first
         if self.groq_client:
             try:
@@ -152,7 +201,11 @@ OUTPUT: Just the post text, nothing else."""
                     max_tokens=300,
                     temperature=0.2,
                 )
-                return result["choices"][0]["message"]["content"].strip()
+                caption = result["choices"][0]["message"]["content"].strip()
+                is_valid, error = validate_caption(caption, platform, source_texts)
+                if is_valid:
+                    return caption
+                print(f"Groq caption validation failed: {error}")
             except Exception as e:
                 print(f"Groq failed: {e}")
 
@@ -165,7 +218,11 @@ OUTPUT: Just the post text, nothing else."""
                     max_tokens=300,
                     temperature=0.2,
                 )
-                return result["choices"][0]["message"]["content"].strip()
+                caption = result["choices"][0]["message"]["content"].strip()
+                is_valid, error = validate_caption(caption, platform, source_texts)
+                if is_valid:
+                    return caption
+                print(f"Cerebras caption validation failed: {error}")
             except Exception as e:
                 print(f"Cerebras failed: {e}")
 

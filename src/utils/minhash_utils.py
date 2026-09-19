@@ -20,9 +20,10 @@ def minhash_to_json(m: MinHash) -> str:
 
 def minhash_from_json(data: str) -> MinHash:
     """Deserialize MinHash from JSON string."""
+    import numpy as np
     obj = json.loads(data)
     m = MinHash(num_perm=obj["num_perm"])
-    m.hashvalues = obj["hashvalues"]
+    m.hashvalues = np.array(obj["hashvalues"], dtype=np.uint64)
     return m
 
 

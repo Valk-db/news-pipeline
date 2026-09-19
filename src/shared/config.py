@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Reddit
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
-    reddit_user_agent: str = "news-pipeline/0.1"
+    reddit_user_agent: str = "news-pipeline/0.1 (by /u/valk_db)"
 
     # YouTube (optional)
     youtube_api_key: str = ""
