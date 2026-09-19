@@ -179,7 +179,3 @@ scripts/                             # Init, seed, verify
 - Supabase: 500 MB, pgvector included
 - Groq: 1K req/day, 200K tokens/day
 - Cerebras: 30-day trial (optional)
-
-## License
-
-MIT
