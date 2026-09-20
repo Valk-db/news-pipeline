@@ -47,6 +47,12 @@ jobs:
             sleep 2
           done
 
+      - name: Debug database connection
+        run: |
+          echo "Testing database connection..."
+          PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d test_news -c "SELECT version();"
+          echo "Database connection test complete"
+
       - name: Run tests
         run: uv run pytest tests/ -v
         env:
