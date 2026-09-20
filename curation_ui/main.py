@@ -27,6 +27,7 @@ from src.shared.database import get_session
 from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, Story as StoryModel
 from src.shared.llm import get_llm_client, validate_caption
 from src.shared.config import get_settings
+from curation_ui.health import router as health_router
 from datetime import datetime, timezone
 import uuid
 import os
@@ -42,6 +43,8 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 settings = get_settings()
 
 logger = logging.getLogger(__name__)
+
+app.include_router(health_router)
 
 security = HTTPBasic()
 

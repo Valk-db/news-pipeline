@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+from uuid import uuid4
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
 from src.shared.config import get_settings
@@ -8,6 +10,58 @@ from src.shared.config import get_settings
 
 _engine = None
 _async_session_maker = None
+
+# libpq-style URL parameters that asyncpg rejects (it would raise TypeError on connect).
+_LIBPQ_ONLY_PARAMS = {"pgbouncer", "channel_binding", "connect_timeout", "options", "supa"}
+_VALID_SSL_MODES = {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+
+
+def prepare_database_url(raw_url: str):
+    """Turn whatever was pasted into DATABASE_URL into (url, connect_args) that asyncpg accepts.
+
+    Supabase/Neon dashboards hand out plain ``postgresql://`` URLs (sometimes with
+    ``?sslmode=require``). SQLAlchemy's async engine needs ``postgresql+asyncpg://`` and asyncpg
+    does not understand ``sslmode``, so both are translated here instead of failing at request time.
+    """
+    url = make_url(raw_url.strip())
+    if url.drivername in ("postgres", "postgresql", "postgresql+psycopg2", "postgresql+psycopg"):
+        url = url.set(drivername="postgresql+asyncpg")
+
+    query = dict(url.query)
+    sslmode = query.pop("sslmode", None)
+    for param in _LIBPQ_ONLY_PARAMS:
+        query.pop(param, None)
+    url = url.set(query=query)
+
+    connect_args = {
+        # Safe behind Supabase's transaction pooler (port 6543) / PgBouncer, which cannot keep
+        # named prepared statements between transactions.
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+        "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+    }
+    if isinstance(sslmode, str) and sslmode in _VALID_SSL_MODES:
+        connect_args["ssl"] = sslmode
+    return url, connect_args
+
+
+def describe_database_url(raw_url: str) -> dict:
+    """Non-secret summary of DATABASE_URL for diagnostics (never includes user, password or host)."""
+    try:
+        parsed = make_url(raw_url.strip())
+    except Exception as exc:  # e.g. unescaped '@' or '#' in the password
+        return {"parse_error": f"{type(exc).__name__}: could not parse DATABASE_URL"}
+    host = parsed.host or ""
+    return {
+        "driver_as_pasted": parsed.drivername,
+        "port": parsed.port,
+        "host_kind": (
+            "supabase-pooler" if "pooler.supabase.com" in host
+            else "supabase-direct (IPv6 only, fails on Vercel)" if host.startswith("db.") and host.endswith(".supabase.co")
+            else "other"
+        ),
+        "has_query_params": sorted(parsed.query.keys()),
+    }
 
 
 def _get_engine():
@@ -17,10 +71,11 @@ def _get_engine():
         settings = get_settings()
         if not settings.has_database:
             return None
+        url, connect_args = prepare_database_url(settings.database_url)
         _engine = create_async_engine(
-            settings.database_url,
+            url,
             poolclass=NullPool,  # Supabase/Neon work better without pooling
-            connect_args={"statement_cache_size": 0},  # Disable prepared statements for Supabase transaction pooler
+            connect_args=connect_args,
             echo=False,
         )
     return _engine
