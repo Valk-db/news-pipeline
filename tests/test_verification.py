@@ -4,7 +4,7 @@ import pytest
 import pytest_asyncio
 from datetime import datetime, timezone, timedelta
 import uuid
-from sqlalchemy import select
+from sqlalchemy import select, delete
 
 from src.verification.units import get_owner_group, build_reporting_units
 from src.verification.stories import build_stories
@@ -86,7 +86,7 @@ async def db_session():
 
     async with get_session() as session:
         # Clean up any existing test data
-        await session.execute(select(StatusLog).delete())
+        await session.execute(delete(StatusLog))
         await session.execute(select(StoryUnitLink).delete())
         await session.execute(select(Story).delete())
         await session.execute(select(ReportingUnit).delete())
@@ -96,7 +96,7 @@ async def db_session():
         yield session
 
         # Cleanup after test
-        await session.execute(select(StatusLog).delete())
+        await session.execute(delete(StatusLog))
         await session.execute(select(StoryUnitLink).delete())
         await session.execute(select(Story).delete())
         await session.execute(select(ReportingUnit).delete())
