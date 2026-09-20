@@ -52,18 +52,6 @@ async def extract_article(url: str, html: Optional[str] = None) -> Tuple[Optiona
     return await asyncio.to_thread(_extract_article_sync, url, html)
 
 
-def extract_from_raw(url: str, html: Optional[str] = None) -> dict:
-    """
-    Full extraction returning structured data.
-    """
-    body, title = extract_article(url, html)
-    return {
-        "body_text": body,
-        "title": title,
-        "url": url,
-    }
-
-
 def compute_content_hash(text: str) -> str:
     """SHA256 hash of normalized text for exact dedup."""
     normalized = " ".join(text.lower().split())

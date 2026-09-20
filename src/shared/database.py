@@ -111,7 +111,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create tables and enable pgvector extension (PostgreSQL only)."""
+    """Create tables."""
     from src.schema.models import Base
     from src.shared.config import get_settings
     settings = get_settings()
@@ -124,7 +124,4 @@ async def init_db() -> None:
         return
 
     async with engine.begin() as conn:
-        # Enable pgvector extension for PostgreSQL only
-        if "postgresql" in settings.database_url:
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
