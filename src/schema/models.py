@@ -76,6 +76,7 @@ class Story(Base):
         POSTED = "posted"        # Published
         REJECTED = "rejected"    # Curator rejected
         BLOCKED = "blocked"      # Failed gate (e.g., single-source)
+        EXPIRED = "expired"      # Stale story auto-closed by cleanup job
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     day = Column(DateTime(timezone=True), nullable=False)

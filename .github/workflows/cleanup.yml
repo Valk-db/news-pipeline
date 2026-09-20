@@ -1,0 +1,38 @@
+name: Weekly Story Cleanup
+
+on:
+  schedule:
+    # Run weekly on Sunday at 03:00 UTC (low traffic time)
+    - cron: '0 3 * * 0'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run cleanup job
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          uv run scripts/cleanup_stale.py --pending-hours=72 --blocked-hours=168
