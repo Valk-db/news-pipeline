@@ -87,20 +87,20 @@ async def db_session():
     async with get_session() as session:
         # Clean up any existing test data
         await session.execute(delete(StatusLog))
-        await session.execute(select(StoryUnitLink).delete())
-        await session.execute(select(Story).delete())
-        await session.execute(select(ReportingUnit).delete())
-        await session.execute(select(RawArticle).delete())
+        await session.execute(delete(StoryUnitLink))
+        await session.execute(delete(Story))
+        await session.execute(delete(ReportingUnit))
+        await session.execute(delete(RawArticle))
         await session.commit()
 
         yield session
 
         # Cleanup after test
         await session.execute(delete(StatusLog))
-        await session.execute(select(StoryUnitLink).delete())
-        await session.execute(select(Story).delete())
-        await session.execute(select(ReportingUnit).delete())
-        await session.execute(select(RawArticle).delete())
+        await session.execute(delete(StoryUnitLink))
+        await session.execute(delete(Story))
+        await session.execute(delete(ReportingUnit))
+        await session.execute(delete(RawArticle))
         await session.commit()
 
 
