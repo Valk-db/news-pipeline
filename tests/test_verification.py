@@ -78,98 +78,123 @@ def _has_database():
     return bool(os.getenv("DATABASE_URL"))
 
 
+_TRUNCATE_ALL = (
+    "TRUNCATE TABLE status_log, story_unit_links, stories, reporting_units, "
+    "raw_articles, entity_aliases, canonical_entities RESTART IDENTITY CASCADE"
+)
+
+
 @pytest_asyncio.fixture
 async def db_session():
     """Create a test database session and clean up after."""
-    # Initialize database
     await init_db()
 
     async with get_session() as session:
-        # Clean up any existing test data - use TRUNCATE CASCADE to handle circular FKs
-        # RawArticle.reporting_unit_id -> ReportingUnit.id (nullable)
-        # ReportingUnit.representative_article_id -> RawArticle.id (NOT NULL)
-        # These form a circular dependency, so TRUNCATE CASCADE is needed
-        await session.execute(text("TRUNCATE TABLE status_log, story_unit_links, stories, reporting_units, raw_articles RESTART IDENTITY CASCADE"))
+        # TRUNCATE CASCADE handles the circular FK between raw_articles and reporting_units.
+        # Canonical entity tables are included because build_stories() creates rows in them.
+        await session.execute(text(_TRUNCATE_ALL))
         await session.commit()
 
         yield session
 
-        # Cleanup after test - same approach
-        await session.execute(text("TRUNCATE TABLE status_log, story_unit_links, stories, reporting_units, raw_articles RESTART IDENTITY CASCADE"))
+        await session.execute(text(_TRUNCATE_ALL))
         await session.commit()
+
+
+async def _make_unit(session, *, domain, owner, entities, tier=SourceTier.TIER1):
+    """Create a RawArticle plus the ReportingUnit that represents it.
+
+    build_stories() reads entities from the unit's representative RawArticle, so the
+    article has to exist (representative_article_id is a real FK).
+    """
+    now = datetime.now(timezone.utc)
+    article = RawArticle(
+        id=uuid.uuid4(),
+        url=f"https://{domain}/article/{uuid.uuid4().hex[:8]}",
+        url_hash=uuid.uuid4().hex,
+        title=f"Test article from {domain}",
+        body_text=f"Body text for a test article from {domain}",
+        source_domain=domain,
+        source_tier=tier,
+        published_at=now,
+        entities=entities,
+    )
+    session.add(article)
+    await session.flush()
+
+    unit = ReportingUnit(
+        id=uuid.uuid4(),
+        representative_article_id=article.id,
+        day=now.replace(hour=0, minute=0, second=0, microsecond=0),
+        article_count=1,
+        source_tiers={tier.value: 1},
+        owner_groups={owner: 1},
+        tier1_owner_groups={owner: 1} if tier == SourceTier.TIER1 else {},
+    )
+    session.add(unit)
+    await session.flush()
+    return unit
+
+
+# Entity sets are chosen so Jaccard on canonical IDs is 0.5 (>= the 0.4 attach threshold)
+# between the "White House" and "Capitol" articles, and 0 against the London/economy one.
+ENT_WHITE_HOUSE = {"PERSON": ["John Smith"], "GPE": ["Washington"], "ORG": ["White House"]}
+ENT_CAPITOL = {"PERSON": ["John Smith"], "GPE": ["Washington"], "ORG": ["Capitol"]}
+ENT_ECONOMY = {"PERSON": ["Jane Doe"], "GPE": ["London"], "ORG": ["Bank of England"]}
 
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _has_database(), reason="Requires PostgreSQL database (DATABASE_URL)")
 async def test_build_reporting_units_integration(db_session):
     """Integration test: build_reporting_units creates units from raw articles."""
-    # Create test articles - two near-duplicates from same domain
     now = datetime.now(timezone.utc)
-
-    article1 = RawArticle(
-        id=uuid.uuid4(),
-        url="https://apnews.com/article/test-1",
-        url_hash="hash1",
-        title="Breaking: Major Event Happens",
-        body_text="A major event happened today in the capital city. Officials confirmed the details.",
-        summary="Major event in capital city confirmed by officials.",
-        source_domain="apnews.com",
-        source_tier=SourceTier.TIER1,
-        published_at=now,
-        entities={"PERSON": ["John Smith"], "ORG": ["AP"], "GPE": ["Washington"]},
+    ap_body = (
+        "A major event happened today in the capital city. "
+        "Officials confirmed the details of the event to reporters."
     )
 
-    article2 = RawArticle(
-        id=uuid.uuid4(),
-        url="https://apnews.com/article/test-2",
-        url_hash="hash2",
-        title="Breaking: Major Event Occurs",
-        body_text="A major event occurred today in the capital. Authorities confirmed the information.",
-        summary="Major event in capital confirmed by authorities.",
-        source_domain="apnews.com",
-        source_tier=SourceTier.TIER1,
-        published_at=now,
-        entities={"PERSON": ["John Smith"], "ORG": ["AP"], "GPE": ["Washington"]},
-    )
+    def article(url, url_hash, title, body, domain, entities):
+        return RawArticle(
+            id=uuid.uuid4(),
+            url=url,
+            url_hash=url_hash,
+            title=title,
+            body_text=body,
+            source_domain=domain,
+            source_tier=SourceTier.TIER1,
+            published_at=now,
+            entities=entities,
+        )
 
-    # Different domain article (should not cluster with above)
-    article3 = RawArticle(
-        id=uuid.uuid4(),
-        url="https://reuters.com/article/test-3",
-        url_hash="hash3",
-        title="Reuters Reports on Different Topic",
-        body_text="Reuters reports on a completely different story about economy.",
-        summary="Economy story from Reuters.",
-        source_domain="reuters.com",
-        source_tier=SourceTier.TIER1,
-        published_at=now,
-        entities={"PERSON": ["Jane Doe"], "ORG": ["Reuters"], "GPE": ["London"]},
-    )
+    # Two AP articles with the SAME body. Clustering compares 5-word shingles at a 0.9
+    # containment threshold, so "near-duplicates" that are merely reworded do not cluster.
+    article1 = article("https://apnews.com/article/test-1", "hash1",
+                       "Breaking: Major Event Happens", ap_body, "apnews.com", ENT_WHITE_HOUSE)
+    article2 = article("https://apnews.com/article/test-2", "hash2",
+                       "Breaking: Major Event Happens (updated)", ap_body, "apnews.com", ENT_WHITE_HOUSE)
+    article3 = article("https://reuters.com/article/test-3", "hash3",
+                       "Reuters Reports on Different Topic",
+                       "Reuters reports on a completely different story about the economy.",
+                       "reuters.com", ENT_ECONOMY)
 
     for art in [article1, article2, article3]:
         db_session.add(art)
     await db_session.commit()
 
-    # Build reporting units
     units_created = await build_reporting_units(db_session)
 
-    # Should create 2 units: one cluster (apnews x2) and one single (reuters)
+    # 2 units: one cluster (apnews x2) and one single (reuters)
     assert units_created == 2
 
-    # Verify units were created correctly
-    stmt = select(ReportingUnit)
-    result = await db_session.execute(stmt)
+    result = await db_session.execute(select(ReportingUnit))
     units = result.scalars().all()
-
     assert len(units) == 2
 
-    # Check that the AP cluster has 2 articles (owner group "AP")
     ap_unit = next(u for u in units if u.tier1_owner_groups.get("AP", 0) > 0)
     assert ap_unit.article_count == 2
     assert ap_unit.source_tiers == {"tier1": 2}
     assert ap_unit.tier1_owner_groups == {"AP": 2}
 
-    # Check that the Reuters unit has 1 article (owner group "Reuters")
     reuters_unit = next(u for u in units if u.tier1_owner_groups.get("Reuters", 0) > 0)
     assert reuters_unit.article_count == 1
     assert reuters_unit.source_tiers == {"tier1": 1}
@@ -179,126 +204,48 @@ async def test_build_reporting_units_integration(db_session):
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _has_database(), reason="Requires PostgreSQL database (DATABASE_URL)")
 async def test_build_stories_groups_by_entities(db_session):
-    """Integration test: build_stories groups units by entity Jaccard."""
-    now = datetime.now(timezone.utc)
-    day = now.date()
-
-    # Create reporting units directly (bypassing clustering)
-    unit1 = ReportingUnit(
-        id=uuid.uuid4(),
-        representative_article_id=uuid.uuid4(),
-        day=day,
-        source_tiers={"tier1": 1},
-        owner_groups={"AP": 1},
-        tier1_owner_groups={"AP": 1},
-                article_count=1,
-    )
-
-    unit2 = ReportingUnit(
-        id=uuid.uuid4(),
-        representative_article_id=uuid.uuid4(),
-        day=day,
-        source_tiers={"tier1": 1},
-        owner_groups={"Reuters": 1},
-        tier1_owner_groups={"Reuters": 1},
-        primary_entities={"John Smith", "Washington", "Capitol"},  # Overlapping entities
-        article_count=1,
-    )
-
-    # Different topic
-    unit3 = ReportingUnit(
-        id=uuid.uuid4(),
-        representative_article_id=uuid.uuid4(),
-        day=day,
-        source_tiers={"tier1": 1},
-        owner_groups={"BBC": 1},
-        tier1_owner_groups={"BBC": 1},
-        primary_entities={"London", "Economy", "Bank of England"},
-        article_count=1,
-    )
-
-    for u in [unit1, unit2, unit3]:
-        db_session.add(u)
+    """Integration test: build_stories groups units by canonical-entity Jaccard."""
+    await _make_unit(db_session, domain="apnews.com", owner="AP", entities=ENT_WHITE_HOUSE)
+    await _make_unit(db_session, domain="reuters.com", owner="Reuters", entities=ENT_CAPITOL)
+    await _make_unit(db_session, domain="bbc.com", owner="BBC", entities=ENT_ECONOMY)
     await db_session.commit()
 
-    # Build stories
     modified_story_ids = await build_stories(db_session)
 
-    # Should create 2 stories: one with unit1+unit2 (Jaccard ~0.5), one with unit3
+    # 2 stories: unit1+unit2 (Jaccard 0.5), and unit3 on its own
     assert len(modified_story_ids) == 2
 
-    # Verify stories
-    stmt = select(Story)
-    result = await db_session.execute(stmt)
+    result = await db_session.execute(select(Story))
     stories = result.scalars().all()
-
     assert len(stories) == 2
 
-    # One story should have 2 units (the clustered ones)
-    story_with_2 = next(s for s in stories if len(s.primary_entities or []) > 2)
-    assert story_with_2 is not None
-
-    # Verify links
+    link_counts = []
     for story in stories:
-        stmt = select(StoryUnitLink).where(StoryUnitLink.story_id == story.id)
-        result = await db_session.execute(stmt)
-        links = result.scalars().all()
-        if story.id == story_with_2.id:
-            assert len(links) == 2
-        else:
-            assert len(links) == 1
+        result = await db_session.execute(
+            select(StoryUnitLink).where(StoryUnitLink.story_id == story.id)
+        )
+        link_counts.append(len(result.scalars().all()))
+    assert sorted(link_counts) == [1, 2]
 
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _has_database(), reason="Requires PostgreSQL database (DATABASE_URL)")
 async def test_tier1_gate_passes_with_two_tier1_distinct_owners(db_session):
     """Integration test: tier-1 gate passes with 2 tier-1 units from different owners."""
-    now = datetime.now(timezone.utc)
-    day = now.date()
-
-    # Create two tier-1 units from different owners
-    unit1 = ReportingUnit(
-        id=uuid.uuid4(),
-        representative_article_id=uuid.uuid4(),
-        day=day,
-        source_tiers={"tier1": 1},
-        owner_groups={"AP": 1},
-        tier1_owner_groups={"AP": 1},
-                article_count=1,
-    )
-
-    unit2 = ReportingUnit(
-        id=uuid.uuid4(),
-        representative_article_id=uuid.uuid4(),
-        day=day,
-        source_tiers={"tier1": 1},
-        owner_groups={"Reuters": 1},
-        tier1_owner_groups={"Reuters": 1},
-        primary_entities={"John Smith", "Washington", "Capitol"},
-        article_count=1,
-    )
-
-    for u in [unit1, unit2]:
-        db_session.add(u)
+    await _make_unit(db_session, domain="apnews.com", owner="AP", entities=ENT_WHITE_HOUSE)
+    await _make_unit(db_session, domain="reuters.com", owner="Reuters", entities=ENT_CAPITOL)
     await db_session.commit()
 
-    # Build stories
     modified_story_ids = await build_stories(db_session)
-
-    # Apply tier-1 gate
     result = await apply_tier1_gate(db_session, story_ids=modified_story_ids)
 
-    # Should queue 1 story (2 tier-1 units from different owners)
     assert result["queued"] == 1
     assert result["blocked"] == 0
 
-    # Verify story status
-    stmt = select(Story).where(Story.id.in_(modified_story_ids))
-    result_stmt = await db_session.execute(stmt)
-    stories = result_stmt.scalars().all()
-
-    for story in stories:
-        assert story.status == Story.Status.QUEUED
+    result_stmt = await db_session.execute(select(Story).where(Story.id.in_(modified_story_ids)))
+    for story in result_stmt.scalars().all():
+        # A passing story stays PENDING (awaiting curator approval); it is not auto-QUEUED.
+        assert story.status == Story.Status.PENDING
         assert story.tier1_unit_count == 2
         assert story.distinct_owners == 2
 
@@ -307,51 +254,18 @@ async def test_tier1_gate_passes_with_two_tier1_distinct_owners(db_session):
 @pytest.mark.skipif(not _has_database(), reason="Requires PostgreSQL database (DATABASE_URL)")
 async def test_tier1_gate_blocks_single_tier1_owner(db_session):
     """Integration test: tier-1 gate blocks when only 1 distinct tier-1 owner."""
-    now = datetime.now(timezone.utc)
-    day = now.date()
-
-    # Create two tier-1 units from SAME owner
-    unit1 = ReportingUnit(
-        id=uuid.uuid4(),
-        representative_article_id=uuid.uuid4(),
-        day=day,
-        source_tiers={"tier1": 1},
-        owner_groups={"AP": 1},
-        tier1_owner_groups={"AP": 1},
-                article_count=1,
-    )
-
-    unit2 = ReportingUnit(
-        id=uuid.uuid4(),
-        representative_article_id=uuid.uuid4(),
-        day=day,
-        source_tiers={"tier1": 1},
-        owner_groups={"AP": 1},
-        tier1_owner_groups={"AP": 1},
-        primary_entities={"John Smith", "Washington", "Capitol"},
-        article_count=1,
-    )
-
-    for u in [unit1, unit2]:
-        db_session.add(u)
+    await _make_unit(db_session, domain="apnews.com", owner="AP", entities=ENT_WHITE_HOUSE)
+    await _make_unit(db_session, domain="apnews.com", owner="AP", entities=ENT_CAPITOL)
     await db_session.commit()
 
-    # Build stories
     modified_story_ids = await build_stories(db_session)
-
-    # Apply tier-1 gate
     result = await apply_tier1_gate(db_session, story_ids=modified_story_ids)
 
-    # Should block (only 1 distinct owner)
     assert result["queued"] == 0
     assert result["blocked"] == 1
 
-    # Verify story status
-    stmt = select(Story).where(Story.id.in_(modified_story_ids))
-    result_stmt = await db_session.execute(stmt)
-    stories = result_stmt.scalars().all()
-
-    for story in stories:
+    result_stmt = await db_session.execute(select(Story).where(Story.id.in_(modified_story_ids)))
+    for story in result_stmt.scalars().all():
         assert story.status == Story.Status.BLOCKED
 
 
@@ -359,58 +273,30 @@ async def test_tier1_gate_blocks_single_tier1_owner(db_session):
 @pytest.mark.skipif(not _has_database(), reason="Requires PostgreSQL database (DATABASE_URL)")
 async def test_cross_run_story_attachment(db_session):
     """Integration test: build_stories attaches new units to recent BLOCKED stories."""
-    now = datetime.now(timezone.utc)
-    day = now.date()
-
-    # First run: create a BLOCKED story with one tier-1 unit
-    unit1 = ReportingUnit(
-        id=uuid.uuid4(),
-        representative_article_id=uuid.uuid4(),
-        day=day,
-        source_tiers={"tier1": 1},
-        owner_groups={"AP": 1},
-        tier1_owner_groups={"AP": 1},
-                article_count=1,
-    )
-    db_session.add(unit1)
+    # First run: one tier-1 unit -> BLOCKED story
+    await _make_unit(db_session, domain="apnews.com", owner="AP", entities=ENT_WHITE_HOUSE)
     await db_session.commit()
 
-    # Build story (will be BLOCKED - only 1 tier-1 unit)
     modified1 = await build_stories(db_session)
     result1 = await apply_tier1_gate(db_session, story_ids=modified1)
     assert result1["blocked"] == 1
-
-    # Get the blocked story ID
     blocked_story_id = modified1[0]
 
-    # Second run: add a second tier-1 unit from different owner with similar entities
-    unit2 = ReportingUnit(
-        id=uuid.uuid4(),
-        representative_article_id=uuid.uuid4(),
-        day=day,
-        source_tiers={"tier1": 1},
-        owner_groups={"Reuters": 1},
-        tier1_owner_groups={"Reuters": 1},
-        primary_entities={"John Smith", "Washington", "Capitol"},  # Similar entities
-        article_count=1,
-    )
-    db_session.add(unit2)
+    # Second run: a tier-1 unit from a different owner with similar entities
+    await _make_unit(db_session, domain="reuters.com", owner="Reuters", entities=ENT_CAPITOL)
     await db_session.commit()
 
-    # Build stories - should attach to existing BLOCKED story
     modified2 = await build_stories(db_session)
 
-    # Should modify the same story (not create new)
+    # Attaches to the existing story instead of creating a new one
     assert len(modified2) == 1
     assert modified2[0] == blocked_story_id
 
-    # Apply tier-1 gate - should now pass
     result2 = await apply_tier1_gate(db_session, story_ids=modified2)
     assert result2["queued"] == 1
     assert result2["blocked"] == 0
 
-    # Verify story now has 2 units
-    stmt = select(StoryUnitLink).where(StoryUnitLink.story_id == blocked_story_id)
-    result = await db_session.execute(stmt)
-    links = result.scalars().all()
-    assert len(links) == 2
+    result = await db_session.execute(
+        select(StoryUnitLink).where(StoryUnitLink.story_id == blocked_story_id)
+    )
+    assert len(result.scalars().all()) == 2
