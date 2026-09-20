@@ -53,6 +53,11 @@ jobs:
           PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d test_news -c "SELECT version();"
           echo "Database connection test complete"
 
+      - name: Debug environment
+        run: |
+          echo "DATABASE_URL from env: $DATABASE_URL"
+          python -c "from src.shared.config import get_settings; s = get_settings(); print(f'has_database: {s.has_database}'); print(f'database_url: {s.database_url[:50]}...' if s.database_url else 'database_url: NOT SET')"
+
       - name: Run tests
         run: uv run pytest tests/ -v --tb=long -x
         env:
