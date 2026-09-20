@@ -2,6 +2,8 @@
 
 import logging
 import socket
+import secrets
+from functools import wraps
 
 # Force IPv4-only DNS resolution to avoid Vercel's lack of outbound IPv6 routes
 # This patches the resolver asyncio (and asyncpg through it) calls underneath
@@ -14,10 +16,11 @@ def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
 
 socket.getaddrinfo = _ipv4_only_getaddrinfo
 
-from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi import FastAPI, Request, Form, HTTPException, Depends, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.shared.database import get_session
@@ -39,6 +42,26 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 settings = get_settings()
 
 logger = logging.getLogger(__name__)
+
+security = HTTPBasic()
+
+
+def require_auth(creds: HTTPBasicCredentials = Depends(security)) -> str:
+    """Require HTTP Basic auth for all mutating endpoints."""
+    if not settings.has_curation_auth:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Curation UI not configured: CURATION_USER and CURATION_PASSWORD must be set",
+        )
+    ok_user = secrets.compare_digest(creds.username, settings.curation_user)
+    ok_pass = secrets.compare_digest(creds.password, settings.curation_password)
+    if not (ok_user and ok_pass):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return creds.username
 
 
 def check_database_available() -> tuple[bool, str]:
@@ -119,8 +142,30 @@ async def index(request: Request):
     })
 
 
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    """Show pending stories for triage."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return render_error_page(request, db_msg)
+
+    async with get_session() as session:
+        stories = await _render_stories_grid(session)
+        # Count approved posts for the header link
+        stmt = select(CuratedPost).where(CuratedPost.status == CuratedPost.Status.APPROVED)
+        result = await session.execute(stmt)
+        posts = result.scalars().all()
+        posts_count = len(posts)
+
+    return templates.TemplateResponse(request, "index.html", {
+        "request": request,
+        "stories": stories,
+        "posts_count": posts_count,
+    })
+
+
 @app.post("/story/{story_id}/approve")
-async def approve_story(story_id: uuid.UUID, request: Request):
+async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
     """Approve a story for posting - generates caption via LLM and creates CuratedPost."""
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -184,7 +229,7 @@ async def approve_story(story_id: uuid.UUID, request: Request):
 
 
 @app.post("/story/{story_id}/reject")
-async def reject_story(story_id: uuid.UUID, request: Request):
+async def reject_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
     """Reject a story - returns stories grid fragment for HTMX."""
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -211,7 +256,7 @@ async def reject_story(story_id: uuid.UUID, request: Request):
 
 
 @app.get("/story/{story_id}/edit", response_class=HTMLResponse)
-async def edit_story(story_id: uuid.UUID, request: Request):
+async def edit_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
     """Show edit form for a story."""
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -267,6 +312,7 @@ async def save_story(
     platform: str = Form("twitter"),
     request: Request = None,
     override_validation: bool = Form(False),  # Allow manual override
+    user: str = Depends(require_auth),
 ):
     """Save edited story as curated post."""
     db_ok, db_msg = check_database_available()
@@ -350,7 +396,7 @@ async def list_posts(request: Request):
 
 
 @app.post("/post/{post_id}/mark-posted")
-async def mark_posted(post_id: uuid.UUID, request: Request):
+async def mark_posted(post_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
     """Mark a post as published."""
     db_ok, db_msg = check_database_available()
     if not db_ok:

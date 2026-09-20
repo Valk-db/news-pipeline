@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     gdelt_circuit_breaker_threshold: int = 3
     article_cache_hours: int = 24
 
+    # Curation UI auth
+    curation_user: str = ""
+    curation_password: str = ""
+
     # Verification settings
     containment_threshold: float = 0.9
     min_reporting_units_per_story: int = 2
@@ -71,6 +75,11 @@ class Settings(BaseSettings):
     def has_supabase(self) -> bool:
         return bool(self.supabase_url and self.supabase_anon_key and
                     self.supabase_url.strip() and self.supabase_anon_key.strip())
+
+    @property
+    def has_curation_auth(self) -> bool:
+        return bool(self.curation_user and self.curation_user.strip() and
+                    self.curation_password and self.curation_password.strip())
 
     def missing_required_for(self, feature: str) -> list[str]:
         """Return list of missing env vars for a given feature."""
