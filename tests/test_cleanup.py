@@ -270,36 +270,62 @@ class TestIntegration:
     """Integration-style tests."""
 
     @pytest.mark.asyncio
-    async def test_queued_posted_rejected_never_expire(self):
-        """QUEUED, POSTED, REJECTED stories are never expired."""
+    async def test_queued_expires_posted_rejected_never(self):
+        """QUEUED stories expire after threshold; POSTED/REJECTED never expire."""
         mock_session = AsyncMock()
         now = datetime.now(timezone.utc)
 
+        # QUEUED story older than 168h - SHOULD be expired
         queued_old = MagicMock(spec=Story)
         queued_old.id = uuid.uuid4()
         queued_old.status = Story.Status.QUEUED
         queued_old.updated_at = now - timedelta(hours=200)
 
+        # QUEUED story within threshold - should NOT be expired
+        queued_recent = MagicMock(spec=Story)
+        queued_recent.id = uuid.uuid4()
+        queued_recent.status = Story.Status.QUEUED
+        queued_recent.updated_at = now - timedelta(hours=50)
+
+        # POSTED story - should NEVER be expired
         posted_old = MagicMock(spec=Story)
         posted_old.id = uuid.uuid4()
         posted_old.status = Story.Status.POSTED
         posted_old.updated_at = now - timedelta(hours=200)
 
+        # REJECTED story - should NEVER be expired
         rejected_old = MagicMock(spec=Story)
         rejected_old.id = uuid.uuid4()
         rejected_old.status = Story.Status.REJECTED
         rejected_old.updated_at = now - timedelta(hours=200)
 
-        # These should NOT be returned by the queries (filter on PENDING/BLOCKED only)
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_session.execute.return_value = mock_result
+        call_count = [0]
+        async def mock_execute(stmt):
+            call_count[0] += 1
+            result = MagicMock()
+            if call_count[0] == 1:  # PENDING query
+                result.scalars.return_value.all.return_value = []
+            elif call_count[0] == 2:  # BLOCKED query
+                result.scalars.return_value.all.return_value = []
+            elif call_count[0] == 3:  # QUEUED query - filter by queued_hours (168h)
+                queued_cutoff = now - timedelta(hours=168)
+                matching = [s for s in [queued_old, queued_recent] if s.updated_at < queued_cutoff]
+                result.scalars.return_value.all.return_value = matching
+            else:
+                result.scalars.return_value.all.return_value = []
+            return result
+
+        mock_session.execute.side_effect = mock_execute
         mock_session.flush = AsyncMock()
 
-        result = await cleanup_stale_stories(mock_session, pending_hours=72, blocked_hours=168)
+        result = await cleanup_stale_stories(mock_session, pending_hours=72, blocked_hours=168, queued_hours=168)
 
-        assert result.stories_expired == 0
-        # The queries only select PENDING and BLOCKED, so these are never touched
+        # Only queued_old should be expired (1 story)
+        assert result.stories_expired == 1
+        assert queued_old.status == Story.Status.EXPIRED
+        assert queued_recent.status == Story.Status.QUEUED  # Not expired (within threshold)
+        assert posted_old.status == Story.Status.POSTED  # Never expires
+        assert rejected_old.status == Story.Status.REJECTED  # Never expires
 
 
 if __name__ == "__main__":
