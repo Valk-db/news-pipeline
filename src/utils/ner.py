@@ -151,10 +151,11 @@ class EntityCanonicalizer:
             return
 
         from sqlalchemy import select
-        from src.schema.models import CanonicalEntity, EntityAlias
+        from sqlalchemy.orm import selectinload
+        from src.schema.models import CanonicalEntity
 
-        # Load all canonical entities with their aliases
-        stmt = select(CanonicalEntity)
+        # Load all canonical entities with their aliases (eager load to avoid MissingGreenlet)
+        stmt = select(CanonicalEntity).options(selectinload(CanonicalEntity.aliases))
         result = await self.session.execute(stmt)
         canonical_entities = result.scalars().all()
 
