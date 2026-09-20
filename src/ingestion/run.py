@@ -45,18 +45,48 @@ async def run_ingestion(dry_run: bool = False) -> dict:
         print(f"  RSS: {len(rss_articles)}, GDELT: {len(gdelt_articles)}, Reddit: {len(reddit_articles)}")
         print(f"  Total fetched articles: {len(all_articles)}")
 
-        # Filter out articles that already exist in DB
+        # Filter out articles that already exist in DB (by URL hash)
         from sqlalchemy import select
-        existing_hashes = set()
+        existing_url_hashes = set()
+        existing_content_hashes: dict[str, set[str]] = {}  # content_hash -> set of source_domains
         if all_articles:
             url_hashes = [a.url_hash for a in all_articles]
             stmt = select(RawArticle.url_hash).where(RawArticle.url_hash.in_(url_hashes))
             result = await session.execute(stmt)
-            existing_hashes = set(result.scalars().all())
+            existing_url_hashes = set(result.scalars().all())
 
-        new_articles = [a for a in all_articles if a.url_hash not in existing_hashes]
+            # Also check content hashes for exact duplicate detection, scoped by source_domain
+            # We only dedupe content hashes within the same source_domain to allow
+            # syndicated wire stories (same content, different publishers) to both exist
+            content_hashes = [a.content_hash for a in all_articles if a.content_hash]
+            if content_hashes:
+                stmt = select(RawArticle.content_hash, RawArticle.source_domain).where(
+                    RawArticle.content_hash.in_(content_hashes)
+                )
+                result = await session.execute(stmt)
+                for content_hash, source_domain in result.all():
+                    if content_hash not in existing_content_hashes:
+                        existing_content_hashes[content_hash] = set()
+                    existing_content_hashes[content_hash].add(source_domain)
+
+        # Deduplicate: skip if URL hash OR (content hash + same source_domain) already exists
+        url_dup = 0
+        content_dup = 0
+        new_articles = []
+        for a in all_articles:
+            if a.url_hash in existing_url_hashes:
+                url_dup += 1
+                continue
+            if a.content_hash:
+                domains_with_hash = existing_content_hashes.get(a.content_hash, set())
+                if a.source_domain in domains_with_hash:
+                    content_dup += 1
+                    continue
+            new_articles.append(a)
+
         print(f"  New articles (after dedup): {len(new_articles)}")
-        print(f"  Duplicates skipped: {len(all_articles) - len(new_articles)}")
+        print(f"  URL duplicates skipped: {url_dup}")
+        print(f"  Content duplicates skipped: {content_dup}")
 
         # Check for tier-1 critical GDELT domains down
         tier1_critical_down = sorted(
@@ -70,6 +100,8 @@ async def run_ingestion(dry_run: bool = False) -> dict:
             "reddit": len(reddit_articles),
             "total_fetched": len(all_articles),
             "total_new": len(new_articles),
+            "url_duplicates_skipped": url_dup,
+            "content_duplicates_skipped": content_dup,
             "gdelt_health": gdelt_health,
             "tier1_critical_down": tier1_critical_down,
         }
