@@ -23,16 +23,20 @@ async def main():
     # Parse args
     pending_hours = 72
     blocked_hours = 168
+    queued_hours = 168
 
     for arg in sys.argv[1:]:
         if arg.startswith("--pending-hours="):
             pending_hours = int(arg.split("=")[1])
         elif arg.startswith("--blocked-hours="):
             blocked_hours = int(arg.split("=")[1])
+        elif arg.startswith("--queued-hours="):
+            queued_hours = int(arg.split("=")[1])
         elif arg == "--help":
-            print("Usage: uv run scripts/cleanup_stale.py [--pending-hours=72] [--blocked-hours=168]")
+            print("Usage: uv run scripts/cleanup_stale.py [--pending-hours=72] [--blocked-hours=168] [--queued-hours=168]")
             print("  --pending-hours: Hours after which PENDING stories expire (default: 72)")
             print("  --blocked-hours: Hours after which BLOCKED stories expire (default: 168)")
+            print("  --queued-hours: Hours after which QUEUED stories expire (default: 168)")
             return
 
     # Check database
@@ -46,7 +50,7 @@ async def main():
 
     # Run cleanup
     async with get_session() as session:
-        result = await run_cleanup(session, pending_hours, blocked_hours)
+        result = await run_cleanup(session, pending_hours, blocked_hours, queued_hours)
 
     # Print results
     print(f"Cleanup completed:")

@@ -105,7 +105,7 @@ cloudflared tunnel --url http://localhost:8000
 5. **Owner mapping**: Domain → ownership group (20 core groups)
 
 ### Grouping
-- Same UTC day + entity set Jaccard (≥0.3) → Stories
+- Cross-run 48h window + entity set Jaccard (≥0.4) → Stories
 - Top-3 entity overlap handles multi-actor stories (sanctions, borders)
 
 ### Gate (Defamation-Safe)
@@ -139,7 +139,7 @@ cloudflared tunnel --url http://localhost:8000
 | Top-N entity Jaccard | Single top-1 fragments multi-actor stories |
 | Tier-1 gate ≥2 distinct owners | Survives wire syndication (AP → 300 domains = 1 owner) |
 | Paraphrase-only captions | Copyright compliance, not just defamation defense |
-| Status log commit | Keeps Actions schedule alive (60-day rule) |
+| Heartbeat commit | Keeps Actions schedule alive (60-day rule) |
 
 ## File Structure
 
@@ -169,7 +169,7 @@ scripts/                             # Init, seed, verify
 ## Monitoring
 
 - **Actions tab**: Run history, logs
-- **Status logs**: `logs/status_*.json` (committed each run, 30-day retention)
+- **Heartbeat**: `.github/last-run` (committed each workflow run, keeps cron alive)
 - **Database**: Query `stories` table for gate pass/block rates
 
 ## Cost

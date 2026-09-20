@@ -28,13 +28,15 @@ async def cleanup_stale_stories(
     session: AsyncSession,
     pending_hours: int = 72,      # PENDING stories older than this become EXPIRED
     blocked_hours: int = 168,     # BLOCKED stories older than this become EXPIRED (1 week)
+    queued_hours: int = 168,      # QUEUED stories older than this become EXPIRED (1 week)
 ) -> CleanupResult:
     """
-    Mark stale PENDING/BLOCKED stories as EXPIRED.
+    Mark stale PENDING/BLOCKED/QUEUED stories as EXPIRED.
 
     PENDING: story waiting for curator action - expire after 3 days (curator didn't act)
     BLOCKED: story failed tier-1 gate - expire after 7 days (unlikely to get new coverage)
-    QUEUED/POSTED/REJECTED: never expired (curator explicitly acted)
+    QUEUED: story passed gate but not approved - expire after 7 days (curator didn't act)
+    POSTED/REJECTED: never expired (curator explicitly acted)
     """
     result = CleanupResult()
     settings = get_settings()
@@ -71,6 +73,22 @@ async def cleanup_stale_stories(
         story.updated_at = now
         result.stories_expired += 1
         result.details.append(f"Expired BLOCKED story {story.id} (updated: {story.updated_at})")
+
+    # Expire QUEUED stories (approved by gate but not acted on by curator)
+    queued_cutoff = now - timedelta(hours=queued_hours)
+    stmt = select(Story).where(
+        Story.status == Story.Status.QUEUED,
+        Story.updated_at < queued_cutoff
+    )
+    queued_result = await session.execute(stmt)
+    queued_stories = queued_result.scalars().all()
+
+    for story in queued_stories:
+        story.status = Story.Status.EXPIRED
+        story.gate_reason = f"Auto-expired: QUEUED for >{queued_hours}h without curator action"
+        story.updated_at = now
+        result.stories_expired += 1
+        result.details.append(f"Expired QUEUED story {story.id} (updated: {story.updated_at})")
 
     await session.flush()
     return result
@@ -138,6 +156,7 @@ async def run_cleanup(
     session: AsyncSession,
     pending_hours: int = 72,
     blocked_hours: int = 168,
+    queued_hours: int = 168,
 ) -> CleanupResult:
     """
     Run all cleanup tasks in one transaction.
@@ -146,7 +165,7 @@ async def run_cleanup(
     total = CleanupResult()
 
     # 1. Expire stale stories
-    story_result = await cleanup_stale_stories(session, pending_hours, blocked_hours)
+    story_result = await cleanup_stale_stories(session, pending_hours, blocked_hours, queued_hours)
     total.stories_expired = story_result.stories_expired
     total.details.extend(story_result.details)
 

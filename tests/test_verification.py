@@ -168,14 +168,14 @@ async def test_build_reporting_units_integration(db_session):
 
     assert len(units) == 2
 
-    # Check that the AP cluster has 2 articles
-    ap_unit = next(u for u in units if u.source_domain == "apnews.com")
+    # Check that the AP cluster has 2 articles (owner group "AP")
+    ap_unit = next(u for u in units if u.tier1_owner_groups.get("AP", 0) > 0)
     assert ap_unit.article_count == 2
     assert ap_unit.source_tiers == {"tier1": 2}
     assert ap_unit.tier1_owner_groups == {"AP": 2}
 
-    # Check that the Reuters unit has 1 article
-    reuters_unit = next(u for u in units if u.source_domain == "reuters.com")
+    # Check that the Reuters unit has 1 article (owner group "Reuters")
+    reuters_unit = next(u for u in units if u.tier1_owner_groups.get("Reuters", 0) > 0)
     assert reuters_unit.article_count == 1
     assert reuters_unit.source_tiers == {"tier1": 1}
     assert reuters_unit.tier1_owner_groups == {"Reuters": 1}

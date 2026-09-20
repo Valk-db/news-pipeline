@@ -96,7 +96,7 @@ async def _render_stories_grid(session: AsyncSession) -> list:
 
     stmt = (
         select(Story)
-        .where(Story.status.in_([Story.Status.PENDING, Story.Status.QUEUED]))
+        .where(Story.status == Story.Status.PENDING)
         .order_by(desc(Story.day), desc(Story.created_at))
         .limit(50)
         .options(
@@ -121,29 +121,7 @@ async def _render_stories_grid(session: AsyncSession) -> list:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    """Show pending stories for triage."""
-    db_ok, db_msg = check_database_available()
-    if not db_ok:
-        return render_error_page(request, db_msg)
-
-    async with get_session() as session:
-        stories = await _render_stories_grid(session)
-        # Count approved posts for the header link
-        stmt = select(CuratedPost).where(CuratedPost.status == CuratedPost.Status.APPROVED)
-        result = await session.execute(stmt)
-        posts = result.scalars().all()
-        posts_count = len(posts)
-
-    return templates.TemplateResponse(request, "index.html", {
-        "request": request,
-        "stories": stories,
-        "posts_count": posts_count,
-    })
-
-
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def index(request: Request, user: str = Depends(require_auth)):
     """Show pending stories for triage."""
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -374,7 +352,7 @@ async def save_story(
 
 
 @app.get("/posts", response_class=HTMLResponse)
-async def list_posts(request: Request):
+async def list_posts(request: Request, user: str = Depends(require_auth)):
     """Show approved posts ready for publishing."""
     db_ok, db_msg = check_database_available()
     if not db_ok:

@@ -6,8 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import (
     ReportingUnit, Story, StoryUnitLink, SourceTier
 )
-from src.verification.units import get_owner_group
-from src.shared.config import get_settings
 from typing import List, Optional, Tuple
 
 
@@ -83,8 +81,6 @@ async def apply_tier1_gate(
     If story_ids provided, only evaluate those stories (including BLOCKED).
     Otherwise evaluate all PENDING stories.
     """
-    from src.verification.units import get_owner_group
-
     # Build query - if story_ids provided, get those (any status), else get PENDING
     if story_ids:
         stmt = select(Story).where(Story.id.in_(story_ids))
@@ -107,6 +103,7 @@ async def apply_tier1_gate(
         units = result.scalars().all()
 
         # Convert real ReportingUnit rows to (tier, owner_group) tuples for pure function
+        # tier1_owner_groups is already a JSON dict like {"AP": 1, "BBC": 2} computed in units.py
         tier_owner_pairs = []
         tier1_total = 0
         tier2_total = 0
@@ -116,12 +113,15 @@ async def apply_tier1_gate(
             # source_tiers is JSON like {"tier1": 2, "tier2": 1}
             source_tiers = u.source_tiers or {}
             for tier, count in source_tiers.items():
-                owner = get_owner_group(u.source_domain)
-                for _ in range(count):
-                    tier_owner_pairs.append((tier, owner))
+                # Use tier1_owner_groups for tier1 owners (already correct ownership mapping)
+                # For tier2, we don't need owners for the gate
                 if tier == "tier1":
+                    tier1_owner_groups = u.tier1_owner_groups or {}
+                    for owner, owner_count in tier1_owner_groups.items():
+                        for _ in range(owner_count):
+                            tier_owner_pairs.append((tier, owner))
                     tier1_total += count
-                    tier1_owners.add(owner)
+                    tier1_owners.update(tier1_owner_groups.keys())
                 elif tier == "tier2":
                     tier2_total += count
 
@@ -139,8 +139,9 @@ async def apply_tier1_gate(
         story.distinct_owners = distinct_owners
 
         if should_queue:
-            story.status = Story.Status.QUEUED
-            story.gate_reason = f"Passed: {tier1_count} tier-1 units, {distinct_owners} distinct owners"
+            # Gate passes: keep PENDING (awaiting curator approval)
+            story.status = Story.Status.PENDING
+            story.gate_reason = f"Passed gate: {tier1_count} tier-1 units, {distinct_owners} distinct owners"
             queued += 1
         else:
             story.status = Story.Status.BLOCKED

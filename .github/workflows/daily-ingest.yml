@@ -7,7 +7,7 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 permissions:
-  contents: read  # Only need read for checkout
+  contents: write  # Need write for heartbeat commit
 
 jobs:
   ingest:
@@ -47,27 +47,12 @@ jobs:
         run: |
           uv run src/ingestion/run.py
 
-      - name: Run verification pipeline
-        if: steps.ingest.outcome == 'success'
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      - name: Heartbeat commit (keeps scheduled workflow alive)
+        if: always()
         run: |
-          uv run python -c "
-import asyncio
-from src.verification.units import build_reporting_units
-from src.verification.stories import build_stories
-from src.verification.tiers import apply_tier1_gate
-from src.shared.database import init_db, get_session
-
-async def main():
-    await init_db()
-    async with get_session() as session:
-        await build_reporting_units(session)
-        modified_stories = await build_stories(session)
-        if modified_stories:
-            await apply_tier1_gate(session, story_ids=modified_stories)
-
-asyncio.run(main())
-"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          date -u +%Y-%m-%dT%H:%M:%SZ > .github/last-run
+          git add .github/last-run
+          git diff --staged --quiet || git commit -m "chore: heartbeat"
+          git push

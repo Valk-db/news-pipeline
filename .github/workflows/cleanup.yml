@@ -7,7 +7,7 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 permissions:
-  contents: read
+  contents: write  # Need write for heartbeat commit
 
 jobs:
   cleanup:
@@ -35,4 +35,14 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          uv run scripts/cleanup_stale.py --pending-hours=72 --blocked-hours=168
+          uv run scripts/cleanup_stale.py --pending-hours=72 --blocked-hours=168 --queued-hours=168
+
+      - name: Heartbeat commit (keeps scheduled workflow alive)
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          date -u +%Y-%m-%dT%H:%M:%SZ > .github/last-run
+          git add .github/last-run
+          git diff --staged --quiet || git commit -m "chore: heartbeat"
+          git push
