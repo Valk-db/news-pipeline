@@ -56,7 +56,18 @@ jobs:
       - name: Debug environment
         run: |
           echo "DATABASE_URL from env: $DATABASE_URL"
-          python -c "from src.shared.config import get_settings; s = get_settings(); print(f'has_database: {s.has_database}'); print(f'database_url: {s.database_url[:50]}...' if s.database_url else 'database_url: NOT SET')"
+          python -c "
+import os
+import sys
+sys.path.insert(0, '.')
+os.environ['DATABASE_URL'] = 'postgresql+asyncpg://postgres:postgres@localhost:5432/test_news'
+from src.shared.config import get_settings
+s = get_settings()
+print(f'has_database: {s.has_database}')
+print(f'database_url: {s.database_url[:50]}...' if s.database_url else 'database_url: NOT SET')
+"
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_news
 
       - name: Run tests
         run: uv run pytest tests/ -v --tb=long -x
