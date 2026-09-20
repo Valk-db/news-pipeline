@@ -54,6 +54,6 @@ jobs:
           echo "Database connection test complete"
 
       - name: Run tests
-        run: uv run pytest tests/ -v
+        run: uv run pytest tests/ -v --tb=long -x
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_news
