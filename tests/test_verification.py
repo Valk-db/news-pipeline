@@ -191,8 +191,7 @@ async def test_build_stories_groups_by_entities(db_session):
         source_tiers={"tier1": 1},
         owner_groups={"AP": 1},
         tier1_owner_groups={"AP": 1},
-        primary_entities={"John Smith", "Washington", "White House"},
-        article_count=1,
+                article_count=1,
     )
 
     unit2 = ReportingUnit(
@@ -265,8 +264,7 @@ async def test_tier1_gate_passes_with_two_tier1_distinct_owners(db_session):
         source_tiers={"tier1": 1},
         owner_groups={"AP": 1},
         tier1_owner_groups={"AP": 1},
-        primary_entities={"John Smith", "Washington", "White House"},
-        article_count=1,
+                article_count=1,
     )
 
     unit2 = ReportingUnit(
@@ -320,8 +318,7 @@ async def test_tier1_gate_blocks_single_tier1_owner(db_session):
         source_tiers={"tier1": 1},
         owner_groups={"AP": 1},
         tier1_owner_groups={"AP": 1},
-        primary_entities={"John Smith", "Washington", "White House"},
-        article_count=1,
+                article_count=1,
     )
 
     unit2 = ReportingUnit(
@@ -373,8 +370,7 @@ async def test_cross_run_story_attachment(db_session):
         source_tiers={"tier1": 1},
         owner_groups={"AP": 1},
         tier1_owner_groups={"AP": 1},
-        primary_entities={"John Smith", "Washington", "White House"},
-        article_count=1,
+                article_count=1,
     )
     db_session.add(unit1)
     await db_session.commit()
