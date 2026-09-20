@@ -4,7 +4,7 @@ import pytest
 import pytest_asyncio
 from datetime import datetime, timezone, timedelta
 import uuid
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, text
 
 from src.verification.units import get_owner_group, build_reporting_units
 from src.verification.stories import build_stories
@@ -85,25 +85,17 @@ async def db_session():
     await init_db()
 
     async with get_session() as session:
-        # Clean up any existing test data - delete children before parents due to FK constraints
-        # ReportingUnit has FK to RawArticle (representative_article_id, NOT NULL)
-        # RawArticle has FK to ReportingUnit (reporting_unit_id, nullable)
-        # Must delete ReportingUnit first, then RawArticle
-        await session.execute(delete(StatusLog))
-        await session.execute(delete(StoryUnitLink))
-        await session.execute(delete(Story))
-        await session.execute(delete(ReportingUnit))
-        await session.execute(delete(RawArticle))
+        # Clean up any existing test data - use TRUNCATE CASCADE to handle circular FKs
+        # RawArticle.reporting_unit_id -> ReportingUnit.id (nullable)
+        # ReportingUnit.representative_article_id -> RawArticle.id (NOT NULL)
+        # These form a circular dependency, so TRUNCATE CASCADE is needed
+        await session.execute(text("TRUNCATE TABLE status_log, story_unit_links, stories, reporting_units, raw_articles RESTART IDENTITY CASCADE"))
         await session.commit()
 
         yield session
 
-        # Cleanup after test - same FK constraint order
-        await session.execute(delete(StatusLog))
-        await session.execute(delete(StoryUnitLink))
-        await session.execute(delete(Story))
-        await session.execute(delete(ReportingUnit))
-        await session.execute(delete(RawArticle))
+        # Cleanup after test - same approach
+        await session.execute(text("TRUNCATE TABLE status_log, story_unit_links, stories, reporting_units, raw_articles RESTART IDENTITY CASCADE"))
         await session.commit()
 
 
