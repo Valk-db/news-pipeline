@@ -332,8 +332,7 @@ async def save_story(
             logger.warning("Caption validation failed: %s", error)
             return templates.TemplateResponse(request, "error.html", {
                 "request": request,
-                "error": "Caption validation failed",
-                "details": error + " (check 'Override validation' to save anyway)",
+                "message": f"Caption validation failed: {error} (check 'Override validation' to save anyway)",
             }, status_code=400)
         elif not is_valid and override_validation:
             logger.warning("Caption validation overridden by user: %s", error)

@@ -45,7 +45,7 @@ jobs:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           GDELT_THROTTLE_SECONDS: "10"
         run: |
-          uv run src/ingestion/run.py
+          uv run python -m src.ingestion.run
 
       - name: Heartbeat commit (keeps scheduled workflow alive)
         if: always()

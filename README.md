@@ -57,23 +57,23 @@ GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → C
 # Clone and install
 git clone <your-repo>
 cd news-pipeline
-uv sync
+uv sync --extra pipeline
 
 # Configure environment
 cp .env.example .env
 # Edit .env with your keys
 
 # Initialize database
-uv run scripts/init_db.py
+uv run python -m scripts.init_db
 
 # Verify tier-1 sources
-uv run scripts/verify_sources.py
+uv run python -m scripts.verify_sources
 
 # Test ingestion (dry run)
-uv run src/ingestion/run.py --dry-run
+uv run python -m src.ingestion.run --dry-run
 
 # Start curation UI
-uv run curation_ui/main.py
+uv run uvicorn curation_ui.main:app --reload
 # Open http://localhost:8000
 ```
 

@@ -42,15 +42,7 @@ TIER1_FEEDS = {
             "https://feeds.npr.org/1014/rss.xml",  # Politics
         ],
     },
-    "google_news_world": {
-        "name": "Google News - World",
-        "domain": "news.google.com",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://news.google.com/rss?hl=en&gl=US&ceid=US:en",  # World - main feed
-        ],
-    },
-}
+    }
 
 
 async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30) -> Optional[feedparser.FeedParserDict]:

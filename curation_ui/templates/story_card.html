@@ -1,7 +1,7 @@
 <div class="story-card" data-story-id="{{ item.story.id }}" tabindex="0">
     <div class="story-header">
-        <span class="badge badge-{{ 'success' if item.story.status == 'QUEUED' else 'warning' }}">
-            {{ item.story.status }}
+        <span class="badge badge-{{ 'success' if item.story.status.value == 'queued' else 'warning' }}">
+            {{ item.story.status.value|upper }}
         </span>
         <span class="story-day">{{ item.story.day.strftime('%Y-%m-%d') }}</span>
         <span class="story-gate">{{ item.story.gate_reason or 'Pending review' }}</span>
