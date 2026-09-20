@@ -85,22 +85,22 @@ async def db_session():
     await init_db()
 
     async with get_session() as session:
-        # Clean up any existing test data
+        # Clean up any existing test data - delete children before parents due to FK constraints
         await session.execute(delete(StatusLog))
         await session.execute(delete(StoryUnitLink))
         await session.execute(delete(Story))
-        await session.execute(delete(ReportingUnit))
         await session.execute(delete(RawArticle))
+        await session.execute(delete(ReportingUnit))
         await session.commit()
 
         yield session
 
-        # Cleanup after test
+        # Cleanup after test - delete children before parents due to FK constraints
         await session.execute(delete(StatusLog))
         await session.execute(delete(StoryUnitLink))
         await session.execute(delete(Story))
-        await session.execute(delete(ReportingUnit))
         await session.execute(delete(RawArticle))
+        await session.execute(delete(ReportingUnit))
         await session.commit()
 
 
