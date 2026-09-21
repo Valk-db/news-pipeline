@@ -150,3 +150,45 @@ class TestRssFeedFetchFailures:
 
         snap = STATS.snapshot()
         assert snap.get("bbc.feed_ok") == 1
+
+    @pytest.mark.asyncio
+    async def test_feed_403_not_retried(self):
+        """403 is attempted exactly once (not retried)."""
+        STATS.reset()
+
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_client.get.side_effect = httpx.HTTPStatusError(
+            "403 Forbidden", request=MagicMock(), response=mock_response
+        )
+
+        result = await fetch_feed(mock_client, "https://example.com/feed", source_key="bbc")
+        assert result is None
+
+        # Should be called exactly once (no retries for 4xx other than 429)
+        assert mock_client.get.call_count == 1
+
+        snap = STATS.snapshot()
+        assert snap.get("bbc.feed_failed:http_403") == 1
+
+    @pytest.mark.asyncio
+    async def test_feed_500_retried(self):
+        """500 is retried up to max_retries times."""
+        STATS.reset()
+
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_client.get.side_effect = httpx.HTTPStatusError(
+            "500 Internal Server Error", request=MagicMock(), response=mock_response
+        )
+
+        result = await fetch_feed(mock_client, "https://example.com/feed", source_key="bbc")
+        assert result is None
+
+        # Should be called max_retries times (default 3)
+        assert mock_client.get.call_count == 3
+
+        snap = STATS.snapshot()
+        assert snap.get("bbc.feed_failed:http_500") == 1
