@@ -17,10 +17,17 @@ import json
 
 async def log_status(session, phase: str, status: str, details: dict = None):
     """Log pipeline status to database."""
+    import subprocess
+    try:
+        commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        commit_sha = None
+
     log = StatusLog(
         phase=phase,
         status=status,
         details=details or {},
+        commit_sha=commit_sha,
     )
     session.add(log)
     await session.commit()
@@ -38,7 +45,10 @@ async def run_ingestion(dry_run: bool = False) -> dict:
         # Phase 1: Ingestion
         print("Phase 1: Ingesting articles...")
         rss_articles = await ingest_rss_feeds(settings.max_articles_per_feed)
-        gdelt_articles, gdelt_health = await ingest_gdelt(hours_back=24, max_per_domain=50)
+        if settings.gdelt_enabled:
+            gdelt_articles, gdelt_health = await ingest_gdelt(hours_back=24, max_per_domain=50)
+        else:
+            gdelt_articles, gdelt_health = [], {"succeeded": [], "failed": [], "skipped": [], "disabled": True}
         reddit_articles = await ingest_reddit(limit_per_sub=25)
 
         all_articles = rss_articles + gdelt_articles + reddit_articles

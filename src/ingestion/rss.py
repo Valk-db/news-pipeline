@@ -67,15 +67,24 @@ TIER1_FEEDS = {
     }
 
 
-async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30) -> Optional[feedparser.FeedParserDict]:
-    """Fetch and parse a single RSS feed."""
-    try:
-        response = await client.get(feed_url, timeout=timeout, follow_redirects=True)
-        response.raise_for_status()
-        return feedparser.parse(response.text)
-    except Exception as e:
-        print(f"Failed to fetch {feed_url}: {e}")
-        return None
+async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30, max_retries: int = 3, retry_delay: float = 5.0) -> Optional[feedparser.FeedParserDict]:
+    """Fetch and parse a single RSS feed with retry logic."""
+    settings = get_settings()
+    max_retries = settings.rss_max_retries
+    retry_delay = settings.rss_retry_delay
+
+    for attempt in range(max_retries):
+        try:
+            response = await client.get(feed_url, timeout=timeout, follow_redirects=True)
+            response.raise_for_status()
+            return feedparser.parse(response.text)
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"Failed to fetch {feed_url} (attempt {attempt + 1}/{max_retries}): {e}, retrying in {retry_delay}s...")
+                await asyncio.sleep(retry_delay)
+            else:
+                print(f"Failed to fetch {feed_url} after {max_retries} attempts: {e}")
+                return None
 
 
 async def process_feed_entry(

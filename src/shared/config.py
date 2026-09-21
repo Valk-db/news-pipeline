@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     gdelt_throttle_seconds: float = 5.0
     gdelt_circuit_breaker_threshold: int = 3
     article_cache_hours: int = 24
+    gdelt_enabled: bool = True
+    rss_max_retries: int = 3
+    rss_retry_delay: float = 5.0
+    gdelt_max_retries: int = 7
+    gdelt_base_delay: float = 10.0
 
     # Curation UI auth
     curation_user: str = ""
