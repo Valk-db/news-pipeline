@@ -171,11 +171,10 @@ class TestIngestGdeltCircuitBreaker:
             mock_settings.return_value.gdelt_circuit_breaker_threshold = 3
             # First 3 domains fail, 4th should be skipped
             mock_fetch.side_effect = [
-                DomainResult(domain="apnews.com", ok=False, error="timeout"),
-                DomainResult(domain="reuters.com", ok=False, error="timeout"),
                 DomainResult(domain="bbc.com", ok=False, error="timeout"),
-                DomainResult(domain="theguardian.com", ok=True, articles=[]),  # Should not be called
-                DomainResult(domain="npr.org", ok=True, articles=[]),  # Should not be called
+                DomainResult(domain="theguardian.com", ok=False, error="timeout"),
+                DomainResult(domain="npr.org", ok=False, error="timeout"),
+                # Should not be called - no more domains after circuit opens
             ]
 
             articles, health = await ingest_gdelt(hours_back=24, max_per_domain=50)
@@ -185,37 +184,30 @@ class TestIngestGdeltCircuitBreaker:
 
             # Check health structure
             assert health["succeeded"] == []
-            assert health["failed"] == ["apnews.com", "reuters.com", "bbc.com"]
-            assert health["skipped"] == ["theguardian.com", "npr.org"]
+            assert health["failed"] == ["bbc.com", "theguardian.com", "npr.org"]
+            assert health["skipped"] == []
 
     @pytest.mark.asyncio
-    async def test_apnews_or_reuters_down_sets_tier1_critical(self):
-        """apnews.com or reuters.com failing sets tier1_critical_down; others alone do not."""
+    async def test_gdelt_domains_fail_sets_tier1_critical(self):
+        """GDELT domains failing sets tier1_critical_down (empty now since all have RSS backup)."""
         with patch("src.ingestion.gdelt.fetch_gdelt_articles") as mock_fetch, \
              patch("src.ingestion.gdelt.get_settings") as mock_settings:
 
             mock_settings.return_value.gdelt_circuit_breaker_threshold = 3
 
-            # Scenario 1: apnews.com fails
             mock_fetch.side_effect = [
-                DomainResult(domain="apnews.com", ok=False, error="api error"),
-                DomainResult(domain="reuters.com", ok=True, articles=[]),
-                DomainResult(domain="bbc.com", ok=True, articles=[]),
+                DomainResult(domain="bbc.com", ok=False, error="api error"),
                 DomainResult(domain="theguardian.com", ok=True, articles=[]),
                 DomainResult(domain="npr.org", ok=True, articles=[]),
             ]
 
             _, health = await ingest_gdelt(hours_back=24, max_per_domain=50)
 
-            # tier1 critical is computed by caller (run_ingestion), but we verify
-            # the health structure has the failed domain
-            assert "apnews.com" in health["failed"]
-            assert "reuters.com" not in health["failed"]
+            assert "bbc.com" in health["failed"]
+            assert "theguardian.com" not in health["failed"]
 
-            # Verify the tier1 critical domains set is correct
-            assert "apnews.com" in GDELT_TIER1_CRITICAL_DOMAINS
-            assert "reuters.com" in GDELT_TIER1_CRITICAL_DOMAINS
-            assert "bbc.com" not in GDELT_TIER1_CRITICAL_DOMAINS
+            # Verify the tier1 critical domains set is now empty (all have RSS backup)
+            assert GDELT_TIER1_CRITICAL_DOMAINS == set()
 
     @pytest.mark.asyncio
     async def test_verify_sources_updated_for_domainresult(self):
@@ -373,12 +365,12 @@ class TestConfiguration:
         assert settings.gdelt_circuit_breaker_threshold == 3
 
     def test_tier1_critical_domains_constant(self):
-        """GDELT_TIER1_CRITICAL_DOMAINS contains only apnews and reuters."""
-        assert GDELT_TIER1_CRITICAL_DOMAINS == {"apnews.com", "reuters.com"}
+        """GDELT_TIER1_CRITICAL_DOMAINS is empty since all tier-1 sources have RSS backup."""
+        assert GDELT_TIER1_CRITICAL_DOMAINS == set()
 
     def test_domain_filters_list(self):
-        """DOMAIN_FILTERS has all 5 domains in expected order."""
-        assert DOMAIN_FILTERS == ["apnews.com", "reuters.com", "bbc.com", "theguardian.com", "npr.org"]
+        """DOMAIN_FILTERS has 3 domains (BBC, Guardian, NPR - AP/Reuters use RSS)."""
+        assert DOMAIN_FILTERS == ["bbc.com", "theguardian.com", "npr.org"]
 
 
 if __name__ == "__main__":

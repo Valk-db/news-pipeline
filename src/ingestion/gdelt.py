@@ -14,8 +14,10 @@ import random
 
 
 GDELT_API = "https://api.gdeltproject.org/api/v2/doc/doc"
-DOMAIN_FILTERS = ["apnews.com", "reuters.com", "bbc.com", "theguardian.com", "npr.org"]
-GDELT_TIER1_CRITICAL_DOMAINS = {"apnews.com", "reuters.com"}  # no RSS backup for these
+# GDELT domains - AP and Reuters now have RSS backups, so only use GDELT for BBC/Guardian/NPR
+# to reduce rate limit pressure on critical wire services
+DOMAIN_FILTERS = ["bbc.com", "theguardian.com", "npr.org"]
+GDELT_TIER1_CRITICAL_DOMAINS = set()  # All tier-1 sources now have RSS backups
 
 
 @dataclass

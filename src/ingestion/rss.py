@@ -12,6 +12,28 @@ import asyncio
 
 
 TIER1_FEEDS = {
+    "apnews": {
+        "name": "AP News",
+        "domain": "apnews.com",
+        "tier": SourceTier.TIER1,
+        "feeds": [
+            "https://apnews.com/rss",  # Top stories
+            "https://apnews.com/rss/world-news",
+            "https://apnews.com/rss/politics",
+            "https://apnews.com/rss/business",
+        ],
+    },
+    "reuters": {
+        "name": "Reuters",
+        "domain": "reuters.com",
+        "tier": SourceTier.TIER1,
+        "feeds": [
+            "https://www.reuters.com/rss/news/world",
+            "https://www.reuters.com/rss/news/us",
+            "https://www.reuters.com/rss/news/politics",
+            "https://www.reuters.com/rss/news/business",
+        ],
+    },
     "bbc": {
         "name": "BBC News",
         "domain": "bbc.com",
