@@ -38,8 +38,6 @@ def canonicalize_url(url: str) -> str:
         if k.lower() not in _TRACKING_PARAMS and not k.lower().startswith(_TRACKING_PREFIXES)
     )
     path = parts.path.rstrip("/") or "/"
-    # Lowercase path for case-insensitive matching
-    path = path.lower()
     return urlunsplit(("https", host, path, urlencode(query), ""))
 
 
@@ -65,7 +63,7 @@ def _extract_article_sync(url: str, html: Optional[str] = None, source_key: Opti
                     # STATS is available at module level
                     STATS.record(source_key, f"fetch_failed:http_{e.response.status_code}")
                 return None, None
-            except asyncio.TimeoutError:
+            except httpx.TimeoutException:
                 if source_key:
                     # STATS is available at module level
                     STATS.record(source_key, "fetch_failed:timeout")
@@ -123,4 +121,4 @@ def compute_content_hash(text: str) -> str:
 
 def compute_url_hash(url: str) -> str:
     """SHA256 hash of canonicalized URL for dedup."""
-    return hashlib.sha256(canonicalize_url(url).encode()).hexdigest()
+    return hashlib.sha256(canonicalize_url(url).lower().encode()).hexdigest()
