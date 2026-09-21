@@ -33,6 +33,11 @@ from src.shared.config import get_settings
 # Pure logic functions (no DB access)
 # =============================================================================
 
+def bucket_for(jaccard: float) -> float:
+    """Floor-based bucketing to 0.1 precision, capped at 1.0."""
+    return min(math.floor(jaccard * 10 + 1e-9) / 10, 1.0)
+
+
 def build_unit_entity_sets(
     units: List[Dict[str, Any]],
     articles: Dict[str, Dict[str, Any]]
@@ -40,6 +45,7 @@ def build_unit_entity_sets(
     """
     Build approximate canonical entity sets for units using _normalize_text.
     Only considers PERSON, ORG, GPE entities from article.entities JSON.
+    _normalize_text already returns "TYPE:normalized" so we use it directly.
     """
     unit_entities = {}
     for unit in units:
@@ -50,7 +56,7 @@ def build_unit_entity_sets(
             for label in ("PERSON", "ORG", "GPE"):
                 for surface in entities.get(label, []):
                     normalized = _normalize_text(surface, label)
-                    entity_set.add(f"{label}:{normalized}")
+                    entity_set.add(normalized)
         unit_entities[str(unit["id"])] = entity_set
     return unit_entities
 
@@ -71,21 +77,35 @@ def compute_jaccard_histogram(
     unit_entities: Dict[str, Set[str]],
     unit_owner_groups: Dict[str, Dict[str, int]],
     articles: Dict[str, Dict[str, Any]],
-    hours_window: int = 48
-) -> Tuple[Dict[float, int], List[Dict[str, Any]]]:
+    days: int = 3,
+    now: datetime | None = None
+) -> Dict[str, Any]:
     """
-    For units created in last N hours: best Jaccard vs units with disjoint owner groups
-    within hours_window. Returns histogram buckets (0.1) and top 25 near-misses in [0.2, 0.4).
+    For units created in last N days: best Jaccard vs units with disjoint owner groups
+    within 48h. Returns dict with histogram, near_misses, and stats.
     """
-    # Filter units by creation date (last hours_window hours)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_window)
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    # Filter units by creation date (last days days)
+    cutoff = now - timedelta(days=days)
     recent_units = [u for u in units if u["created_at"] >= cutoff]
 
-    # Build unit -> owner groups mapping
-    unit_to_owners = {str(u["id"]): set(unit_owner_groups.get(str(u["id"]), {}).keys()) for u in recent_units}
+    # Build unit -> owner groups mapping for ALL units (not just recent)
+    unit_to_owners = {str(u["id"]): set(unit_owner_groups.get(str(u["id"]), {}).keys()) for u in units}
 
     histogram = defaultdict(int)
     near_misses = []
+    stats = {
+        "total_recent_units": len(recent_units),
+        "units_with_entities": 0,
+        "units_with_no_entities": 0,
+        "units_with_no_candidates": 0,
+        "zero_overlap_pairs": 0,
+    }
+
+    # Dedup set for near-misses: frozenset({a,b}) -> max jaccard entry
+    near_miss_map: Dict[frozenset, Dict[str, Any]] = {}
 
     for unit_a in recent_units:
         unit_a_id = str(unit_a["id"])
@@ -93,11 +113,15 @@ def compute_jaccard_histogram(
         owners_a = unit_to_owners.get(unit_a_id, set())
 
         if not entities_a:
+            stats["units_with_no_entities"] += 1
             continue
+
+        stats["units_with_entities"] += 1
 
         best_jaccard = 0.0
         best_unit_b = None
         best_shared = set()
+        has_candidate = False
 
         for unit_b in units:
             unit_b_id = str(unit_b["id"])
@@ -105,48 +129,61 @@ def compute_jaccard_histogram(
                 continue
 
             # Check owner groups are disjoint
-            owners_b = set(unit_owner_groups.get(unit_b_id, {}).keys())
+            owners_b = unit_to_owners.get(unit_b_id, set())
             if owners_a & owners_b:
                 continue
 
-            # Check within hours_window
+            # Check within 48h
             time_diff = abs((unit_a["created_at"] - unit_b["created_at"]).total_seconds())
-            if time_diff > hours_window * 3600:
+            if time_diff > 48 * 3600:
                 continue
 
             entities_b = unit_entities.get(unit_b_id, set())
             if not entities_b:
                 continue
 
+            has_candidate = True
             jaccard = jaccard_similarity(entities_a, entities_b)
+
+            if jaccard == 0.0:
+                stats["zero_overlap_pairs"] += 1
+
             if jaccard > best_jaccard:
                 best_jaccard = jaccard
                 best_unit_b = unit_b
                 best_shared = entities_a & entities_b
 
-        # Bucket into 0.1 histogram
-        if best_jaccard > 0:
-            bucket = round(best_jaccard * 10) / 10
-            histogram[bucket] += 1
+        if not has_candidate:
+            stats["units_with_no_candidates"] += 1
 
-            # Track near-misses in [0.2, 0.4)
-            if 0.2 <= best_jaccard < 0.4 and best_unit_b:
-                near_misses.append({
-                    "unit_a_id": unit_a_id,
-                    "unit_b_id": str(best_unit_b["id"]),
-                    "jaccard": best_jaccard,
-                    "shared_entities": sorted(best_shared),
-                    "unit_a_title": articles.get(str(unit_a["representative_article_id"]), {}).get("title", ""),
-                    "unit_b_title": articles.get(str(best_unit_b["representative_article_id"]), {}).get("title", ""),
-                    "unit_a_owners": sorted(owners_a),
-                    "unit_b_owners": sorted(set(unit_owner_groups.get(str(best_unit_b["id"]), {}).keys())),
-                })
+        # Always bucket (including 0.0)
+        bucket = bucket_for(best_jaccard)
+        histogram[bucket] += 1
 
-    # Sort near-misses by jaccard descending, take top 25
-    near_misses.sort(key=lambda x: -x["jaccard"])
-    near_misses = near_misses[:25]
+        # Track near-misses in [0.2, 0.4) with dedup
+        if 0.2 <= best_jaccard < 0.4 and best_unit_b:
+            pair_key = frozenset({unit_a_id, str(best_unit_b["id"])})
+            entry = {
+                "unit_a_id": unit_a_id,
+                "unit_b_id": str(best_unit_b["id"]),
+                "jaccard": best_jaccard,
+                "shared_entities": sorted(best_shared),
+                "unit_a_title": articles.get(str(unit_a["representative_article_id"]), {}).get("title", ""),
+                "unit_b_title": articles.get(str(best_unit_b["representative_article_id"]), {}).get("title", ""),
+                "unit_a_owners": sorted(owners_a),
+                "unit_b_owners": sorted(unit_to_owners.get(str(best_unit_b["id"]), set())),
+            }
+            if pair_key not in near_miss_map or best_jaccard > near_miss_map[pair_key]["jaccard"]:
+                near_miss_map[pair_key] = entry
 
-    return dict(histogram), near_misses
+    # Convert near_miss_map to sorted list
+    near_misses = sorted(near_miss_map.values(), key=lambda x: -x["jaccard"])[:25]
+
+    return {
+        "histogram": dict(histogram),
+        "near_misses": near_misses,
+        "stats": stats,
+    }
 
 
 def find_duplicate_titles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -369,9 +406,12 @@ async def run_audit(db_url: str, days: int = 3) -> str:
         print(f"")
 
         # 5. Near-miss Jaccard analysis (48h window, disjoint owners)
-        histogram, near_misses = compute_jaccard_histogram(
-            unit_list, unit_entities, unit_owner_groups, articles_dict, hours_window=48
+        jaccard_result = compute_jaccard_histogram(
+            unit_list, unit_entities, unit_owner_groups, articles_dict, days=days
         )
+        histogram = jaccard_result["histogram"]
+        near_misses = jaccard_result["near_misses"]
+        jaccard_stats = jaccard_result["stats"]
 
         print(f"## 5. Near-Miss Jaccard Analysis (last {days} days, 48h window, disjoint owners)")
         print(f"")
