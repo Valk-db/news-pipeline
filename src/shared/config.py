@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # Curation UI auth
     curation_user: str = ""
     curation_password: str = ""
+    curation_enabled: bool = True
 
     # Verification settings
     containment_threshold: float = 0.9
@@ -85,6 +86,10 @@ class Settings(BaseSettings):
     def has_curation_auth(self) -> bool:
         return bool(self.curation_user and self.curation_user.strip() and
                     self.curation_password and self.curation_password.strip())
+
+    @property
+    def has_curation(self) -> bool:
+        return self.curation_enabled and self.has_curation_auth
 
     def missing_required_for(self, feature: str) -> list[str]:
         """Return list of missing env vars for a given feature."""
