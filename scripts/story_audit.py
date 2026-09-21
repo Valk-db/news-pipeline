@@ -9,25 +9,25 @@ Outputs markdown to stdout and appends to $GITHUB_STEP_SUMMARY when set.
 """
 
 import argparse
+import math
 import os
 import sys
-import math
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Set, Tuple, Any
 from collections import defaultdict
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 # Add project root to path for imports (repo root, not src/)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import select, func, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
-from src.schema.models import RawArticle, ReportingUnit, Story, StoryUnitLink
-from src.utils.ner import _normalize_text
-from src.shared.database import prepare_database_url
-from src.shared.config import get_settings
 
+from src.schema.models import RawArticle, ReportingUnit, Story, StoryUnitLink
+from src.shared.config import get_settings
+from src.shared.database import prepare_database_url
+from src.utils.ner import _normalize_text
 
 # =============================================================================
 # Pure logic functions (no DB access)
@@ -39,9 +39,9 @@ def bucket_for(jaccard: float) -> float:
 
 
 def build_unit_entity_sets(
-    units: List[Dict[str, Any]],
-    articles: Dict[str, Dict[str, Any]]
-) -> Dict[str, Set[str]]:
+    units: list[dict[str, Any]],
+    articles: dict[str, dict[str, Any]]
+) -> dict[str, set[str]]:
     """
     Build approximate canonical entity sets for units using _normalize_text.
     Only considers PERSON, ORG, GPE entities from article.entities JSON.
@@ -61,7 +61,7 @@ def build_unit_entity_sets(
     return unit_entities
 
 
-def jaccard_similarity(set_a: Set[str], set_b: Set[str]) -> float:
+def jaccard_similarity(set_a: set[str], set_b: set[str]) -> float:
     """Jaccard similarity between two sets."""
     if not set_a and not set_b:
         return 1.0
@@ -73,19 +73,20 @@ def jaccard_similarity(set_a: Set[str], set_b: Set[str]) -> float:
 
 
 def compute_jaccard_histogram(
-    units: List[Dict[str, Any]],
-    unit_entities: Dict[str, Set[str]],
-    unit_owner_groups: Dict[str, Dict[str, int]],
-    articles: Dict[str, Dict[str, Any]],
+    units: list[dict[str, Any]],
+    unit_entities: dict[str, set[str]],
+    unit_owner_groups: dict[str, dict[str, int]],
+    articles: dict[str, dict[str, Any]],
     days: int = 3,
+    hours_window: int = 48,
     now: datetime | None = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     For units created in last N days: best Jaccard vs units with disjoint owner groups
-    within 48h. Returns dict with histogram, near_misses, and stats.
+    within hours_window. Returns dict with histogram, near_misses, and stats.
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
     # Filter units by creation date (last days days)
     cutoff = now - timedelta(days=days)
@@ -97,15 +98,14 @@ def compute_jaccard_histogram(
     histogram = defaultdict(int)
     near_misses = []
     stats = {
-        "total_recent_units": len(recent_units),
-        "units_with_entities": 0,
-        "units_with_no_entities": 0,
-        "units_with_no_candidates": 0,
-        "zero_overlap_pairs": 0,
+        "analysed": 0,
+        "skipped_empty": 0,
+        "no_candidate": 0,
+        "would_attach": 0,
     }
 
     # Dedup set for near-misses: frozenset({a,b}) -> max jaccard entry
-    near_miss_map: Dict[frozenset, Dict[str, Any]] = {}
+    near_miss_map: dict[frozenset, dict[str, Any]] = {}
 
     for unit_a in recent_units:
         unit_a_id = str(unit_a["id"])
@@ -113,10 +113,10 @@ def compute_jaccard_histogram(
         owners_a = unit_to_owners.get(unit_a_id, set())
 
         if not entities_a:
-            stats["units_with_no_entities"] += 1
+            stats["skipped_empty"] += 1
             continue
 
-        stats["units_with_entities"] += 1
+        stats["analysed"] += 1
 
         best_jaccard = 0.0
         best_unit_b = None
@@ -133,9 +133,9 @@ def compute_jaccard_histogram(
             if owners_a & owners_b:
                 continue
 
-            # Check within 48h
+            # Check within hours_window
             time_diff = abs((unit_a["created_at"] - unit_b["created_at"]).total_seconds())
-            if time_diff > 48 * 3600:
+            if time_diff > hours_window * 3600:
                 continue
 
             entities_b = unit_entities.get(unit_b_id, set())
@@ -145,16 +145,17 @@ def compute_jaccard_histogram(
             has_candidate = True
             jaccard = jaccard_similarity(entities_a, entities_b)
 
-            if jaccard == 0.0:
-                stats["zero_overlap_pairs"] += 1
-
             if jaccard > best_jaccard:
                 best_jaccard = jaccard
                 best_unit_b = unit_b
                 best_shared = entities_a & entities_b
 
         if not has_candidate:
-            stats["units_with_no_candidates"] += 1
+            stats["no_candidate"] += 1
+
+        # Track would_attach (best Jaccard >= 0.4)
+        if best_jaccard >= 0.4:
+            stats["would_attach"] += 1
 
         # Always bucket (including 0.0)
         bucket = bucket_for(best_jaccard)
@@ -186,7 +187,7 @@ def compute_jaccard_histogram(
     }
 
 
-def find_duplicate_titles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def find_duplicate_titles(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Find (source_domain, title) pairs appearing more than once with fetched_at range."""
     title_groups = defaultdict(list)
     for article in articles:
@@ -207,7 +208,7 @@ def find_duplicate_titles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return duplicates
 
 
-def format_histogram(histogram: Dict[float, int]) -> str:
+def format_histogram(histogram: dict[float, int]) -> str:
     """Format histogram as markdown table."""
     lines = ["| Bucket | Count |", "|--------|-------|"]
     for bucket in sorted(histogram.keys()):
@@ -215,7 +216,7 @@ def format_histogram(histogram: Dict[float, int]) -> str:
     return "\n".join(lines)
 
 
-def format_near_misses(near_misses: List[Dict[str, Any]]) -> str:
+def format_near_misses(near_misses: list[dict[str, Any]]) -> str:
     """Format near-misses as markdown table."""
     if not near_misses:
         return "None found."
@@ -251,13 +252,13 @@ async def run_audit(db_url: str, days: int = 3) -> str:
         # Print DB host at startup (never credentials)
         host_info = f"{url.host}:{url.port}" if url.port else url.host
         print(f"# Story Audit Report (last {days} days)")
-        print(f"")
+        print()
         print(f"**Database host:** {host_info}")
-        print(f"**Generated:** {datetime.now(timezone.utc).isoformat()}")
-        print(f"")
-        print(f"> **Note:** This audit uses approximate canonical IDs via `_normalize_text(surface, label)`")
-        print(f"> for PERSON/ORG/GPE only. This does not merge aliases, so it can understate production overlap.")
-        print(f"")
+        print(f"**Generated:** {datetime.now(UTC).isoformat()}")
+        print()
+        print("> **Note:** This audit uses approximate canonical IDs via `_normalize_text(surface, label)`")
+        print("> for PERSON/ORG/GPE only. This does not merge aliases, so it can understate production overlap.")
+        print()
 
         # 1. Counts
         raw_count = await session.scalar(select(func.count(RawArticle.id)))
@@ -285,10 +286,10 @@ async def run_audit(db_url: str, days: int = 3) -> str:
         )
         articles_no_unit = await session.scalar(stmt)
 
-        print(f"## 1. Counts")
-        print(f"")
-        print(f"| Metric | Count |")
-        print(f"|--------|-------|")
+        print("## 1. Counts")
+        print()
+        print("| Metric | Count |")
+        print("|--------|-------|")
         print(f"| raw_articles | {raw_count} |")
         print(f"| reporting_units | {unit_count} |")
         print(f"| story_unit_links | {link_count} |")
@@ -296,7 +297,7 @@ async def run_audit(db_url: str, days: int = 3) -> str:
         print(f"| stories with no linked units | {stories_no_units} |")
         print(f"| units whose representative article is missing | {units_missing_rep} |")
         print(f"| articles with no unit | {articles_no_unit} |")
-        print(f"")
+        print()
 
         # 2. Stories created per day, by status
         stmt = (
@@ -305,7 +306,7 @@ async def run_audit(db_url: str, days: int = 3) -> str:
                 Story.status,
                 func.count(Story.id).label("count")
             )
-            .where(Story.day >= datetime.now(timezone.utc) - timedelta(days=days))
+            .where(Story.day >= datetime.now(UTC) - timedelta(days=days))
             .group_by(func.date(Story.day), Story.status)
             .order_by(func.date(Story.day).desc())
         )
@@ -313,18 +314,18 @@ async def run_audit(db_url: str, days: int = 3) -> str:
         daily_status = result.all()
 
         print(f"## 2. Stories Created Per Day (last {days} days), by Status")
-        print(f"")
-        print(f"| Day | Status | Count |")
-        print(f"|-----|--------|-------|")
+        print()
+        print("| Day | Status | Count |")
+        print("|-----|--------|-------|")
         for row in daily_status:
             print(f"| {row.day} | {row.status} | {row.count} |")
-        print(f"")
+        print()
 
         # 3. Stories by (linked-unit count, distinct owner-group count)
         # Get all stories with their linked units and owner groups
         stmt = (
             select(Story)
-            .where(Story.day >= datetime.now(timezone.utc) - timedelta(days=days))
+            .where(Story.day >= datetime.now(UTC) - timedelta(days=days))
         )
         result = await session.execute(stmt)
         stories = result.scalars().all()
@@ -343,10 +344,10 @@ async def run_audit(db_url: str, days: int = 3) -> str:
 
         # Compute actual counts vs stored
         disagrees = 0
-        print(f"## 3. Stories by (Linked-Unit Count, Distinct Owner-Group Count)")
-        print(f"")
-        print(f"| Story ID | Linked Units | Distinct Owners | Stored tier1_unit_count | Stored distinct_owners | Match |")
-        print(f"|----------|--------------|-----------------|-------------------------|------------------------|-------|")
+        print("## 3. Stories by (Linked-Unit Count, Distinct Owner-Group Count)")
+        print()
+        print("| Story ID | Linked Units | Distinct Owners | Stored tier1_unit_count | Stored distinct_owners | Match |")
+        print("|----------|--------------|-----------------|-------------------------|------------------------|-------|")
         for story in stories:
             linked = story_units.get(str(story.id), [])
             all_owners = set()
@@ -358,15 +359,15 @@ async def run_audit(db_url: str, days: int = 3) -> str:
             if match == "✗":
                 disagrees += 1
             print(f"| {str(story.id)[:8]} | {actual_units} | {actual_owners} | {story.tier1_unit_count} | {story.distinct_owners} | {match} |")
-        print(f"")
+        print()
         print(f"**Rows that disagree:** {disagrees}")
-        print(f"")
+        print()
 
         # 4. Entity-set size per unit (min / median / max)
         # Get all units and their representative articles
         stmt = (
             select(ReportingUnit.id, ReportingUnit.representative_article_id, ReportingUnit.created_at, ReportingUnit.day)
-            .where(ReportingUnit.day >= datetime.now(timezone.utc) - timedelta(days=days))
+            .where(ReportingUnit.day >= datetime.now(UTC) - timedelta(days=days))
         )
         result = await session.execute(stmt)
         units = result.all()
@@ -397,35 +398,35 @@ async def run_audit(db_url: str, days: int = 3) -> str:
             min_size = max_size = median_size = 0
 
         print(f"## 4. Entity-Set Size Per Unit (last {days} days)")
-        print(f"")
-        print(f"| Metric | Value |")
-        print(f"|--------|-------|")
+        print()
+        print("| Metric | Value |")
+        print("|--------|-------|")
         print(f"| Min | {min_size} |")
         print(f"| Median | {median_size} |")
         print(f"| Max | {max_size} |")
-        print(f"")
+        print()
 
         # 5. Near-miss Jaccard analysis (48h window, disjoint owners)
         jaccard_result = compute_jaccard_histogram(
-            unit_list, unit_entities, unit_owner_groups, articles_dict, days=days
+            unit_list, unit_entities, unit_owner_groups, articles_dict, days=days, hours_window=48
         )
         histogram = jaccard_result["histogram"]
         near_misses = jaccard_result["near_misses"]
         jaccard_stats = jaccard_result["stats"]
 
         print(f"## 5. Near-Miss Jaccard Analysis (last {days} days, 48h window, disjoint owners)")
-        print(f"")
-        print(f"### Histogram (0.1 buckets)")
-        print(f"")
+        print()
+        print("### Histogram (0.1 buckets)")
+        print()
         print(format_histogram(histogram))
-        print(f"")
-        print(f"### Top 25 Near-Misses in [0.2, 0.4)")
-        print(f"")
+        print()
+        print("### Top 25 Near-Misses in [0.2, 0.4)")
+        print()
         print(format_near_misses(near_misses))
-        print(f"")
+        print()
 
         # 6. Duplicate (source_domain, title)
-        stmt = select(RawArticle).where(RawArticle.fetched_at >= datetime.now(timezone.utc) - timedelta(days=days))
+        stmt = select(RawArticle).where(RawArticle.fetched_at >= datetime.now(UTC) - timedelta(days=days))
         result = await session.execute(stmt)
         recent_articles = [{
             "id": a.id,
@@ -437,27 +438,27 @@ async def run_audit(db_url: str, days: int = 3) -> str:
         duplicates = find_duplicate_titles(recent_articles)
 
         print(f"## 6. Duplicate (source_domain, title) in last {days} days")
-        print(f"")
+        print()
         if duplicates:
-            print(f"| Source Domain | Title | Count | Fetched At Range |")
-            print(f"|---------------|-------|-------|------------------|")
+            print("| Source Domain | Title | Count | Fetched At Range |")
+            print("|---------------|-------|-------|------------------|")
             for dup in duplicates:
                 title_short = dup["title"][:80] + "..." if len(dup["title"]) > 80 else dup["title"]
                 print(f"| {dup['source_domain']} | {title_short} | {dup['count']} | {dup['fetched_at_range']} |")
         else:
             print("No duplicates found.")
-        print(f"")
+        print()
 
         # Build full markdown output
         markdown_output = []
         markdown_output.append(f"# Story Audit Report (last {days} days)")
-        markdown_output.append(f"")
+        markdown_output.append("")
         markdown_output.append(f"**Database host:** {host_info}")
-        markdown_output.append(f"**Generated:** {datetime.now(timezone.utc).isoformat()}")
-        markdown_output.append(f"")
-        markdown_output.append(f"> **Note:** This audit uses approximate canonical IDs via `_normalize_text(surface, label)`")
-        markdown_output.append(f"> for PERSON/ORG/GPE only. This does not merge aliases, so it can understate production overlap.")
-        markdown_output.append(f"")
+        markdown_output.append(f"**Generated:** {datetime.now(UTC).isoformat()}")
+        markdown_output.append("")
+        markdown_output.append("> **Note:** This audit uses approximate canonical IDs via `_normalize_text(surface, label)`")
+        markdown_output.append("> for PERSON/ORG/GPE only. This does not merge aliases, so it can understate production overlap.")
+        markdown_output.append("")
 
         # Re-construct full output
         # ... (similar to above but collected)

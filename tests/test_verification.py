@@ -1,18 +1,17 @@
 """Tests for verification pipeline: units, stories, and tiers integration."""
 
+import uuid
+from datetime import UTC, datetime
+
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone
-import uuid
 from sqlalchemy import select, text
 
-from src.verification.units import get_owner_group, build_reporting_units
+from src.schema.models import RawArticle, ReportingUnit, SourceTier, Story, StoryUnitLink
+from src.shared.database import get_session, init_db
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_tier1_gate, evaluate_tier1_gate
-from src.shared.database import init_db, get_session
-from src.schema.models import (
-    RawArticle, ReportingUnit, Story, StoryUnitLink, SourceTier
-)
+from src.verification.units import build_reporting_units, get_owner_group
 
 
 class TestIsLocalhostDb:
@@ -123,7 +122,7 @@ async def db_session():
 
     # SAFETY GUARD: Only run TRUNCATE on localhost databases
     if not _is_localhost_db(settings.database_url):
-        pytest.skip(f"Refusing to run integration tests against non-localhost DB: {settings.database_url}")
+        pytest.skip("Refusing to run integration tests: DATABASE_URL is not a localhost database")
 
     await init_db()
 
@@ -145,7 +144,7 @@ async def _make_unit(session, *, domain, owner, entities, tier=SourceTier.TIER1)
     build_stories() reads entities from the unit's representative RawArticle, so the
     article has to exist (representative_article_id is a real FK).
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     article = RawArticle(
         id=uuid.uuid4(),
         url=f"https://{domain}/article/{uuid.uuid4().hex[:8]}",
@@ -184,7 +183,7 @@ ENT_ECONOMY = {"PERSON": ["Jane Doe"], "GPE": ["London"], "ORG": ["Bank of Engla
 @pytest.mark.asyncio
 async def test_build_reporting_units_integration(db_session):
     """Integration test: build_reporting_units creates units from raw articles."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ap_body = (
         "A major event happened today in the capital city. "
         "Officials confirmed the details of the event to reporters."
