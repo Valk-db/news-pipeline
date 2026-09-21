@@ -23,8 +23,6 @@ class RawArticle(Base):
         Index("ix_raw_articles_published_at", "published_at"),
         Index("ix_raw_articles_source_domain", "source_domain"),
         Index("ix_raw_articles_url_hash", "url_hash", unique=True),
-        Index("ix_raw_articles_domain_published", "source_domain", "published_at"),
-        Index("ix_raw_articles_tier_published", "source_tier", "published_at"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -69,8 +67,6 @@ class Story(Base):
     __table_args__ = (
         Index("ix_stories_day", "day"),
         Index("ix_stories_status", "status"),
-        Index("ix_stories_status_day", "status", "day"),
-        Index("ix_stories_day_status", "day", "status"),
     )
 
     class Status(str, PyEnum):
