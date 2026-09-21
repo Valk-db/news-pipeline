@@ -17,6 +17,30 @@ from src.utils.ingest_stats import STATS
 import json
 
 
+def dedupe_articles(all_articles, existing_url_hashes, existing_content_hashes):
+    """
+    Return (new_articles, url_dup, content_dup). Input order decides which copy wins.
+    """
+    new_articles = []
+    url_dup = 0
+    content_dup = 0
+    batch_url_hashes: set[str] = set()
+    batch_content_keys: set[tuple[str, str]] = set()
+    for a in all_articles:
+        if a.url_hash in existing_url_hashes or a.url_hash in batch_url_hashes:
+            url_dup += 1
+            continue
+        if a.content_hash:
+            key = (a.content_hash, a.source_domain)
+            if a.source_domain in existing_content_hashes.get(a.content_hash, set()) or key in batch_content_keys:
+                content_dup += 1
+                continue
+            batch_content_keys.add(key)
+        batch_url_hashes.add(a.url_hash)
+        new_articles.append(a)
+    return new_articles, url_dup, content_dup
+
+
 async def log_status(session, phase: str, status: str, details: dict = None):
     """Log pipeline status to database."""
     import subprocess
@@ -82,20 +106,10 @@ async def run_ingestion(dry_run: bool = False) -> dict:
                         existing_content_hashes[content_hash] = set()
                     existing_content_hashes[content_hash].add(source_domain)
 
-        # Deduplicate: skip if URL hash OR (content hash + same source_domain) already exists
-        url_dup = 0
-        content_dup = 0
-        new_articles = []
-        for a in all_articles:
-            if a.url_hash in existing_url_hashes:
-                url_dup += 1
-                continue
-            if a.content_hash:
-                domains_with_hash = existing_content_hashes.get(a.content_hash, set())
-                if a.source_domain in domains_with_hash:
-                    content_dup += 1
-                    continue
-            new_articles.append(a)
+        # Deduplicate using pure function (also dedupes within batch)
+        new_articles, url_dup, content_dup = dedupe_articles(
+            all_articles, existing_url_hashes, existing_content_hashes
+        )
 
         print(f"  New articles (after dedup): {len(new_articles)}")
         print(f"  URL duplicates skipped: {url_dup}")
@@ -213,6 +227,20 @@ async def main():
             if tier1_critical_down:
                 print(f"\nWARNING: tier-1 critical GDELT domains down: {tier1_critical_down}")
                 sys.exit(1)
+
+            # Exit guard: zero fetched articles is a real problem (all dupes is fine)
+            total_fetched = results["phases"].get("ingestion", {}).get("total_fetched")
+            if total_fetched is not None and total_fetched == 0:
+                print("\nERROR: total_fetched == 0 (no articles fetched from any source)")
+                sys.exit(1)
+
+            # Warn per tier-1 source that produced zero ok articles
+            stats_snapshot = results["phases"].get("ingestion", {}).get("extraction_stats", {})
+            from src.ingestion.rss import TIER1_FEEDS
+            for source_key in TIER1_FEEDS:
+                ok_count = stats_snapshot.get(f"{source_key}.ok", 0)
+                if ok_count == 0:
+                    print(f"::warning title=Source produced no articles::{source_key}")
 
     except Exception as e:
         print(f"\nPipeline failed: {e}")
