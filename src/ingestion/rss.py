@@ -6,34 +6,14 @@ from typing import List, Dict, Optional
 from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
 from src.utils.ner import extract_entities
+from src.utils.ingest_stats import STATS
 from src.schema.models import RawArticle, SourceTier
 from src.shared.config import get_settings
 import asyncio
 
 
 TIER1_FEEDS = {
-    "apnews": {
-        "name": "AP News",
-        "domain": "apnews.com",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://apnews.com/rss",  # Top stories
-            "https://apnews.com/rss/world-news",
-            "https://apnews.com/rss/politics",
-            "https://apnews.com/rss/business",
-        ],
-    },
-    "reuters": {
-        "name": "Reuters",
-        "domain": "reuters.com",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://www.reuters.com/rss/news/world",
-            "https://www.reuters.com/rss/news/us",
-            "https://www.reuters.com/rss/news/politics",
-            "https://www.reuters.com/rss/news/business",
-        ],
-    },
+    # 2026-09-21: publisher returns 403 (AP) / 401 (Reuters) to GitHub runners; no official RSS
     "bbc": {
         "name": "BBC News",
         "domain": "bbc.com",
@@ -64,10 +44,10 @@ TIER1_FEEDS = {
             "https://feeds.npr.org/1014/rss.xml",  # Politics
         ],
     },
-    }
+}
 
 
-async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30, max_retries: int = 3, retry_delay: float = 5.0) -> Optional[feedparser.FeedParserDict]:
+async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30, source_key: str = "", max_retries: int = 3, retry_delay: float = 5.0) -> Optional[feedparser.FeedParserDict]:
     """Fetch and parse a single RSS feed with retry logic."""
     settings = get_settings()
     max_retries = settings.rss_max_retries
@@ -77,13 +57,31 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
         try:
             response = await client.get(feed_url, timeout=timeout, follow_redirects=True)
             response.raise_for_status()
+            STATS.record(source_key, "feed_ok")
             return feedparser.parse(response.text)
+        except httpx.HTTPStatusError as e:
+            if attempt < max_retries - 1:
+                print(f"Failed to fetch {feed_url} (attempt {attempt + 1}/{max_retries}): {e}, retrying in {retry_delay}s...")
+                await asyncio.sleep(retry_delay)
+            else:
+                print(f"Failed to fetch {feed_url} after {max_retries} attempts: {e}")
+                STATS.record(source_key, f"feed_failed:http_{e.response.status_code}")
+                return None
+        except asyncio.TimeoutError:
+            if attempt < max_retries - 1:
+                print(f"Timeout fetching {feed_url} (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                await asyncio.sleep(retry_delay)
+            else:
+                print(f"Timeout fetching {feed_url} after {max_retries} attempts")
+                STATS.record(source_key, "feed_failed:timeout")
+                return None
         except Exception as e:
             if attempt < max_retries - 1:
                 print(f"Failed to fetch {feed_url} (attempt {attempt + 1}/{max_retries}): {e}, retrying in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)
             else:
                 print(f"Failed to fetch {feed_url} after {max_retries} attempts: {e}")
+                STATS.record(source_key, f"feed_failed:error_{type(e).__name__}")
                 return None
 
 
@@ -91,6 +89,7 @@ async def process_feed_entry(
     entry: feedparser.FeedParserDict,
     source_info: dict,
     seen_urls: set,
+    source_key: str,
 ) -> Optional[RawArticle]:
     """Process a single feed entry into a RawArticle."""
     url = entry.get("link", "")
@@ -112,9 +111,12 @@ async def process_feed_entry(
     elif "updated_parsed" in entry and entry.updated_parsed:
         published_at = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
 
+    STATS.record(source_key, "entries_seen")
+
     # Extract article body
-    body_text, extracted_title = await extract_article(url)
+    body_text, extracted_title = await extract_article(url, source_key=source_key)
     if not body_text or len(body_text) < 200:  # Too short, likely not a real article
+        STATS.record(source_key, "too_short")
         return None
 
     # Use extracted title if better
@@ -141,6 +143,7 @@ async def process_feed_entry(
         content_hash=content_hash,
     )
 
+    STATS.record(source_key, "ok")
     return article
 
 
@@ -154,12 +157,12 @@ async def ingest_rss_feeds(max_per_feed: int = 50) -> List[RawArticle]:
     async with httpx.AsyncClient(timeout=timeout) as client:
         for source_key, source_info in TIER1_FEEDS.items():
             for feed_url in source_info["feeds"]:
-                feed = await fetch_feed(client, feed_url, timeout)
+                feed = await fetch_feed(client, feed_url, timeout=timeout, source_key=source_key)
                 if not feed or not feed.entries:
                     continue
 
                 for entry in feed.entries[:max_per_feed]:
-                    article = await process_feed_entry(entry, source_info, seen_urls)
+                    article = await process_feed_entry(entry, source_info, seen_urls, source_key)
                     if article:
                         articles.append(article)
                         seen_urls.add(article.url_hash)

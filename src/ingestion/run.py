@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+import os
 from datetime import datetime, timezone
 from src.ingestion.rss import ingest_rss_feeds
 from src.ingestion.gdelt import ingest_gdelt, GDELT_TIER1_CRITICAL_DOMAINS
@@ -12,6 +13,7 @@ from src.verification.tiers import apply_tier1_gate
 from src.shared.database import get_session, init_db
 from src.schema.models import RawArticle, StatusLog
 from src.shared.config import get_settings
+from src.utils.ingest_stats import STATS
 import json
 
 
@@ -36,6 +38,7 @@ async def log_status(session, phase: str, status: str, details: dict = None):
 async def run_ingestion(dry_run: bool = False) -> dict:
     """Run the full ingestion → verification → grouping pipeline."""
     settings = get_settings()
+    STATS.reset()
     results = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "phases": {},
@@ -104,6 +107,9 @@ async def run_ingestion(dry_run: bool = False) -> dict:
         )
         ingest_status = "degraded" if tier1_critical_down else "ok"
 
+        # Add extraction stats to ingestion results
+        stats_snapshot = STATS.snapshot()
+
         results["phases"]["ingestion"] = {
             "rss": len(rss_articles),
             "gdelt": len(gdelt_articles),
@@ -114,6 +120,7 @@ async def run_ingestion(dry_run: bool = False) -> dict:
             "content_duplicates_skipped": content_dup,
             "gdelt_health": gdelt_health,
             "tier1_critical_down": tier1_critical_down,
+            "extraction_stats": stats_snapshot,
         }
 
         if dry_run:
@@ -187,6 +194,18 @@ async def main():
         results = await run_ingestion(dry_run=dry_run)
         print("\nPipeline completed successfully.")
         print(json.dumps(results, indent=2))
+
+        # Print extraction stats as markdown table for GitHub Actions summary
+        if not dry_run:
+            stats_md = STATS.render_markdown()
+            if stats_md:
+                print("\n--- INGESTION STATS ---")
+                print(stats_md)
+                # Write to GITHUB_STEP_SUMMARY if available
+                summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+                if summary_path:
+                    with open(summary_path, "a") as f:
+                        f.write(f"\n## Ingestion Stats\n\n{stats_md}\n")
 
         # Exit non-zero if tier-1 critical GDELT domains are down (not dry run)
         if not dry_run:
