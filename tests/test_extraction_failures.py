@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import httpx
+import asyncio
 from src.utils.trafilatura_extract import _extract_article_sync
 from src.ingestion.rss import fetch_feed
 from src.utils.ingest_stats import STATS
@@ -109,8 +110,11 @@ class TestRssFeedFetchFailures:
         mock_client = AsyncMock()
         mock_client.get.side_effect = httpx.TimeoutException("Connect timeout")
 
-        result = await fetch_feed(mock_client, "https://example.com/feed", source_key="bbc")
-        assert result is None
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await fetch_feed(mock_client, "https://example.com/feed", source_key="bbc")
+            assert result is None
+            # Verify sleep was called for retries
+            assert mock_sleep.call_count >= 1
 
         snap = STATS.snapshot()
         assert snap.get("bbc.feed_failed:timeout") == 1
@@ -123,8 +127,10 @@ class TestRssFeedFetchFailures:
         mock_client = AsyncMock()
         mock_client.get.side_effect = ValueError("Invalid URL")
 
-        result = await fetch_feed(mock_client, "https://example.com/feed", source_key="bbc")
-        assert result is None
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await fetch_feed(mock_client, "https://example.com/feed", source_key="bbc")
+            assert result is None
+            assert mock_sleep.call_count >= 1
 
         snap = STATS.snapshot()
         assert snap.get("bbc.feed_failed:error_ValueError") == 1
@@ -184,8 +190,11 @@ class TestRssFeedFetchFailures:
             "500 Internal Server Error", request=MagicMock(), response=mock_response
         )
 
-        result = await fetch_feed(mock_client, "https://example.com/feed", source_key="bbc")
-        assert result is None
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await fetch_feed(mock_client, "https://example.com/feed", source_key="bbc")
+            assert result is None
+            # Verify sleep was called for retries
+            assert mock_sleep.call_count >= 1
 
         # Should be called max_retries times (default 3)
         assert mock_client.get.call_count == 3
