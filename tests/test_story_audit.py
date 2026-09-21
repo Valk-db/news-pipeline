@@ -48,15 +48,15 @@ class TestBuildUnitEntitySets:
         assert "unit1" in result
         assert "unit2" in result
         # PERSON entities
-        assert "PERSON:PERSON:joe biden" in result["unit1"]
-        assert "PERSON:PERSON:donald trump" in result["unit1"]
-        assert "PERSON:PERSON:vladimir putin" in result["unit2"]
+        assert "PERSON:joe biden" in result["unit1"]
+        assert "PERSON:donald trump" in result["unit1"]
+        assert "PERSON:vladimir putin" in result["unit2"]
         # ORG entities
-        assert "ORG:ORG:white house" in result["unit1"]
-        assert "ORG:ORG:kremlin" in result["unit2"]
+        assert "ORG:white house" in result["unit1"]
+        assert "ORG:kremlin" in result["unit2"]
         # GPE entities
-        assert "GPE:GPE:united states" in result["unit1"]
-        assert "GPE:GPE:russia" in result["unit2"]
+        assert "GPE:united states" in result["unit1"]
+        assert "GPE:russia" in result["unit2"]
         # LOC should not be included
         assert not any("LOC" in e for e in result["unit1"])
 
@@ -72,7 +72,7 @@ class TestBuildUnitEntitySets:
 
         result = build_unit_entity_sets(units, articles)
 
-        assert result["unit1"] == {"PERSON:PERSON:test person"}
+        assert result["unit1"] == {"PERSON:test person"}
         assert result["unit2"] == set()
 
     def test_handles_missing_entities(self):
@@ -198,7 +198,7 @@ class TestFormatNearMisses:
             "unit_a_id": "unit1",
             "unit_b_id": "unit2",
             "jaccard": 0.33,
-            "shared_entities": ["PERSON:PERSON:joe biden", "ORG:ORG:white house"],
+            "shared_entities": ["PERSON:joe biden", "ORG:white house"],
             "unit_a_title": "Biden speaks at White House",
             "unit_b_title": "White House announces new policy",
             "unit_a_owners": ["BBC"],
@@ -233,9 +233,9 @@ class TestComputeJaccardHistogram:
             {"id": "unit3", "created_at": now - timedelta(hours=24), "representative_article_id": "art3"},
         ]
         unit_entities = {
-            "unit1": {"PERSON:PERSON:joe biden", "ORG:ORG:white house"},
-            "unit2": {"PERSON:PERSON:joe biden", "ORG:ORG:congress"},
-            "unit3": {"PERSON:PERSON:vladimir putin", "ORG:ORG:kremlin"},
+            "unit1": {"PERSON:joe biden", "ORG:white house"},
+            "unit2": {"PERSON:joe biden", "ORG:congress"},
+            "unit3": {"PERSON:vladimir putin", "ORG:kremlin"},
         }
         unit_owner_groups = {
             "unit1": {"BBC": 1},
@@ -248,22 +248,30 @@ class TestComputeJaccardHistogram:
             "art3": {"title": "Putin at Kremlin"},
         }
 
-        histogram, near_misses = compute_jaccard_histogram(
+        result = compute_jaccard_histogram(
             units, unit_entities, unit_owner_groups, articles
         )
+        histogram = result["histogram"]
+        near_misses = result["near_misses"]
+        stats = result["stats"]
 
-        # unit1 and unit2 share "PERSON:PERSON:joe biden" -> intersection=1, union=3 -> Jaccard=0.33
+        # unit1 and unit2 share "PERSON:joe biden" -> intersection=1, union=3 -> Jaccard=0.33
         # unit1 and unit3 have disjoint owners? No, both BBC -> excluded
         # unit2 and unit3 have disjoint owners (Guardian vs BBC) but no shared entities -> Jaccard=0
         # Jaccard 0.33 rounds to bucket 0.3 and is in [0.2, 0.4) near-miss range
-        # Function compares both directions (unit1->unit2 and unit2->unit1) so 2 entries
+        # Near-misses are deduped by frozenset pair, so unit1<->unit2 produces ONE entry
 
-        assert 0.3 in histogram  # 0.33 rounds to 0.3 with Python's round-half-to-even
-        assert len(near_misses) == 2  # symmetric pairs: unit1->unit2 and unit2->unit1
+        assert 0.3 in histogram  # 0.33 floors to 0.3
+        assert histogram[0.3] == 2  # unit1 and unit2 both have best_jaccard=0.33
+        assert histogram.get(0.0, 0) == 1  # unit3 has best_jaccard=0.0 (only candidate unit2, jaccard=0)
+        assert len(near_misses) == 1  # deduped: unit1<->unit2 produces one entry
         assert near_misses[0]["unit_a_id"] == "unit1"
         assert near_misses[0]["unit_b_id"] == "unit2"
-        assert near_misses[1]["unit_a_id"] == "unit2"
-        assert near_misses[1]["unit_b_id"] == "unit1"
+        assert near_misses[0]["jaccard"] == 1/3
+        # Stats checks
+        assert stats["total_recent_units"] == 3
+        assert stats["units_with_entities"] == 3
+        assert stats["units_with_no_candidates"] == 0  # unit3 HAS candidate unit2 (jaccard=0.0, owners disjoint)
 
     def test_same_owner_excluded(self):
         """Units with same owner are excluded from comparison."""
@@ -273,8 +281,8 @@ class TestComputeJaccardHistogram:
             {"id": "unit2", "created_at": now, "representative_article_id": "art2"},
         ]
         unit_entities = {
-            "unit1": {"PERSON:PERSON:joe biden"},
-            "unit2": {"PERSON:PERSON:joe biden"},
+            "unit1": {"PERSON:joe biden"},
+            "unit2": {"PERSON:joe biden"},
         }
         unit_owner_groups = {
             "unit1": {"BBC": 1},
@@ -285,13 +293,18 @@ class TestComputeJaccardHistogram:
             "art2": {"title": "Article 2"},
         }
 
-        histogram, near_misses = compute_jaccard_histogram(
+        result = compute_jaccard_histogram(
             units, unit_entities, unit_owner_groups, articles
         )
+        histogram = result["histogram"]
+        near_misses = result["near_misses"]
+        stats = result["stats"]
 
-        # Should have no comparisons since owners overlap
-        assert all(v == 0 for v in histogram.values()) or len(histogram) == 0
+        # Both units have same owner (BBC), so no valid candidates
+        # Both get bucketed at 0.0
+        assert histogram == {0.0: 2}
         assert near_misses == []
+        assert stats["units_with_no_candidates"] == 2
 
     def test_outside_48h_excluded(self):
         """Units outside 48h window are excluded."""
@@ -301,8 +314,8 @@ class TestComputeJaccardHistogram:
             {"id": "unit2", "created_at": now - timedelta(hours=72), "representative_article_id": "art2"},  # 72h ago
         ]
         unit_entities = {
-            "unit1": {"PERSON:PERSON:joe biden"},
-            "unit2": {"PERSON:PERSON:joe biden"},
+            "unit1": {"PERSON:joe biden"},
+            "unit2": {"PERSON:joe biden"},
         }
         unit_owner_groups = {
             "unit1": {"BBC": 1},
@@ -313,13 +326,19 @@ class TestComputeJaccardHistogram:
             "art2": {"title": "Article 2"},
         }
 
-        histogram, near_misses = compute_jaccard_histogram(
+        result = compute_jaccard_histogram(
             units, unit_entities, unit_owner_groups, articles
         )
+        histogram = result["histogram"]
+        near_misses = result["near_misses"]
+        stats = result["stats"]
 
-        # unit2 is 72h old, outside 48h window
-        assert len(histogram) == 0 or all(v == 0 for v in histogram.values())
+        # unit2 is 72h old, within 3-day window (days=3) but outside 48h comparison window
+        # Both units are recent (within 3 days), but excluded from each other's comparison due to 48h
+        # Both get no valid candidates -> bucketed at 0.0
+        assert histogram == {0.0: 2}
         assert near_misses == []
+        assert stats["units_with_no_candidates"] == 2
 
     def test_units_without_entities_excluded(self):
         """Units with empty entity sets are skipped."""
@@ -329,7 +348,7 @@ class TestComputeJaccardHistogram:
             {"id": "unit2", "created_at": now, "representative_article_id": "art2"},
         ]
         unit_entities = {
-            "unit1": {"PERSON:PERSON:joe biden"},
+            "unit1": {"PERSON:joe biden"},
             "unit2": set(),  # Empty
         }
         unit_owner_groups = {
@@ -341,10 +360,17 @@ class TestComputeJaccardHistogram:
             "art2": {"title": "Article 2"},
         }
 
-        histogram, near_misses = compute_jaccard_histogram(
+        result = compute_jaccard_histogram(
             units, unit_entities, unit_owner_groups, articles
         )
+        histogram = result["histogram"]
+        near_misses = result["near_misses"]
+        stats = result["stats"]
 
-        # unit2 has no entities, so no comparison possible
-        assert len(histogram) == 0 or all(v == 0 for v in histogram.values())
+        # unit2 has no entities -> skipped (units_with_no_entities += 1)
+        # unit1 has no valid candidates (unit2 has no entities) -> bucketed at 0.0
+        assert histogram == {0.0: 1}
         assert near_misses == []
+        assert stats["units_with_entities"] == 1
+        assert stats["units_with_no_entities"] == 1
+        assert stats["units_with_no_candidates"] == 1
