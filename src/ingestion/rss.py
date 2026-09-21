@@ -48,7 +48,11 @@ TIER1_FEEDS = {
 
 
 async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30, source_key: str = "") -> Optional[feedparser.FeedParserDict]:
-    """Fetch and parse a single RSS feed with retry logic."""
+    """Fetch and parse a single RSS feed with retry logic.
+
+    Retries on 5xx, 429, timeouts, and network errors.
+    Other 4xx (401/403/404) are NOT retried - recorded after ONE attempt.
+    """
     settings = get_settings()
     max_retries = settings.rss_max_retries
     retry_delay = settings.rss_retry_delay
@@ -60,12 +64,15 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
             STATS.record(source_key, "feed_ok")
             return feedparser.parse(response.text)
         except httpx.HTTPStatusError as e:
-            if attempt < max_retries - 1:
+            status = e.response.status_code
+            # Retry only on 5xx or 429
+            should_retry = status >= 500 or status == 429
+            if should_retry and attempt < max_retries - 1:
                 print(f"Failed to fetch {feed_url} (attempt {attempt + 1}/{max_retries}): {e}, retrying in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)
             else:
-                print(f"Failed to fetch {feed_url} after {max_retries} attempts: {e}")
-                STATS.record(source_key, f"feed_failed:http_{e.response.status_code}")
+                print(f"Failed to fetch {feed_url} after {attempt + 1} attempt(s): {e}")
+                STATS.record(source_key, f"feed_failed:http_{status}")
                 return None
         except httpx.TimeoutException:
             if attempt < max_retries - 1:
@@ -76,6 +83,7 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
                 STATS.record(source_key, "feed_failed:timeout")
                 return None
         except Exception as e:
+            # Network errors (connection refused, DNS, etc.) retry
             if attempt < max_retries - 1:
                 print(f"Failed to fetch {feed_url} (attempt {attempt + 1}/{max_retries}): {e}, retrying in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)
