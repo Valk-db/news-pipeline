@@ -26,14 +26,14 @@ class CleanupResult:
 
 async def cleanup_stale_stories(
     session: AsyncSession,
-    pending_hours: int = 72,      # PENDING stories older than this become EXPIRED
+    pending_hours: int = 120,      # PENDING stories older than this become EXPIRED
     blocked_hours: int = 168,     # BLOCKED stories older than this become EXPIRED (1 week)
     queued_hours: int = 0,        # QUEUED stories older than this become EXPIRED (0 = disabled)
 ) -> CleanupResult:
     """
     Mark stale PENDING/BLOCKED/QUEUED stories as EXPIRED.
 
-    PENDING: story waiting for curator action - expire after 3 days (curator didn't act)
+    PENDING: story waiting for curator action - expire after 5 days (curator didn't act)
     BLOCKED: story failed tier-1 gate - expire after 7 days (unlikely to get new coverage)
     QUEUED: story passed gate but not approved - OPT-IN only (default disabled, 0 = never expire)
     POSTED/REJECTED: never expired (curator explicitly acted)
@@ -155,7 +155,7 @@ async def cleanup_stale_story_links(session: AsyncSession) -> CleanupResult:
 
 async def run_cleanup(
     session: AsyncSession,
-    pending_hours: int = 72,
+    pending_hours: int = 120,
     blocked_hours: int = 168,
     queued_hours: int = 0,
 ) -> CleanupResult:

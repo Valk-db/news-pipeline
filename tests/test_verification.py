@@ -2,16 +2,16 @@
 
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import uuid
-from sqlalchemy import select, delete, text
+from sqlalchemy import select, text
 
 from src.verification.units import get_owner_group, build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_tier1_gate, evaluate_tier1_gate
-from src.shared.database import init_db, get_session, _get_engine
+from src.shared.database import init_db, get_session
 from src.schema.models import (
-    RawArticle, ReportingUnit, Story, StoryUnitLink, SourceTier, StatusLog
+    RawArticle, ReportingUnit, Story, StoryUnitLink, SourceTier
 )
 
 
@@ -109,13 +109,6 @@ def _is_localhost_db(url: str) -> bool:
         return False
 
 
-def _has_database():
-    """Check if database is available for integration tests (local only)."""
-    import os
-    url = os.getenv("DATABASE_URL")
-    return bool(url and _is_localhost_db(url))
-
-
 _TRUNCATE_ALL = (
     "TRUNCATE TABLE status_log, story_unit_links, stories, reporting_units, "
     "raw_articles, entity_aliases, canonical_entities RESTART IDENTITY CASCADE"
@@ -182,7 +175,6 @@ ENT_ECONOMY = {"PERSON": ["Jane Doe"], "GPE": ["London"], "ORG": ["Bank of Engla
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _has_database(), reason="Requires PostgreSQL database (DATABASE_URL)")
 async def test_build_reporting_units_integration(db_session):
     """Integration test: build_reporting_units creates units from raw articles."""
     now = datetime.now(timezone.utc)
@@ -240,7 +232,6 @@ async def test_build_reporting_units_integration(db_session):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _has_database(), reason="Requires PostgreSQL database (DATABASE_URL)")
 async def test_build_stories_groups_by_entities(db_session):
     """Integration test: build_stories groups units by canonical-entity Jaccard."""
     await _make_unit(db_session, domain="apnews.com", owner="AP", entities=ENT_WHITE_HOUSE)
@@ -267,7 +258,6 @@ async def test_build_stories_groups_by_entities(db_session):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _has_database(), reason="Requires PostgreSQL database (DATABASE_URL)")
 async def test_tier1_gate_passes_with_two_tier1_distinct_owners(db_session):
     """Integration test: tier-1 gate passes with 2 tier-1 units from different owners."""
     await _make_unit(db_session, domain="apnews.com", owner="AP", entities=ENT_WHITE_HOUSE)
@@ -289,7 +279,6 @@ async def test_tier1_gate_passes_with_two_tier1_distinct_owners(db_session):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _has_database(), reason="Requires PostgreSQL database (DATABASE_URL)")
 async def test_tier1_gate_blocks_single_tier1_owner(db_session):
     """Integration test: tier-1 gate blocks when only 1 distinct tier-1 owner."""
     await _make_unit(db_session, domain="apnews.com", owner="AP", entities=ENT_WHITE_HOUSE)
@@ -308,7 +297,6 @@ async def test_tier1_gate_blocks_single_tier1_owner(db_session):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _has_database(), reason="Requires PostgreSQL database (DATABASE_URL)")
 async def test_cross_run_story_attachment(db_session):
     """Integration test: build_stories attaches new units to recent BLOCKED stories."""
     # First run: one tier-1 unit -> BLOCKED story

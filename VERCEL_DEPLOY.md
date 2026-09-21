@@ -121,7 +121,7 @@ The configuration includes rewrites for `/static/` paths. If CSS doesn't load:
 ### Import Errors
 
 If you see module import errors:
-- Ensure all dependencies are in `requirements.txt`
+- Ensure all dependencies are in `pyproject.toml` (project uses uv, not requirements.txt)
 - Check that `src/` folder is NOT in `.vercelignore` (it contains shared code)
 
 ## Configuration Files
@@ -140,7 +140,7 @@ TypeScript-based configuration with full type safety:
 import { routes, type VercelConfig } from '@vercel/config/v1';
 
 export const config: VercelConfig = {
-  buildCommand: 'pip install -r requirements.txt',
+  buildCommand: 'uv sync --frozen --extra pipeline',
   functions: { 'curation_ui/main.py': { runtime: 'python3.12', maxDuration: 300 } },
   rewrites: [ routes.rewrite('/static/(.*)', '/curation_ui/static/$1'), routes.rewrite('/(.*)', '/curation_ui/main.py') ],
   headers: [ routes.cacheControl('/static/(.*)', { public: true, maxAge: '1 week', immutable: true }) ],

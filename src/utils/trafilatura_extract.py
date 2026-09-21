@@ -24,7 +24,7 @@ def canonicalize_url(url: str) -> str:
     - remove tracking query parameters
     - remove fragment
     - normalize path (strip trailing slash)
-    - lowercase path for case-insensitive matching
+    - path case preserved; compute_url_hash lowercases for case-insensitive matching
     """
     parts = urlsplit(url.strip())
     host = (parts.hostname or "").lower()

@@ -34,6 +34,22 @@ TIER1_FEEDS = {
             "https://www.theguardian.com/us-news/rss",
         ],
     },
+    "dw": {
+        "name": "Deutsche Welle",
+        "domain": "dw.com",
+        "tier": SourceTier.TIER1,
+        "feeds": [
+            "https://rss.dw.com/rdf/rss-en-all",
+        ],
+    },
+    "france24": {
+        "name": "France 24",
+        "domain": "france24.com",
+        "tier": SourceTier.TIER1,
+        "feeds": [
+            "https://www.france24.com/en/rss",
+        ],
+    },
     "npr": {
         "name": "NPR",
         "domain": "npr.org",
