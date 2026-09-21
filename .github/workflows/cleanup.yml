@@ -35,7 +35,6 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PYTHONUNBUFFERED: "1"
-          CURATION_ENABLED: "false"
         run: |
           uv run scripts/cleanup_stale.py --pending-hours=72 --blocked-hours=168 --queued-hours=0
 

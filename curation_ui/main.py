@@ -74,15 +74,6 @@ def check_database_available() -> tuple[bool, str]:
     return True, ""
 
 
-def check_curation_enabled() -> tuple[bool, str]:
-    """Check if curation UI is enabled, return (enabled, error_message)."""
-    if not settings.curation_enabled:
-        return False, "Curation UI is disabled. Set CURATION_ENABLED=true to enable."
-    if not settings.has_curation_auth:
-        return False, "Curation UI not configured: CURATION_USER and CURATION_PASSWORD must be set."
-    return True, ""
-
-
 def check_llm_available() -> tuple[bool, str]:
     """Check if LLM is available, return (available, error_message)."""
     if not settings.has_llm:
@@ -139,10 +130,6 @@ async def index(request: Request, user: str = Depends(require_auth)):
     if not db_ok:
         return render_error_page(request, db_msg)
 
-    curation_ok, curation_msg = check_curation_enabled()
-    if not curation_ok:
-        return render_error_page(request, curation_msg)
-
     async with get_session() as session:
         stories = await _render_stories_grid(session)
         # Count approved posts for the header link
@@ -164,10 +151,6 @@ async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depen
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)
-
-    curation_ok, curation_msg = check_curation_enabled()
-    if not curation_ok:
-        return render_error_page(request, curation_msg)
 
     llm_ok, llm_msg = check_llm_available()
     if not llm_ok:
@@ -233,10 +216,6 @@ async def reject_story(story_id: uuid.UUID, request: Request, user: str = Depend
     if not db_ok:
         return render_error_page(request, db_msg)
 
-    curation_ok, curation_msg = check_curation_enabled()
-    if not curation_ok:
-        return render_error_page(request, curation_msg)
-
     async with get_session() as session:
         stmt = select(Story).where(Story.id == story_id)
         result = await session.execute(stmt)
@@ -263,10 +242,6 @@ async def edit_story(story_id: uuid.UUID, request: Request, user: str = Depends(
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)
-
-    curation_ok, curation_msg = check_curation_enabled()
-    if not curation_ok:
-        return render_error_page(request, curation_msg)
 
     llm_ok, llm_msg = check_llm_available()
     if not llm_ok:
@@ -324,10 +299,6 @@ async def save_story(
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)
-
-    curation_ok, curation_msg = check_curation_enabled()
-    if not curation_ok:
-        return render_error_page(request, curation_msg)
 
     async with get_session() as session:
         stmt = select(Story).where(Story.id == story_id)
@@ -389,10 +360,6 @@ async def list_posts(request: Request, user: str = Depends(require_auth)):
     if not db_ok:
         return render_error_page(request, db_msg)
 
-    curation_ok, curation_msg = check_curation_enabled()
-    if not curation_ok:
-        return render_error_page(request, curation_msg)
-
     async with get_session() as session:
         stmt = (
             select(CuratedPost)
@@ -414,10 +381,6 @@ async def mark_posted(post_id: uuid.UUID, request: Request, user: str = Depends(
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)
-
-    curation_ok, curation_msg = check_curation_enabled()
-    if not curation_ok:
-        return render_error_page(request, curation_msg)
 
     async with get_session() as session:
         stmt = select(CuratedPost).where(CuratedPost.id == post_id)
