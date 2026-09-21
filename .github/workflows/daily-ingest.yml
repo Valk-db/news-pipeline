@@ -6,6 +6,10 @@ on:
     - cron: '0 6,18 * * *'
   workflow_dispatch:  # Allow manual trigger
 
+concurrency:
+  group: daily-ingest
+  cancel-in-progress: false
+
 permissions:
   contents: write  # Need write for heartbeat commit
 
