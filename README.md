@@ -93,8 +93,8 @@ cloudflared tunnel --url http://localhost:8000
 ## Pipeline Flow
 
 ### Ingestion (Twice Daily)
-1. **RSS**: BBC, Guardian, NPR, Google News World
-2. **GDELT DOC API**: AP, Reuters, BBC, Guardian, NPR (domain-filtered, 5s throttle)
+1. **RSS**: BBC, Guardian, NPR (AP/Reuters removed 2026-09-21: 403/401 from GitHub runners)
+2. **GDELT DOC API**: Disabled by default (`GDELT_ENABLED=false`) — redundant with RSS for BBC/Guardian/NPR, rate-limited
 3. **Reddit**: Top posts from r/worldnews, r/geopolitics, etc. (PRAW, 100 QPM)
 
 ### Verification
@@ -179,3 +179,12 @@ scripts/                             # Init, seed, verify
 - Supabase: 500 MB, pgvector included
 - Groq: 1K req/day, 200K tokens/day
 - Cerebras: 30-day trial (optional)
+- GDELT: Disabled (reduces Actions minutes and API pressure)
+
+## Monitoring
+
+- **GitHub Actions**: `PYTHONUNBUFFERED=1` for real-time logs; `GDELT_ENABLED=false` to cut noise
+- **Run summary**: Ingestion stats table (fetched/too_short/ok/failed per source) in workflow step summary
+- **Health**: `GET /healthz` on curation UI → stories by status, approved posts count
+- **Metrics**: `GET /metrics` → Prometheus-style JSON (pipeline phases, story statuses, GDELT domains)
+- **Alerts**: Exit code 1 if `total_fetched == 0` or tier-1 critical GDELT domains down; `::warning` per tier-1 RSS source with 0 ok articles
