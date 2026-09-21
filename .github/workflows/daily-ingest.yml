@@ -43,7 +43,7 @@ jobs:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          GDELT_THROTTLE_SECONDS: "10"
+          GDELT_THROTTLE_SECONDS: "30"
         run: |
           uv run python -m src.ingestion.run
 

@@ -30,8 +30,8 @@ async def fetch_with_retry(
     client: httpx.AsyncClient,
     url: str,
     params: dict,
-    max_retries: int = 5,
-    base_delay: float = 5.0,
+    max_retries: int = 7,
+    base_delay: float = 10.0,
 ) -> httpx.Response:
     """Fetch with exponential backoff retry for rate limits."""
     for attempt in range(max_retries):
