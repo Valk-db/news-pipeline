@@ -47,7 +47,7 @@ TIER1_FEEDS = {
 }
 
 
-async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30, source_key: str = "", max_retries: int = 3, retry_delay: float = 5.0) -> Optional[feedparser.FeedParserDict]:
+async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30, source_key: str = "") -> Optional[feedparser.FeedParserDict]:
     """Fetch and parse a single RSS feed with retry logic."""
     settings = get_settings()
     max_retries = settings.rss_max_retries
@@ -67,7 +67,7 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
                 print(f"Failed to fetch {feed_url} after {max_retries} attempts: {e}")
                 STATS.record(source_key, f"feed_failed:http_{e.response.status_code}")
                 return None
-        except asyncio.TimeoutError:
+        except httpx.TimeoutException:
             if attempt < max_retries - 1:
                 print(f"Timeout fetching {feed_url} (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)

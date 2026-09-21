@@ -46,7 +46,6 @@ jobs:
           GDELT_THROTTLE_SECONDS: "30"
           PYTHONUNBUFFERED: "1"
           GDELT_ENABLED: "false"
-          CURATION_ENABLED: "false"
         run: |
           uv run python -m src.ingestion.run
 

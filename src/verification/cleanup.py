@@ -157,7 +157,7 @@ async def run_cleanup(
     session: AsyncSession,
     pending_hours: int = 72,
     blocked_hours: int = 168,
-    queued_hours: int = 168,
+    queued_hours: int = 0,
 ) -> CleanupResult:
     """
     Run all cleanup tasks in one transaction.

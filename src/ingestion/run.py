@@ -141,34 +141,10 @@ async def run_ingestion(dry_run: bool = False) -> dict:
             print("Dry run complete.")
             return results
 
-        # Persist new raw articles (idempotent via url_hash unique constraint)
-        inserted = 0
+        # Persist new raw articles
         for art in new_articles:
             session.add(art)
-        try:
-            await session.commit()
-            inserted = len(new_articles)
-        except Exception as e:
-            await session.rollback()
-            # Re-query to see which already existed
-            from sqlalchemy import select
-            url_hashes = [art.url_hash for art in new_articles]
-            if url_hashes:
-                existing = await session.execute(
-                    select(RawArticle.url_hash).where(RawArticle.url_hash.in_(url_hashes))
-                )
-                existing_hashes = {row[0] for row in existing}
-                # Filter out duplicates
-                new_articles = [art for art in new_articles if art.url_hash not in existing_hashes]
-                if new_articles:
-                    for art in new_articles:
-                        session.add(art)
-                    await session.commit()
-                    inserted = len(new_articles)
-                else:
-                    inserted = 0
-            else:
-                inserted = 0
+        await session.commit()
         await log_status(session, "ingest", ingest_status, results["phases"]["ingestion"])
 
         # Phase 2: Build reporting units (near-dup clustering)
