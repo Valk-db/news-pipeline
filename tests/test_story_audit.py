@@ -2,9 +2,10 @@
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+# Add project root to path (repo root, not scripts/)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from story_audit import (
+from scripts.story_audit import (
     build_unit_entity_sets,
     jaccard_similarity,
     compute_jaccard_histogram,
@@ -13,7 +14,6 @@ from story_audit import (
     format_near_misses,
 )
 from datetime import datetime, timezone, timedelta
-from src.utils.ner import _normalize_text
 
 
 class TestBuildUnitEntitySets:
