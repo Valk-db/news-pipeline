@@ -40,6 +40,10 @@ OWNERSHIP_GROUPS = {
     "rollingstone.com": "Penske",
     "billboard.com": "Penske",
 
+    # International broadcasters (new tier-1 feeds)
+    "dw.com": "DW",
+    "france24.com": "France24",
+
     # Others
     "nytimes.com": "NYT",
     "washingtonpost.com": "WaPo",

@@ -30,6 +30,12 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'uv'
+
       - name: Install dependencies
         run: uv sync --extra dev --extra pipeline
 
@@ -46,6 +52,11 @@ jobs:
             echo "Waiting for database... ($i/30)"
             sleep 2
           done
+
+      - name: Initialize database
+        run: uv run python -m scripts.init_db
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_news
 
       - name: Run tests
         run: uv run pytest tests/ -v --tb=short

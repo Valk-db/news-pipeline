@@ -3,7 +3,7 @@ name = "news-pipeline"
 version = "0.1.0"
 description = "Daily news ingestion, verification, and curation pipeline"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = "==3.12.*"
 # Runtime dependencies for the curation UI. Vercel installs ONLY this list and
 # bundles every installed package (500 MB limit, no tree-shaking), so keep it small.
 dependencies = [
@@ -43,10 +43,10 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_ignores = true
 

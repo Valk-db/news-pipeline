@@ -18,9 +18,9 @@ GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → C
 | **Database** | Supabase/Neon | PostgreSQL + pgvector, free tier |
 | **LLM Primary** | Groq (`openai/gpt-oss-20b`) | Caption generation, classification |
 | **LLM Backup** | Cerebras (`gpt-oss-120b`) | 30-day trial fallback |
-| **Ingestion** | RSS + GDELT + Reddit | Tier-1 news, wires, social |
+| **Ingestion** | RSS (BBC, Guardian, NPR) + GDELT (disabled) + Reddit | Tier-1 news, social; AP/Reuters via GDELT only (currently disabled) |
 | **Verification** | MinHash containment | Near-dup clustering → reporting units |
-| **Grouping** | Entity Jaccard (top-3) | Semantic story grouping |
+| **Grouping** | Entity Jaccard (top-3, threshold 0.4) | Semantic story grouping |
 | **Gate** | Tier-1 distinct owners ≥2 | Defamation-safe threshold |
 | **Curation UI** | FastAPI + HTMX | Keyboard-driven triage (A/R/E) |
 
@@ -32,7 +32,7 @@ GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → C
 - Supabase or Neon account (free tier)
 - Groq API key (free, no card)
 - Reddit API credentials
-- Python 3.11+ and `uv` (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- Python 3.12 and `uv` (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
 ### 2. Database Setup
 
@@ -186,5 +186,13 @@ scripts/                             # Init, seed, verify
 - **GitHub Actions**: `PYTHONUNBUFFERED=1` for real-time logs; `GDELT_ENABLED=false` to cut noise
 - **Run summary**: Ingestion stats table (fetched/too_short/ok/failed per source) in workflow step summary
 - **Health**: `GET /healthz` on curation UI → stories by status, approved posts count
-- **Metrics**: `GET /metrics` → Prometheus-style JSON (pipeline phases, story statuses, GDELT domains)
 - **Alerts**: Exit code 1 if `total_fetched == 0` or tier-1 critical GDELT domains down; `::warning` per tier-1 RSS source with 0 ok articles
+
+## Grouping Windows
+
+Two separate windows serve different purposes:
+
+| Stage | Window | Purpose |
+|-------|--------|---------|
+| Unit clustering (`build_reporting_units`) | Same UTC day | Cheap syndication detection: articles syndicated same day share exact text |
+| Story attachment (`build_stories`) | 48 hours | Cross-run attachment: wire story breaking late Day 1, covered Day 2, same story |
