@@ -11,18 +11,22 @@ Outputs markdown to stdout and appends to $GITHUB_STEP_SUMMARY when set.
 import argparse
 import os
 import sys
+import math
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Set, Tuple, Any
 from collections import defaultdict
 
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# Add project root to path for imports (repo root, not src/)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 from src.schema.models import RawArticle, ReportingUnit, Story, StoryUnitLink
 from src.utils.ner import _normalize_text
+from src.shared.database import prepare_database_url
+from src.shared.config import get_settings
 
 
 # =============================================================================
@@ -199,7 +203,8 @@ def format_near_misses(near_misses: List[Dict[str, Any]]) -> str:
 
 async def run_audit(db_url: str, days: int = 3) -> str:
     """Run the full audit and return markdown output."""
-    engine = create_async_engine(db_url, echo=False)
+    url, connect_args = prepare_database_url(db_url)
+    engine = create_async_engine(url, poolclass=NullPool, connect_args=connect_args, echo=False)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
@@ -207,9 +212,7 @@ async def run_audit(db_url: str, days: int = 3) -> str:
         await session.execute(text("SET TRANSACTION READ ONLY"))
 
         # Print DB host at startup (never credentials)
-        from urllib.parse import urlparse
-        parsed = urlparse(db_url)
-        host_info = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
+        host_info = f"{url.host}:{url.port}" if url.port else url.host
         print(f"# Story Audit Report (last {days} days)")
         print(f"")
         print(f"**Database host:** {host_info}")
@@ -427,14 +430,12 @@ def main():
     parser.add_argument("--days", type=int, default=3, help="Number of days to look back (default: 3)")
     args = parser.parse_args()
 
-    db_url = os.environ.get("DATABASE_URL")
-    if not db_url:
-        print("ERROR: DATABASE_URL environment variable not set", file=sys.stderr)
+    settings = get_settings()
+    if not settings.has_database:
+        print("ERROR: DATABASE_URL environment variable not set or empty", file=sys.stderr)
         sys.exit(1)
 
-    # Convert postgresql:// to postgresql+asyncpg:// if needed
-    if db_url.startswith("postgresql://"):
-        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    db_url = settings.database_url
 
     import asyncio
     markdown = asyncio.run(run_audit(db_url, args.days))
