@@ -28,14 +28,14 @@ async def cleanup_stale_stories(
     session: AsyncSession,
     pending_hours: int = 72,      # PENDING stories older than this become EXPIRED
     blocked_hours: int = 168,     # BLOCKED stories older than this become EXPIRED (1 week)
-    queued_hours: int = 168,      # QUEUED stories older than this become EXPIRED (1 week)
+    queued_hours: int = 0,        # QUEUED stories older than this become EXPIRED (0 = disabled)
 ) -> CleanupResult:
     """
     Mark stale PENDING/BLOCKED/QUEUED stories as EXPIRED.
 
     PENDING: story waiting for curator action - expire after 3 days (curator didn't act)
     BLOCKED: story failed tier-1 gate - expire after 7 days (unlikely to get new coverage)
-    QUEUED: story passed gate but not approved - expire after 7 days (curator didn't act)
+    QUEUED: story passed gate but not approved - OPT-IN only (default disabled, 0 = never expire)
     POSTED/REJECTED: never expired (curator explicitly acted)
     """
     result = CleanupResult()
@@ -74,21 +74,22 @@ async def cleanup_stale_stories(
         result.stories_expired += 1
         result.details.append(f"Expired BLOCKED story {story.id} (updated: {story.updated_at})")
 
-    # Expire QUEUED stories (approved by gate but not acted on by curator)
-    queued_cutoff = now - timedelta(hours=queued_hours)
-    stmt = select(Story).where(
-        Story.status == Story.Status.QUEUED,
-        Story.updated_at < queued_cutoff
-    )
-    queued_result = await session.execute(stmt)
-    queued_stories = queued_result.scalars().all()
+    # Expire QUEUED stories (opt-in only, default disabled)
+    if queued_hours > 0:
+        queued_cutoff = now - timedelta(hours=queued_hours)
+        stmt = select(Story).where(
+            Story.status == Story.Status.QUEUED,
+            Story.updated_at < queued_cutoff
+        )
+        queued_result = await session.execute(stmt)
+        queued_stories = queued_result.scalars().all()
 
-    for story in queued_stories:
-        story.status = Story.Status.EXPIRED
-        story.gate_reason = f"Auto-expired: QUEUED for >{queued_hours}h without curator action"
-        story.updated_at = now
-        result.stories_expired += 1
-        result.details.append(f"Expired QUEUED story {story.id} (updated: {story.updated_at})")
+        for story in queued_stories:
+            story.status = Story.Status.EXPIRED
+            story.gate_reason = f"Auto-expired: QUEUED for >{queued_hours}h without curator action"
+            story.updated_at = now
+            result.stories_expired += 1
+            result.details.append(f"Expired QUEUED story {story.id} (updated: {story.updated_at})")
 
     await session.flush()
     return result

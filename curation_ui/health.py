@@ -75,3 +75,64 @@ async def healthz():
         report["curated_posts"] = f"FAILED: {type(exc).__name__}: {_scrub(str(exc), s.database_url)}"
         report["verdict"] = "curated_posts.status has the wrong enum type: run the SQL migration"
     return report
+
+
+@router.get("/metrics")
+async def metrics():
+    """Prometheus-style metrics endpoint for observability."""
+    s = get_settings()
+    if not s.has_database:
+        return {"error": "Database not configured"}
+
+    try:
+        async with get_session() as session:
+            # Pipeline phase counts (ingestion status logs)
+            phase_counts = (await session.execute(text("""
+                select phase, status, count(*)
+                from status_log
+                where created_at > now() - interval '24 hours'
+                group by phase, status
+            """))).all()
+
+            # Story status counts
+            story_counts = (await session.execute(text("""
+                select status, count(*)
+                from stories
+                group by status
+            """))).all()
+
+            # Articles fetched in last 24h
+            article_counts = (await session.execute(text("""
+                select source_tier, count(*)
+                from raw_articles
+                where fetched_at > now() - interval '24 hours'
+                group by source_tier
+            """))).all()
+
+            # Curation queue depth
+            curation_counts = (await session.execute(text("""
+                select status, count(*)
+                from curated_posts
+                group by status
+            """))).all()
+
+            # GDELT health (last 24h)
+            gdelt_health = (await session.execute(text("""
+                select details->>'domain' as domain, details->>'ok' as ok, count(*)
+                from status_log
+                where phase = 'ingest'
+                and created_at > now() - interval '24 hours'
+                and details ? 'domain'
+                group by domain, ok
+            """))).all()
+
+    except Exception as exc:
+        return {"error": f"Metrics query failed: {exc}"}
+
+    return {
+        "status_log_by_phase": {f"{p}_{st}": c for p, st, c in phase_counts},
+        "stories_by_status": {str(st): c for st, c in story_counts},
+        "articles_by_tier_24h": {str(t): c for t, c in article_counts},
+        "curation_by_status": {str(st): c for st, c in curation_counts},
+        "gdelt_domains_24h": {f"{d}_{ok}": c for d, ok, c in gdelt_health},
+    }

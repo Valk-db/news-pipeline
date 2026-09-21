@@ -63,6 +63,8 @@ async def fetch_gdelt_articles(
     """
     settings = get_settings()
     throttle = settings.gdelt_throttle_seconds
+    max_retries = settings.gdelt_max_retries
+    base_delay = settings.gdelt_base_delay
 
     # Build query: domain + last 24h + English
     query = f"domain:{domain} language:english"
@@ -78,7 +80,7 @@ async def fetch_gdelt_articles(
 
     async with httpx.AsyncClient(timeout=60) as client:
         try:
-            response = await fetch_with_retry(client, GDELT_API, params)
+            response = await fetch_with_retry(client, GDELT_API, params, max_retries=max_retries, base_delay=base_delay)
             response.raise_for_status()
 
             # Check for empty response

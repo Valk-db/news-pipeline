@@ -32,10 +32,16 @@ class Settings(BaseSettings):
     gdelt_throttle_seconds: float = 5.0
     gdelt_circuit_breaker_threshold: int = 3
     article_cache_hours: int = 24
+    gdelt_enabled: bool = True
+    rss_max_retries: int = 3
+    rss_retry_delay: float = 5.0
+    gdelt_max_retries: int = 7
+    gdelt_base_delay: float = 10.0
 
     # Curation UI auth
     curation_user: str = ""
     curation_password: str = ""
+    curation_enabled: bool = True
 
     # Verification settings
     containment_threshold: float = 0.9
@@ -80,6 +86,10 @@ class Settings(BaseSettings):
     def has_curation_auth(self) -> bool:
         return bool(self.curation_user and self.curation_user.strip() and
                     self.curation_password and self.curation_password.strip())
+
+    @property
+    def has_curation(self) -> bool:
+        return self.curation_enabled and self.has_curation_auth
 
     def missing_required_for(self, feature: str) -> list[str]:
         """Return list of missing env vars for a given feature."""

@@ -78,11 +78,11 @@ async def apply_tier1_gate(
     Apply the tier-1 gate: stories need ≥2 tier-1 reporting units
     from distinct ownership groups.
 
-    If story_ids provided, only evaluate those stories (including BLOCKED).
+    If story_ids provided (not None), only evaluate those stories (including BLOCKED).
     Otherwise evaluate all PENDING stories.
     """
-    # Build query - if story_ids provided, get those (any status), else get PENDING
-    if story_ids:
+    # Build query - if story_ids is not None, get those (any status), else get PENDING
+    if story_ids is not None:
         stmt = select(Story).where(Story.id.in_(story_ids))
     else:
         stmt = select(Story).where(Story.status == Story.Status.PENDING)

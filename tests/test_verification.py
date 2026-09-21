@@ -15,6 +15,25 @@ from src.schema.models import (
 )
 
 
+class TestIsLocalhostDb:
+    """Tests for the _is_localhost_db pure function."""
+
+    def test_localhost_urls(self):
+        assert _is_localhost_db("postgresql://user:pass@localhost:5432/db") is True
+        assert _is_localhost_db("postgresql+asyncpg://user:pass@127.0.0.1:5432/db") is True
+        assert _is_localhost_db("postgresql://user:pass@localhost/db") is True
+        assert _is_localhost_db("postgresql://localhost/db") is True
+
+    def test_non_localhost_urls(self):
+        assert _is_localhost_db("postgresql://user:pass@db.example.com:5432/db") is False
+        assert _is_localhost_db("postgresql://user:pass@192.168.1.1:5432/db") is False
+        assert _is_localhost_db("") is False
+
+    def test_malformed_urls(self):
+        assert _is_localhost_db("not-a-url") is False
+        assert _is_localhost_db("postgresql://") is False
+
+
 class TestOwnershipGroups:
     def test_known_domains(self):
         assert get_owner_group("apnews.com") == "AP"
@@ -72,10 +91,29 @@ class TestEvaluateTier1GatePure:
 # Integration tests using PostgreSQL (pgvector service container)
 # These require DATABASE_URL to be set (e.g., postgresql+asyncpg://postgres:postgres@localhost:5432/test_news)
 
+def _is_localhost_db(url: str) -> bool:
+    """Check if a database URL points to localhost/127.0.0.1."""
+    if not url:
+        return False
+    # Check for localhost or 127.0.0.1 in the host portion
+    # Handle formats: postgresql://user:pass@host:port/db, postgresql+asyncpg://...
+    try:
+        # Extract host from URL
+        if "@" in url:
+            host_part = url.split("@")[1].split("/")[0]
+        else:
+            host_part = url.split("://")[1].split("/")[0]
+        host = host_part.split(":")[0]
+        return host in ("localhost", "127.0.0.1")
+    except Exception:
+        return False
+
+
 def _has_database():
-    """Check if database is available for integration tests."""
+    """Check if database is available for integration tests (local only)."""
     import os
-    return bool(os.getenv("DATABASE_URL"))
+    url = os.getenv("DATABASE_URL")
+    return bool(url and _is_localhost_db(url))
 
 
 _TRUNCATE_ALL = (

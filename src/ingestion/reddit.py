@@ -5,6 +5,7 @@ from typing import List, Optional
 from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
 from src.utils.ner import extract_entities
+from src.utils.ingest_stats import STATS
 from src.schema.models import RawArticle, SourceTier
 from src.shared.config import get_settings
 
@@ -57,9 +58,12 @@ async def process_submission(submission) -> Optional[RawArticle]:
     url = submission.url
     url_hash = compute_url_hash(url)
 
+    STATS.record("reddit", "entries_seen")
+
     # Extract article body
-    body_text, extracted_title = await extract_article(url)
+    body_text, extracted_title = await extract_article(url, source_key="reddit")
     if not body_text or len(body_text) < 200:
+        STATS.record("reddit", "too_short")
         return None
 
     title = extracted_title or submission.title.strip()
@@ -88,6 +92,7 @@ async def process_submission(submission) -> Optional[RawArticle]:
         entities=entities,
         content_hash=content_hash,
     )
+    STATS.record("reddit", "ok")
     return art
 
 

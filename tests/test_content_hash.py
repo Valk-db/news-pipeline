@@ -359,7 +359,8 @@ class TestIngestionSourcesHaveContentHash:
             article = await process_feed_entry(
                 mock_entry,
                 {"domain": "bbc.com", "tier": SourceTier.TIER1},
-                set()
+                set(),
+                "bbc"
             )
 
         assert article is not None
