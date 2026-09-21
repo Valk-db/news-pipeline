@@ -74,11 +74,11 @@ def compute_jaccard_histogram(
     hours_window: int = 48
 ) -> Tuple[Dict[float, int], List[Dict[str, Any]]]:
     """
-    For units created in last N days: best Jaccard vs units with disjoint owner groups
-    within 48h. Returns histogram buckets (0.1) and top 25 near-misses in [0.2, 0.4).
+    For units created in last N hours: best Jaccard vs units with disjoint owner groups
+    within hours_window. Returns histogram buckets (0.1) and top 25 near-misses in [0.2, 0.4).
     """
-    # Filter units by creation date (last N days)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=3)
+    # Filter units by creation date (last hours_window hours)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_window)
     recent_units = [u for u in units if u["created_at"] >= cutoff]
 
     # Build unit -> owner groups mapping
@@ -109,9 +109,9 @@ def compute_jaccard_histogram(
             if owners_a & owners_b:
                 continue
 
-            # Check within 48h
+            # Check within hours_window
             time_diff = abs((unit_a["created_at"] - unit_b["created_at"]).total_seconds())
-            if time_diff > 48 * 3600:
+            if time_diff > hours_window * 3600:
                 continue
 
             entities_b = unit_entities.get(unit_b_id, set())
@@ -368,9 +368,9 @@ async def run_audit(db_url: str, days: int = 3) -> str:
         print(f"| Max | {max_size} |")
         print(f"")
 
-        # 5. Near-miss Jaccard analysis
+        # 5. Near-miss Jaccard analysis (48h window, disjoint owners)
         histogram, near_misses = compute_jaccard_histogram(
-            unit_list, unit_entities, unit_owner_groups, articles_dict
+            unit_list, unit_entities, unit_owner_groups, articles_dict, hours_window=48
         )
 
         print(f"## 5. Near-Miss Jaccard Analysis (last {days} days, 48h window, disjoint owners)")
