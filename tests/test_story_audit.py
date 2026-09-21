@@ -255,10 +255,15 @@ class TestComputeJaccardHistogram:
         # unit1 and unit2 share "PERSON:PERSON:joe biden" -> intersection=1, union=3 -> Jaccard=0.33
         # unit1 and unit3 have disjoint owners? No, both BBC -> excluded
         # unit2 and unit3 have disjoint owners (Guardian vs BBC) but no shared entities -> Jaccard=0
+        # Jaccard 0.33 rounds to bucket 0.3 and is in [0.2, 0.4) near-miss range
+        # Function compares both directions (unit1->unit2 and unit2->unit1) so 2 entries
 
-        assert 0.3 in histogram or 0.4 in histogram  # 0.33 rounds to 0.3 or 0.4
-        # Near-miss should be in [0.2, 0.4) - the unit1/unit2 pair
-        assert len(near_misses) >= 0  # May or may not be in range depending on rounding
+        assert 0.3 in histogram  # 0.33 rounds to 0.3 with Python's round-half-to-even
+        assert len(near_misses) == 2  # symmetric pairs: unit1->unit2 and unit2->unit1
+        assert near_misses[0]["unit_a_id"] == "unit1"
+        assert near_misses[0]["unit_b_id"] == "unit2"
+        assert near_misses[1]["unit_a_id"] == "unit2"
+        assert near_misses[1]["unit_b_id"] == "unit1"
 
     def test_same_owner_excluded(self):
         """Units with same owner are excluded from comparison."""
