@@ -14,9 +14,7 @@ class Settings(BaseSettings):
     cerebras_api_key: str = ""
     cerebras_model: str = "gpt-oss-120b"
 
-    # Reddit
-    reddit_client_id: str = ""
-    reddit_client_secret: str = ""
+    # Reddit (public RSS, no API credentials needed)
     reddit_user_agent: str = "news-pipeline/0.1 (by /u/valk_db)"
 
     # YouTube (optional)
@@ -68,11 +66,6 @@ class Settings(BaseSettings):
         return self.has_groq or self.has_cerebras
 
     @property
-    def has_reddit(self) -> bool:
-        return bool(self.reddit_client_id and self.reddit_client_secret and
-                    self.reddit_client_id.strip() and self.reddit_client_secret.strip())
-
-    @property
     def has_youtube(self) -> bool:
         return bool(self.youtube_api_key and self.youtube_api_key.strip())
 
@@ -94,8 +87,6 @@ class Settings(BaseSettings):
             missing.append("DATABASE_URL")
         elif feature == "llm" and not self.has_llm:
             missing.extend(["GROQ_API_KEY", "CEREBRAS_API_KEY"])
-        elif feature == "reddit" and not self.has_reddit:
-            missing.extend(["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET"])
         elif feature == "youtube" and not self.has_youtube:
             missing.append("YOUTUBE_API_KEY")
         elif feature == "supabase" and not self.has_supabase:

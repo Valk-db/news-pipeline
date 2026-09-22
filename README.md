@@ -31,7 +31,6 @@ GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → C
 - GitHub account
 - Supabase or Neon account (free tier)
 - Groq API key (free, no card)
-- Reddit API credentials
 - Python 3.12 and `uv` (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
 ### 2. Database Setup
@@ -47,8 +46,6 @@ GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → C
 | `DATABASE_URL` | Supabase/Neon connection string |
 | `GROQ_API_KEY` | console.groq.com |
 | `CEREBRAS_API_KEY` | cerebras.ai (optional, 30-day trial) |
-| `REDDIT_CLIENT_ID` | reddit.com/prefs/apps |
-| `REDDIT_CLIENT_SECRET` | reddit.com/prefs/apps |
 | `YOUTUBE_API_KEY` | Google Cloud Console (optional) |
 
 ### 4. Local Development
@@ -95,7 +92,7 @@ cloudflared tunnel --url http://localhost:8000
 ### Ingestion (Twice Daily)
 1. **RSS**: BBC, Guardian, NPR (AP/Reuters removed 2026-09-21: 403/401 from GitHub runners)
 2. **GDELT DOC API**: Disabled by default (`GDELT_ENABLED=false`) — redundant with RSS for BBC/Guardian/NPR, rate-limited
-3. **Reddit**: Top posts from r/worldnews, r/geopolitics, etc. (PRAW, 100 QPM)
+3. **Reddit**: Top posts from r/worldnews, r/geopolitics, etc. (public `.rss` feeds, no credentials — anon-rate-limited, throttled to 1 subreddit/3s)
 
 ### Verification
 1. **Extract**: trafilatura → body text

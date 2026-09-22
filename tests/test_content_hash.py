@@ -369,26 +369,22 @@ class TestIngestionSourcesHaveContentHash:
 
     @pytest.mark.asyncio
     async def test_reddit_sets_content_hash(self):
-        """Reddit ingestion sets content_hash on articles."""
-        from src.ingestion.reddit import process_submission
+        """Reddit RSS ingestion sets content_hash on articles."""
+        from src.ingestion.reddit import process_entry
 
-        # Create a mock submission object
-        class MockSubmission:
-            def __init__(self):
-                self.url = "https://example.com/article"
-                self.title = "Test Article"
-                self.created_utc = 1704067200
-                self.selftext = "Self text"
-                self.is_self = False
-                self.removed_by_category = None
-                self.stickied = False
-                self.score = 100
-
-        mock_submission = MockSubmission()
+        # Reddit RSS entry: [link] anchor carries the outbound URL, distinct
+        # from the comments permalink in entry["link"].
+        mock_entry = {
+            "link": "https://www.reddit.com/r/worldnews/comments/abc123/test/",
+            "title": "Test Article",
+            "summary": (
+                '<span><a href="https://example.com/article">[link]</a></span> '
+                '<span><a href="https://www.reddit.com/r/worldnews/comments/abc123/test/">[1 comment]</a></span>'
+            ),
+        }
 
         with patch("src.ingestion.reddit.extract_article", new_callable=AsyncMock) as mock_extract, \
              patch("src.ingestion.reddit.extract_entities", return_value={"PERSON": [], "ORG": [], "GPE": []}), \
-             patch("src.ingestion.reddit.is_valid_submission", return_value=True), \
              patch("src.ingestion.reddit.compute_url_hash", return_value="test_url_hash"), \
              patch("src.ingestion.reddit.compute_content_hash", return_value="test_content_hash"):
 
@@ -397,7 +393,7 @@ class TestIngestionSourcesHaveContentHash:
                 "Extracted Title"
             )
 
-            article = await process_submission(mock_submission)
+            article = await process_entry(mock_entry)
 
             assert article is not None
             assert article.content_hash == "test_content_hash"
