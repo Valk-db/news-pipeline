@@ -1,6 +1,12 @@
-"""Seed source tier classifications (already in code, but useful for reference)."""
+"""Print source tier reference (read-only; no database writes)."""
 
 import asyncio
+import sys
+import os
+
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from src.verification.tiers import TIER1_DOMAINS, TIER2_DOMAINS, classify_source_tier
 
 
