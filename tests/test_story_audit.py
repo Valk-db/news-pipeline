@@ -226,7 +226,7 @@ class TestComputeJaccardHistogram:
 
     def test_basic_histogram_and_near_misses(self):
         """Computes histogram and finds near-misses for disjoint owner groups."""
-        now = datetime.now(timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
         units = [
             {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
             {"id": "unit2", "created_at": now, "representative_article_id": "art2"},
@@ -249,7 +249,7 @@ class TestComputeJaccardHistogram:
         }
 
         result = compute_jaccard_histogram(
-            units, unit_entities, unit_owner_groups, articles
+            units, unit_entities, unit_owner_groups, articles, now=now
         )
         histogram = result["histogram"]
         near_misses = result["near_misses"]
@@ -275,7 +275,7 @@ class TestComputeJaccardHistogram:
 
     def test_same_owner_excluded(self):
         """Units with same owner are excluded from comparison."""
-        now = datetime.now(timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
         units = [
             {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
             {"id": "unit2", "created_at": now, "representative_article_id": "art2"},
@@ -294,7 +294,7 @@ class TestComputeJaccardHistogram:
         }
 
         result = compute_jaccard_histogram(
-            units, unit_entities, unit_owner_groups, articles
+            units, unit_entities, unit_owner_groups, articles, now=now
         )
         histogram = result["histogram"]
         near_misses = result["near_misses"]
@@ -308,10 +308,10 @@ class TestComputeJaccardHistogram:
 
     def test_outside_48h_excluded(self):
         """Units outside 48h window are excluded."""
-        now = datetime.now(timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
         units = [
             {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
-            {"id": "unit2", "created_at": now - timedelta(hours=72), "representative_article_id": "art2"},  # 72h ago
+            {"id": "unit2", "created_at": now - timedelta(hours=60), "representative_article_id": "art2"},  # 60h ago (inside 3-day window, outside 48h comparison window)
         ]
         unit_entities = {
             "unit1": {"PERSON:joe biden"},
@@ -327,13 +327,13 @@ class TestComputeJaccardHistogram:
         }
 
         result = compute_jaccard_histogram(
-            units, unit_entities, unit_owner_groups, articles
+            units, unit_entities, unit_owner_groups, articles, now=now
         )
         histogram = result["histogram"]
         near_misses = result["near_misses"]
         stats = result["stats"]
 
-        # unit2 is 72h old, within 3-day window (days=3) but outside 48h comparison window
+        # unit2 is 60h old, within 3-day window (days=3) but outside 48h comparison window
         # Both units are recent (within 3 days), but excluded from each other's comparison due to 48h
         # Both get no valid candidates -> bucketed at 0.0
         assert histogram == {0.0: 2}
@@ -342,7 +342,7 @@ class TestComputeJaccardHistogram:
 
     def test_units_without_entities_excluded(self):
         """Units with empty entity sets are skipped."""
-        now = datetime.now(timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
         units = [
             {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
             {"id": "unit2", "created_at": now, "representative_article_id": "art2"},
@@ -361,7 +361,7 @@ class TestComputeJaccardHistogram:
         }
 
         result = compute_jaccard_histogram(
-            units, unit_entities, unit_owner_groups, articles
+            units, unit_entities, unit_owner_groups, articles, now=now
         )
         histogram = result["histogram"]
         near_misses = result["near_misses"]

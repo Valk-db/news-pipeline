@@ -3,6 +3,5 @@
     "curation_ui/main.py": {
       "maxDuration": 300
     }
-  },
-  "pythonVersion": "3.12"
+  }
 }
