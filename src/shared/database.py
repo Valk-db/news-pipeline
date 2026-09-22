@@ -1,7 +1,6 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from uuid import uuid4
-from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool

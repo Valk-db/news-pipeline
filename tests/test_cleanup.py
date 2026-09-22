@@ -12,7 +12,7 @@ from src.verification.cleanup import (
     cleanup_stale_story_links,
     run_cleanup,
 )
-from src.schema.models import Story, ReportingUnit, StoryUnitLink, StatusLog, SourceTier
+from src.schema.models import Story, ReportingUnit, StoryUnitLink
 
 
 class TestCleanupResult:

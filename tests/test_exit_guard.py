@@ -2,8 +2,7 @@
 
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from src.ingestion.run import main, run_ingestion
-from src.utils.ingest_stats import STATS
+from src.ingestion.run import main
 import sys
 
 
@@ -77,8 +76,8 @@ class TestCleanupQueuedDisabled:
         mock_session = AsyncMock()
         now = datetime.now(timezone.utc)
 
-        # Create a QUEUED story older than 168 hours
-        old_queued = Story(
+        # Create a QUEUED story older than 168 hours (not used, just for documentation)
+        Story(
             id=MagicMock(),
             status=Story.Status.QUEUED,
             updated_at=now - timedelta(hours=200),
@@ -92,7 +91,6 @@ class TestCleanupQueuedDisabled:
         mock_session.execute.return_value = mock_result
 
         # Call with queued_hours=0 (disabled)
-        from src.verification.cleanup import CleanupResult
         result = await cleanup_stale_stories(mock_session, queued_hours=0)
 
         # The QUEUED story should NOT be expired (no query should be made for QUEUED)

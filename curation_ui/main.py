@@ -3,7 +3,6 @@
 import logging
 import socket
 import secrets
-from functools import wraps
 
 # Force IPv4-only DNS resolution to avoid Vercel's lack of outbound IPv6 routes
 # This patches the resolver asyncio (and asyncpg through it) calls underneath
@@ -24,7 +23,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.shared.database import get_session
-from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, Story as StoryModel
+from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost
 from src.shared.llm import get_llm_client, validate_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
@@ -95,7 +94,7 @@ async def _render_stories_grid(session: AsyncSession) -> list:
     """Render the stories grid fragment for HTMX swap."""
     from sqlalchemy import select, desc
     from sqlalchemy.orm import selectinload
-    from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle
+    from src.schema.models import Story, ReportingUnit
 
     stmt = (
         select(Story)

@@ -6,7 +6,7 @@ from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
 
-from src.schema.models import Base, RawArticle, SourceTier, ReportingUnit, Story, StoryUnitLink, CuratedPost
+from src.schema.models import Base, SourceTier
 from src.shared.config import Settings
 
 

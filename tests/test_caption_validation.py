@@ -1,6 +1,5 @@
 """Tests for caption generation validation."""
 
-import pytest
 from src.shared.llm import validate_caption, PLATFORM_LIMITS
 
 

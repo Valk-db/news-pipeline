@@ -3,7 +3,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import httpx
-import asyncio
 from src.utils.trafilatura_extract import _extract_article_sync
 from src.ingestion.rss import fetch_feed
 from src.utils.ingest_stats import STATS

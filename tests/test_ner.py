@@ -1,6 +1,5 @@
 """Tests for NER entity extraction and Jaccard similarity."""
 
-import pytest
 from src.utils.ner import (
     extract_entities,
     get_primary_entity_set,

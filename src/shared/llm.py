@@ -1,8 +1,7 @@
 """LLM client with Groq primary, Cerebras fallback, and token accounting."""
 
-import asyncio
-import difflib
-from typing import Optional, List, Dict, Any, Sequence, Tuple
+import logging
+from typing import Optional, List, Dict, Any, Tuple
 from src.shared.config import get_settings
 from tenacity import retry, stop_after_attempt, wait_exponential
 from httpx import HTTPStatusError, TimeoutException, ConnectError
@@ -34,8 +33,6 @@ PLATFORM_LIMITS = {
     "facebook": 63206,
 }
 
-
-import logging
 
 logger = logging.getLogger(__name__)
 
