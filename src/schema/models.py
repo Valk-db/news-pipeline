@@ -5,7 +5,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
-from sqlalchemy import JSON
 import uuid
 
 Base = declarative_base()

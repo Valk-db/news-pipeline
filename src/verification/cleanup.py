@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.schema.models import Story, ReportingUnit, StoryUnitLink, Story, StatusLog
+from src.schema.models import Story, ReportingUnit, StoryUnitLink, StatusLog
 from src.shared.config import get_settings
 
 
