@@ -241,6 +241,327 @@ def format_near_misses(near_misses: List[Dict[str, Any]]) -> str:
 
 
 # =============================================================================
+# Step C: Story metrics (pure functions)
+# =============================================================================
+
+def compute_story_metrics(
+    stories: List[Dict[str, Any]],
+    story_units: Dict[str, List[str]],
+    unit_info: Dict[str, Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Compute per-story metrics comparing stored vs computed values.
+
+    Args:
+        stories: List of dicts with {id, status, tier1_unit_count, distinct_owners}
+        story_units: Dict story_id -> list of unit ids
+        unit_info: Dict unit_id -> {"source_tiers": {...}, "tier1_owner_groups": {...}}
+
+    Returns:
+        List of dicts with computed and stored metrics, plus mismatch flag.
+    """
+    metrics = []
+    for story in stories:
+        story_id = str(story["id"])
+        linked_units = story_units.get(story_id, [])
+
+        # Compute tier1 count: sum of source_tiers["tier1"] over linked units
+        computed_tier1_count = 0
+        all_tier1_owners = set()
+        for unit_id in linked_units:
+            info = unit_info.get(unit_id, {})
+            computed_tier1_count += info.get("source_tiers", {}).get("tier1", 0)
+            all_tier1_owners.update(info.get("tier1_owner_groups", {}).keys())
+
+        computed_distinct_owners = len(all_tier1_owners)
+        stored_tier1_count = story.get("tier1_unit_count", 0)
+        stored_distinct_owners = story.get("distinct_owners", 0)
+
+        mismatch = (computed_tier1_count != stored_tier1_count) or (computed_distinct_owners != stored_distinct_owners)
+
+        metrics.append({
+            "id": story_id,
+            "status": story.get("status", ""),
+            "linked_units": len(linked_units),
+            "computed_tier1_count": computed_tier1_count,
+            "computed_distinct_owners": computed_distinct_owners,
+            "stored_tier1_count": stored_tier1_count,
+            "stored_distinct_owners": stored_distinct_owners,
+            "mismatch": mismatch,
+        })
+    return metrics
+
+
+def summarize_story_metrics(
+    metrics: List[Dict[str, Any]],
+    max_examples: int = 10
+) -> Dict[str, Any]:
+    """
+    Summarize story metrics into crosstab, statuses, mismatch count, and examples.
+
+    Returns:
+        Dict with keys: crosstab, statuses, mismatch_count, examples
+    """
+    # Build crosstab: {(linked_units, computed_distinct_owners): {status: count}}
+    crosstab = defaultdict(lambda: defaultdict(int))
+    statuses_set = set()
+    mismatch_count = 0
+    mismatch_examples = []
+
+    for m in metrics:
+        key = (m["linked_units"], m["computed_distinct_owners"])
+        crosstab[key][m["status"]] += 1
+        statuses_set.add(m["status"])
+
+        if m["mismatch"]:
+            mismatch_count += 1
+            if len(mismatch_examples) < max_examples:
+                mismatch_examples.append({
+                    "story_id": m["id"],
+                    "linked_units": m["linked_units"],
+                    "computed_tier1_count": m["computed_tier1_count"],
+                    "computed_distinct_owners": m["computed_distinct_owners"],
+                    "stored_tier1_count": m["stored_tier1_count"],
+                    "stored_distinct_owners": m["stored_distinct_owners"],
+                })
+
+    # Convert crosstab to regular dict
+    crosstab_dict = {k: dict(v) for k, v in crosstab.items()}
+    statuses = sorted(statuses_set)
+
+    return {
+        "crosstab": crosstab_dict,
+        "statuses": statuses,
+        "mismatch_count": mismatch_count,
+        "examples": mismatch_examples,
+    }
+
+
+# =============================================================================
+# Step D: Report assembly (pure functions)
+# =============================================================================
+
+def format_crosstab(summary: Dict[str, Any]) -> str:
+    """Format the crosstab as a markdown table."""
+    crosstab = summary.get("crosstab", {})
+    statuses = summary.get("statuses", [])
+
+    if not crosstab:
+        return "No stories."
+
+    # Build header
+    header = "| Linked Units | Tier-1 Owners |"
+    for status in statuses:
+        header += f" {status} |"
+    header += " Total |"
+
+    separator = "|--------------|---------------|"
+    for _ in statuses:
+        separator += "-------|"
+    separator += "-------|"
+
+    lines = [header, separator]
+
+    # Sort keys for consistent output
+    for key in sorted(crosstab.keys()):
+        linked, owners = key
+        row = f"| {linked} | {owners} |"
+        total = 0
+        for status in statuses:
+            count = crosstab[key].get(status, 0)
+            row += f" {count} |"
+            total += count
+        row += f" {total} |"
+        lines.append(row)
+
+    return "\n".join(lines)
+
+
+def format_per_day(rows: List[Dict[str, Any]], title: str) -> str:
+    """Format per-day counts as a markdown table."""
+    if not rows:
+        return f"### {title}\n\nNo data."
+
+    # Group by day and status
+    day_status = defaultdict(lambda: defaultdict(int))
+    all_statuses = set()
+    for row in rows:
+        day = row.get("day")
+        status = row.get("status", "")
+        count = row.get("count", 0)
+        if day:
+            day_status[str(day)][status] += count
+            all_statuses.add(status)
+
+    if not day_status:
+        return f"### {title}\n\nNo data."
+
+    statuses = sorted(all_statuses)
+
+    lines = [f"### {title}", ""]
+    header = "| Day |"
+    for s in statuses:
+        header += f" {s} |"
+    header += " Total |"
+
+    separator = "|-----|"
+    for _ in statuses:
+        separator += "-------|"
+    separator += "-------|"
+
+    lines.append(header)
+    lines.append(separator)
+
+    for day in sorted(day_status.keys(), reverse=True):
+        row = f"| {day} |"
+        total = 0
+        for s in statuses:
+            count = day_status[day].get(s, 0)
+            row += f" {count} |"
+            total += count
+        row += f" {total} |"
+        lines.append(row)
+
+    return "\n".join(lines)
+
+
+def build_report(data: Dict[str, Any], days: int, host: str, now: datetime | None = None) -> str:
+    """
+    Build the complete markdown report.
+
+    Expected data keys:
+    - counts: dict with raw_articles, reporting_units, story_unit_links, stories,
+              stories_no_units, units_missing_rep, articles_no_unit
+    - stories_per_day: list of {day, status, count}
+    - articles_per_day: list of {day, count}
+    - units_per_day: list of {day, count}
+    - orphans_per_day: list of {day, status, count} (stories with no linked units)
+    - story_summary: dict with crosstab, statuses, mismatch_count, examples
+    - entity_sizes: dict with min, median, max, empty_count
+    - jaccard: dict with histogram, near_misses, stats (from compute_jaccard_histogram)
+    - duplicates: list of duplicate title dicts
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    lines = []
+
+    # Header
+    lines.append(f"# Story Audit Report (last {days} days)")
+    lines.append("")
+    lines.append(f"**Database host:** {host}")
+    lines.append(f"**Generated:** {now.isoformat()}")
+    lines.append("")
+    lines.append("> **Note:** This audit uses approximate canonical IDs via `_normalize_text(surface, label)`")
+    lines.append("> for PERSON/ORG/GPE only. This does not merge aliases, so it can understate production overlap.")
+    lines.append("")
+
+    # Section 1: Counts
+    counts = data.get("counts", {})
+    lines.append("## 1. Counts")
+    lines.append("")
+    lines.append("| Metric | Count |")
+    lines.append("|--------|-------|")
+    lines.append(f"| raw_articles | {counts.get('raw_articles', 0)} |")
+    lines.append(f"| reporting_units | {counts.get('reporting_units', 0)} |")
+    lines.append(f"| story_unit_links | {counts.get('story_unit_links', 0)} |")
+    lines.append(f"| stories | {counts.get('stories', 0)} |")
+    lines.append(f"| stories with no linked units | {counts.get('stories_no_units', 0)} |")
+    lines.append(f"| units whose representative article is missing | {counts.get('units_missing_rep', 0)} |")
+    lines.append(f"| articles with no unit | {counts.get('articles_no_unit', 0)} |")
+    lines.append("")
+
+    # Section 2: Per-day activity (all time)
+    lines.append("## 2. Per-day activity (all time)")
+    lines.append("")
+    lines.append(format_per_day(data.get("stories_per_day", []), "Stories Created"))
+    lines.append("")
+    lines.append(format_per_day(data.get("articles_per_day", []), "Articles Fetched"))
+    lines.append("")
+    lines.append(format_per_day(data.get("units_per_day", []), "Units Created"))
+    lines.append("")
+    lines.append(format_per_day(data.get("orphans_per_day", []), "Stories with No Linked Units (by created day, status)"))
+    lines.append("")
+
+    # Section 3: Story shape
+    story_summary = data.get("story_summary", {})
+    lines.append("## 3. Story shape: linked units x tier-1 owners")
+    lines.append("")
+    lines.append(format_crosstab(story_summary))
+    lines.append("")
+    lines.append(f"**Mismatching rows (stored vs computed):** {story_summary.get('mismatch_count', 0)}")
+    lines.append("")
+    if story_summary.get("examples"):
+        lines.append("### Mismatch Examples")
+        lines.append("")
+        lines.append("| Story ID | Linked Units | Computed Tier-1 | Computed Owners | Stored Tier-1 | Stored Owners |")
+        lines.append("|----------|--------------|-----------------|-----------------|---------------|---------------|")
+        for ex in story_summary["examples"]:
+            lines.append(
+                f"| {ex['story_id'][:8]} | {ex['linked_units']} | "
+                f"{ex['computed_tier1_count']} | {ex['computed_distinct_owners']} | "
+                f"{ex['stored_tier1_count']} | {ex['stored_distinct_owners']} |"
+            )
+        lines.append("")
+
+    # Section 4: Entity-set size
+    entity_sizes = data.get("entity_sizes", {})
+    lines.append("## 4. Entity-set size per unit")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Min | {entity_sizes.get('min', 0)} |")
+    lines.append(f"| Median | {entity_sizes.get('median', 0)} |")
+    lines.append(f"| Max | {entity_sizes.get('max', 0)} |")
+    lines.append(f"| Units with empty set | {entity_sizes.get('empty_count', 0)} |")
+    lines.append("")
+
+    # Section 5: Cross-owner Jaccard
+    jaccard = data.get("jaccard", {})
+    histogram = jaccard.get("histogram", {})
+    near_misses = jaccard.get("near_misses", [])
+    jaccard_stats = jaccard.get("stats", {})
+
+    lines.append("## 5. Cross-owner Jaccard")
+    lines.append("")
+    lines.append("### Histogram (0.1 buckets)")
+    lines.append("")
+    lines.append(format_histogram(histogram))
+    lines.append("")
+    lines.append("### Stats")
+    lines.append("")
+    lines.append("| Stat | Value |")
+    lines.append("|------|-------|")
+    lines.append(f"| Total recent units | {jaccard_stats.get('total_recent_units', 0)} |")
+    lines.append(f"| Units with entities | {jaccard_stats.get('units_with_entities', 0)} |")
+    lines.append(f"| Units with no entities | {jaccard_stats.get('units_with_no_entities', 0)} |")
+    lines.append(f"| Units with no candidates | {jaccard_stats.get('units_with_no_candidates', 0)} |")
+    lines.append(f"| Zero-overlap pairs | {jaccard_stats.get('zero_overlap_pairs', 0)} |")
+    lines.append(f"| Would attach (Jaccard >= 0.4) | {jaccard_stats.get('would_attach', 0)} |")
+    lines.append("")
+    lines.append("### Top 25 Near-Misses in [0.2, 0.4)")
+    lines.append("")
+    lines.append(format_near_misses(near_misses))
+    lines.append("")
+
+    # Section 6: Duplicate titles
+    duplicates = data.get("duplicates", [])
+    lines.append("## 6. Duplicate (source_domain, title)")
+    lines.append("")
+    if duplicates:
+        lines.append("| Source Domain | Title | Count | Fetched At Range |")
+        lines.append("|---------------|-------|-------|------------------|")
+        for dup in duplicates[:25]:
+            title_short = dup["title"][:80] + "..." if len(dup["title"]) > 80 else dup["title"]
+            lines.append(f"| {dup['source_domain']} | {title_short} | {dup['count']} | {dup['fetched_at_range']} |")
+    else:
+        lines.append("No duplicates found.")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+# =============================================================================
 # Database access layer (thin)
 # =============================================================================
 
