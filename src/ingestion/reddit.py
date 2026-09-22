@@ -128,7 +128,10 @@ async def ingest_reddit(
             if i > 0:
                 await asyncio.sleep(REDDIT_FETCH_DELAY_SECONDS)
 
-            feed_url = f"https://www.reddit.com/r/{sub_name}/top/.rss?t={time_filter}&limit={limit_per_sub}"
+            # Reddit's top.rss feed is pre-sorted by score (descending), so taking
+            # the first `limit_per_sub` entries acts as an implicit quality filter.
+            # Old PRAW code used `submission.score >= 10`; RSS exposes no score field.
+            feed_url = f"https://www.reddit.com/r/{sub_name}/top.rss?t={time_filter}&limit={limit_per_sub}"
             feed = await fetch_feed(client, feed_url, timeout=timeout, source_key="reddit")
             if not feed or not feed.entries:
                 continue
