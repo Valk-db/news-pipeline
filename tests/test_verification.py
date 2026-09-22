@@ -123,7 +123,11 @@ async def db_session():
 
     # SAFETY GUARD: Only run TRUNCATE on localhost databases
     if not _is_localhost_db(settings.database_url):
-        pytest.skip(f"Refusing to run integration tests against non-localhost DB: {settings.database_url}")
+        # Extract just the hostname for the skip message, never the full connection string
+        from urllib.parse import urlparse
+        parsed = urlparse(settings.database_url)
+        host_info = parsed.hostname or "unknown"
+        pytest.skip(f"Refusing to run integration tests against non-localhost DB (host: {host_info})")
 
     await init_db()
 

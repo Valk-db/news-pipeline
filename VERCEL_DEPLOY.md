@@ -106,9 +106,10 @@ The function is configured for 300s max duration. If you hit timeouts:
 
 ### Static Files Not Loading
 
-The configuration includes rewrites for `/static/` paths. If CSS doesn't load:
+The FastAPI app self-mounts static files via `app.mount("/static", StaticFiles(...))` in `curation_ui/main.py:40`. No Vercel rewrites are needed. If CSS doesn't load:
 - Check browser dev tools for 404s on `/static/style.css`
 - Verify the `static/` folder is included in deployment (not in `.vercelignore`)
+- Ensure the `curation_ui/` directory is deployed (not in `.vercelignore`)
 
 ### Import Errors
 
@@ -118,28 +119,18 @@ If you see module import errors:
 
 ## Configuration Files
 
-### `vercel.json` (Legacy)
+### `vercel.json`
 ```json
 {
-  "functions": { "curation_ui/main.py": { "runtime": "python3.12", "maxDuration": 300 } },
-  "rewrites": [ { "source": "/static/(.*)", "destination": "/curation_ui/static/$1" }, { "source": "/(.*)", "destination": "/curation_ui/main.py" } ]
+  "functions": {
+    "curation_ui/main.py": {
+      "maxDuration": 300
+    }
+  }
 }
 ```
 
-### `vercel.ts` (Modern, Recommended)
-TypeScript-based configuration with full type safety:
-```typescript
-import { routes, type VercelConfig } from '@vercel/config/v1';
-
-export const config: VercelConfig = {
-  buildCommand: 'uv sync --frozen --extra pipeline',
-  functions: { 'curation_ui/main.py': { runtime: 'python3.12', maxDuration: 300 } },
-  rewrites: [ routes.rewrite('/static/(.*)', '/curation_ui/static/$1'), routes.rewrite('/(.*)', '/curation_ui/main.py') ],
-  headers: [ routes.cacheControl('/static/(.*)', { public: true, maxAge: '1 week', immutable: true }) ],
-};
-```
-
-## Cost Considerations
+**Note:** This documentation has not been verified against the live Vercel deployment's actual routing. Tyler should confirm non-root paths still resolve before trusting it fully.
 
 - **Vercel Hobby**: Free for personal projects
 - **Supabase Free**: 500 MB database, 1 GB bandwidth

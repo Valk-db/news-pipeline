@@ -1,6 +1,12 @@
-"""Seed ownership graph (reference - also embedded in units.py)."""
+"""Print ownership graph reference (read-only; no database writes)."""
 
 import asyncio
+import sys
+import os
+
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from src.verification.units import OWNERSHIP_GROUPS
 
 

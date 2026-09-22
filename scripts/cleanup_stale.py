@@ -21,7 +21,7 @@ from src.shared.config import get_settings
 async def main():
     """Run cleanup job."""
     # Parse args
-    pending_hours = 72
+    pending_hours = 120
     blocked_hours = 168
     queued_hours = 0  # Default disabled (opt-in)
 
@@ -33,8 +33,8 @@ async def main():
         elif arg.startswith("--queued-hours="):
             queued_hours = int(arg.split("=")[1])
         elif arg == "--help":
-            print("Usage: uv run scripts/cleanup_stale.py [--pending-hours=72] [--blocked-hours=168] [--queued-hours=0]")
-            print("  --pending-hours: Hours after which PENDING stories expire (default: 72)")
+            print("Usage: uv run scripts/cleanup_stale.py [--pending-hours=120] [--blocked-hours=168] [--queued-hours=0]")
+            print("  --pending-hours: Hours after which PENDING stories expire (default: 120)")
             print("  --blocked-hours: Hours after which BLOCKED stories expire (default: 168)")
             print("  --queued-hours: Hours after which QUEUED stories expire (default: 0 = disabled, opt-in only)")
             return
