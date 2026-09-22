@@ -565,6 +565,239 @@ def build_report(data: Dict[str, Any], days: int, host: str, now: datetime | Non
 # Database access layer (thin)
 # =============================================================================
 
+async def fetch_audit_data(session: AsyncSession, days: int, now: datetime | None = None) -> Dict[str, Any]:
+    """
+    Fetch all data needed for the audit using SELECT-only statements.
+
+    Returns a dict with keys:
+    - counts
+    - stories_per_day, articles_per_day, units_per_day, orphans_per_day
+    - story_summary
+    - entity_sizes
+    - jaccard
+    - duplicates
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    # ---- Counts ----
+    raw_count = await session.scalar(select(func.count(RawArticle.id)))
+    unit_count = await session.scalar(select(func.count(ReportingUnit.id)))
+    link_count = await session.scalar(select(func.count(StoryUnitLink.id)))
+    story_count = await session.scalar(select(func.count(Story.id)))
+
+    # Stories with no linked units
+    stmt = select(func.count(Story.id)).outerjoin(StoryUnitLink).where(StoryUnitLink.id.is_(None))
+    stories_no_units = await session.scalar(stmt)
+
+    # Units whose representative article is missing
+    stmt = (
+        select(func.count(ReportingUnit.id))
+        .outerjoin(RawArticle, RawArticle.id == ReportingUnit.representative_article_id)
+        .where(RawArticle.id.is_(None))
+    )
+    units_missing_rep = await session.scalar(stmt)
+
+    # Articles with no unit (D4: reporting_unit_id IS NULL)
+    stmt = select(func.count(RawArticle.id)).where(RawArticle.reporting_unit_id.is_(None))
+    articles_no_unit = await session.scalar(stmt)
+
+    counts = {
+        "raw_articles": raw_count,
+        "reporting_units": unit_count,
+        "story_unit_links": link_count,
+        "stories": story_count,
+        "stories_no_units": stories_no_units,
+        "units_missing_rep": units_missing_rep,
+        "articles_no_unit": articles_no_unit,
+    }
+
+    # ---- Per-day tables (all time, using created_at/fetched_at, enum .value) ----
+    # Stories per day (by created_at)
+    stmt = (
+        select(
+            func.date(Story.created_at).label("day"),
+            Story.status,
+            func.count(Story.id).label("count")
+        )
+        .group_by(func.date(Story.created_at), Story.status)
+        .order_by(func.date(Story.created_at).desc())
+    )
+    result = await session.execute(stmt)
+    stories_per_day = [
+        {"day": row.day, "status": row.status.value if hasattr(row.status, 'value') else str(row.status), "count": row.count}
+        for row in result.all()
+    ]
+
+    # Articles per day (by fetched_at)
+    stmt = (
+        select(
+            func.date(RawArticle.fetched_at).label("day"),
+            func.count(RawArticle.id).label("count")
+        )
+        .group_by(func.date(RawArticle.fetched_at))
+        .order_by(func.date(RawArticle.fetched_at).desc())
+    )
+    result = await session.execute(stmt)
+    articles_per_day = [
+        {"day": row.day, "status": "", "count": row.count}
+        for row in result.all()
+    ]
+
+    # Units per day (by created_at)
+    stmt = (
+        select(
+            func.date(ReportingUnit.created_at).label("day"),
+            func.count(ReportingUnit.id).label("count")
+        )
+        .group_by(func.date(ReportingUnit.created_at))
+        .order_by(func.date(ReportingUnit.created_at).desc())
+    )
+    result = await session.execute(stmt)
+    units_per_day = [
+        {"day": row.day, "status": "", "count": row.count}
+        for row in result.all()
+    ]
+
+    # Orphans per day: stories with no linked units, by created day and status
+    stmt = (
+        select(
+            func.date(Story.created_at).label("day"),
+            Story.status,
+            func.count(Story.id).label("count")
+        )
+        .outerjoin(StoryUnitLink, StoryUnitLink.story_id == Story.id)
+        .where(StoryUnitLink.id.is_(None))
+        .group_by(func.date(Story.created_at), Story.status)
+        .order_by(func.date(Story.created_at).desc())
+    )
+    result = await session.execute(stmt)
+    orphans_per_day = [
+        {"day": row.day, "status": row.status.value if hasattr(row.status, 'value') else str(row.status), "count": row.count}
+        for row in result.all()
+    ]
+
+    # ---- Story shape: all stories, all links, unit_info for D6 ----
+    stmt = select(Story)
+    result = await session.execute(stmt)
+    stories = result.scalars().all()
+
+    # Get unit -> source_tiers and tier1_owner_groups mapping
+    stmt = select(ReportingUnit.id, ReportingUnit.source_tiers, ReportingUnit.tier1_owner_groups)
+    result = await session.execute(stmt)
+    unit_info = {
+        str(row.id): {
+            "source_tiers": row.source_tiers or {},
+            "tier1_owner_groups": row.tier1_owner_groups or {},
+        }
+        for row in result
+    }
+
+    # Get story -> units mapping
+    stmt = select(StoryUnitLink.story_id, StoryUnitLink.unit_id)
+    result = await session.execute(stmt)
+    story_units = defaultdict(list)
+    for row in result:
+        story_units[str(row.story_id)].append(str(row.unit_id))
+
+    # Build story list for compute_story_metrics
+    story_list = [
+        {
+            "id": str(s.id),
+            "status": s.status.value if hasattr(s.status, 'value') else str(s.status),
+            "tier1_unit_count": s.tier1_unit_count,
+            "distinct_owners": s.distinct_owners,
+        }
+        for s in stories
+    ]
+
+    story_metrics = compute_story_metrics(story_list, story_units, unit_info)
+    story_summary = summarize_story_metrics(story_metrics)
+
+    # ---- Entity-set size per unit ----
+    # Fetch units with created_at >= now - (days*24 + 48) hours for D9
+    extended_cutoff = now - timedelta(hours=days * 24 + 48)
+    stmt = (
+        select(ReportingUnit.id, ReportingUnit.representative_article_id, ReportingUnit.created_at, ReportingUnit.day)
+        .where(ReportingUnit.created_at >= extended_cutoff)
+    )
+    result = await session.execute(stmt)
+    units = result.all()
+
+    unit_list = []
+    rep_article_ids = set()
+    for u in units:
+        unit_list.append({
+            "id": u.id,
+            "representative_article_id": u.representative_article_id,
+            "created_at": u.created_at,
+            "day": u.day,
+        })
+        rep_article_ids.add(str(u.representative_article_id))
+
+    stmt = select(RawArticle).where(RawArticle.id.in_(rep_article_ids))
+    result = await session.execute(stmt)
+    articles_dict = {
+        str(a.id): {"entities": a.entities, "title": a.title, "source_domain": a.source_domain, "fetched_at": a.fetched_at}
+        for a in result.scalars().all()
+    }
+
+    unit_entities = build_unit_entity_sets(unit_list, articles_dict)
+
+    # For section 4, only count units within the days window
+    recent_unit_list = [u for u in unit_list if u["created_at"] >= now - timedelta(days=days)]
+    recent_entity_sizes = [len(unit_entities.get(str(u["id"]), set())) for u in recent_unit_list]
+
+    if recent_entity_sizes:
+        min_size = min(recent_entity_sizes)
+        max_size = max(recent_entity_sizes)
+        median_size = sorted(recent_entity_sizes)[len(recent_entity_sizes) // 2]
+        empty_count = sum(1 for es in recent_entity_sizes if es == 0)
+    else:
+        min_size = max_size = median_size = empty_count = 0
+
+    entity_sizes = {
+        "min": min_size,
+        "median": median_size,
+        "max": max_size,
+        "empty_count": empty_count,
+    }
+
+    # ---- Cross-owner Jaccard ----
+    # Get unit -> owner_groups mapping for Jaccard
+    stmt = select(ReportingUnit.id, ReportingUnit.owner_groups)
+    result = await session.execute(stmt)
+    unit_owner_groups = {str(row.id): row.owner_groups or {} for row in result}
+
+    jaccard_result = compute_jaccard_histogram(
+        recent_unit_list, unit_entities, unit_owner_groups, articles_dict, days=days, hours_window=48, now=now
+    )
+
+    # ---- Duplicate titles ----
+    stmt = select(RawArticle).where(RawArticle.fetched_at >= now - timedelta(days=days))
+    result = await session.execute(stmt)
+    recent_articles = [{
+        "id": a.id,
+        "source_domain": a.source_domain,
+        "title": a.title,
+        "fetched_at": a.fetched_at,
+    } for a in result.scalars().all()]
+
+    duplicates = find_duplicate_titles(recent_articles)
+
+    return {
+        "counts": counts,
+        "stories_per_day": stories_per_day,
+        "articles_per_day": articles_per_day,
+        "units_per_day": units_per_day,
+        "orphans_per_day": orphans_per_day,
+        "story_summary": story_summary,
+        "entity_sizes": entity_sizes,
+        "jaccard": jaccard_result,
+        "duplicates": duplicates,
+    }
+
+
 async def run_audit(db_url: str, days: int = 3) -> str:
     """Run the full audit and return markdown output."""
     url, connect_args = prepare_database_url(db_url)
@@ -572,224 +805,21 @@ async def run_audit(db_url: str, days: int = 3) -> str:
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
-        # SET TRANSACTION READ ONLY
+        # SET TRANSACTION READ ONLY (first statement)
         await session.execute(text("SET TRANSACTION READ ONLY"))
 
         # Print DB host at startup (never credentials)
         host_info = f"{url.host}:{url.port}" if url.port else url.host
-        print(f"# Story Audit Report (last {days} days)")
-        print(f"")
-        print(f"**Database host:** {host_info}")
-        print(f"**Generated:** {datetime.now(timezone.utc).isoformat()}")
-        print(f"")
-        print(f"> **Note:** This audit uses approximate canonical IDs via `_normalize_text(surface, label)`")
-        print(f"> for PERSON/ORG/GPE only. This does not merge aliases, so it can understate production overlap.")
-        print(f"")
 
-        # 1. Counts
-        raw_count = await session.scalar(select(func.count(RawArticle.id)))
-        unit_count = await session.scalar(select(func.count(ReportingUnit.id)))
-        link_count = await session.scalar(select(func.count(StoryUnitLink.id)))
-        story_count = await session.scalar(select(func.count(Story.id)))
+        # Fetch all data
+        now = datetime.now(timezone.utc)
+        data = await fetch_audit_data(session, days, now=now)
 
-        # Stories with no linked units
-        stmt = select(func.count(Story.id)).outerjoin(StoryUnitLink).where(StoryUnitLink.id.is_(None))
-        stories_no_units = await session.scalar(stmt)
+        # Rollback (read-only transaction, but good practice)
+        await session.rollback()
 
-        # Units whose representative article is missing
-        stmt = (
-            select(func.count(ReportingUnit.id))
-            .outerjoin(RawArticle, RawArticle.id == ReportingUnit.representative_article_id)
-            .where(RawArticle.id.is_(None))
-        )
-        units_missing_rep = await session.scalar(stmt)
-
-        # Articles with no unit
-        stmt = (
-            select(func.count(RawArticle.id))
-            .outerjoin(ReportingUnit, ReportingUnit.representative_article_id == RawArticle.id)
-            .where(ReportingUnit.id.is_(None))
-        )
-        articles_no_unit = await session.scalar(stmt)
-
-        print(f"## 1. Counts")
-        print(f"")
-        print(f"| Metric | Count |")
-        print(f"|--------|-------|")
-        print(f"| raw_articles | {raw_count} |")
-        print(f"| reporting_units | {unit_count} |")
-        print(f"| story_unit_links | {link_count} |")
-        print(f"| stories | {story_count} |")
-        print(f"| stories with no linked units | {stories_no_units} |")
-        print(f"| units whose representative article is missing | {units_missing_rep} |")
-        print(f"| articles with no unit | {articles_no_unit} |")
-        print(f"")
-
-        # 2. Stories created per day, by status
-        stmt = (
-            select(
-                func.date(Story.day).label("day"),
-                Story.status,
-                func.count(Story.id).label("count")
-            )
-            .where(Story.day >= datetime.now(timezone.utc) - timedelta(days=days))
-            .group_by(func.date(Story.day), Story.status)
-            .order_by(func.date(Story.day).desc())
-        )
-        result = await session.execute(stmt)
-        daily_status = result.all()
-
-        print(f"## 2. Stories Created Per Day (last {days} days), by Status")
-        print(f"")
-        print(f"| Day | Status | Count |")
-        print(f"|-----|--------|-------|")
-        for row in daily_status:
-            print(f"| {row.day} | {row.status} | {row.count} |")
-        print(f"")
-
-        # 3. Stories by (linked-unit count, distinct owner-group count)
-        # Get all stories with their linked units and owner groups
-        stmt = (
-            select(Story)
-            .where(Story.day >= datetime.now(timezone.utc) - timedelta(days=days))
-        )
-        result = await session.execute(stmt)
-        stories = result.scalars().all()
-
-        # Get unit -> owner_groups mapping
-        stmt = select(ReportingUnit.id, ReportingUnit.owner_groups)
-        result = await session.execute(stmt)
-        unit_owner_groups = {str(row.id): row.owner_groups or {} for row in result}
-
-        # Get story -> units mapping
-        stmt = select(StoryUnitLink.story_id, StoryUnitLink.unit_id)
-        result = await session.execute(stmt)
-        story_units = defaultdict(list)
-        for row in result:
-            story_units[str(row.story_id)].append(str(row.unit_id))
-
-        # Compute actual counts vs stored
-        disagrees = 0
-        print(f"## 3. Stories by (Linked-Unit Count, Distinct Owner-Group Count)")
-        print(f"")
-        print(f"| Story ID | Linked Units | Distinct Owners | Stored tier1_unit_count | Stored distinct_owners | Match |")
-        print(f"|----------|--------------|-----------------|-------------------------|------------------------|-------|")
-        for story in stories:
-            linked = story_units.get(str(story.id), [])
-            all_owners = set()
-            for unit_id in linked:
-                all_owners.update(unit_owner_groups.get(unit_id, {}).keys())
-            actual_units = len(linked)
-            actual_owners = len(all_owners)
-            match = "✓" if (actual_units == story.tier1_unit_count and actual_owners == story.distinct_owners) else "✗"
-            if match == "✗":
-                disagrees += 1
-            print(f"| {str(story.id)[:8]} | {actual_units} | {actual_owners} | {story.tier1_unit_count} | {story.distinct_owners} | {match} |")
-        print(f"")
-        print(f"**Rows that disagree:** {disagrees}")
-        print(f"")
-
-        # 4. Entity-set size per unit (min / median / max)
-        # Get all units and their representative articles
-        stmt = (
-            select(ReportingUnit.id, ReportingUnit.representative_article_id, ReportingUnit.created_at, ReportingUnit.day)
-            .where(ReportingUnit.day >= datetime.now(timezone.utc) - timedelta(days=days))
-        )
-        result = await session.execute(stmt)
-        units = result.all()
-
-        unit_list = []
-        rep_article_ids = set()
-        for u in units:
-            unit_list.append({
-                "id": u.id,
-                "representative_article_id": u.representative_article_id,
-                "created_at": u.created_at,
-                "day": u.day,
-            })
-            rep_article_ids.add(str(u.representative_article_id))
-
-        stmt = select(RawArticle).where(RawArticle.id.in_(rep_article_ids))
-        result = await session.execute(stmt)
-        articles_dict = {str(a.id): {"entities": a.entities, "title": a.title, "source_domain": a.source_domain, "fetched_at": a.fetched_at} for a in result.scalars().all()}
-
-        unit_entities = build_unit_entity_sets(unit_list, articles_dict)
-        entity_sizes = [len(es) for es in unit_entities.values()]
-
-        if entity_sizes:
-            min_size = min(entity_sizes)
-            max_size = max(entity_sizes)
-            median_size = sorted(entity_sizes)[len(entity_sizes) // 2]
-        else:
-            min_size = max_size = median_size = 0
-
-        print(f"## 4. Entity-Set Size Per Unit (last {days} days)")
-        print(f"")
-        print(f"| Metric | Value |")
-        print(f"|--------|-------|")
-        print(f"| Min | {min_size} |")
-        print(f"| Median | {median_size} |")
-        print(f"| Max | {max_size} |")
-        print(f"")
-
-        # 5. Near-miss Jaccard analysis (48h window, disjoint owners)
-        jaccard_result = compute_jaccard_histogram(
-            unit_list, unit_entities, unit_owner_groups, articles_dict, days=days
-        )
-        histogram = jaccard_result["histogram"]
-        near_misses = jaccard_result["near_misses"]
-        jaccard_stats = jaccard_result["stats"]
-
-        print(f"## 5. Near-Miss Jaccard Analysis (last {days} days, 48h window, disjoint owners)")
-        print(f"")
-        print(f"### Histogram (0.1 buckets)")
-        print(f"")
-        print(format_histogram(histogram))
-        print(f"")
-        print(f"### Top 25 Near-Misses in [0.2, 0.4)")
-        print(f"")
-        print(format_near_misses(near_misses))
-        print(f"")
-
-        # 6. Duplicate (source_domain, title)
-        stmt = select(RawArticle).where(RawArticle.fetched_at >= datetime.now(timezone.utc) - timedelta(days=days))
-        result = await session.execute(stmt)
-        recent_articles = [{
-            "id": a.id,
-            "source_domain": a.source_domain,
-            "title": a.title,
-            "fetched_at": a.fetched_at,
-        } for a in result.scalars().all()]
-
-        duplicates = find_duplicate_titles(recent_articles)
-
-        print(f"## 6. Duplicate (source_domain, title) in last {days} days")
-        print(f"")
-        if duplicates:
-            print(f"| Source Domain | Title | Count | Fetched At Range |")
-            print(f"|---------------|-------|-------|------------------|")
-            for dup in duplicates:
-                title_short = dup["title"][:80] + "..." if len(dup["title"]) > 80 else dup["title"]
-                print(f"| {dup['source_domain']} | {title_short} | {dup['count']} | {dup['fetched_at_range']} |")
-        else:
-            print("No duplicates found.")
-        print(f"")
-
-        # Build full markdown output
-        markdown_output = []
-        markdown_output.append(f"# Story Audit Report (last {days} days)")
-        markdown_output.append(f"")
-        markdown_output.append(f"**Database host:** {host_info}")
-        markdown_output.append(f"**Generated:** {datetime.now(timezone.utc).isoformat()}")
-        markdown_output.append(f"")
-        markdown_output.append(f"> **Note:** This audit uses approximate canonical IDs via `_normalize_text(surface, label)`")
-        markdown_output.append(f"> for PERSON/ORG/GPE only. This does not merge aliases, so it can understate production overlap.")
-        markdown_output.append(f"")
-
-        # Re-construct full output
-        # ... (similar to above but collected)
-
-        return "\n".join(markdown_output)
+    # Build and return the complete report
+    return build_report(data, days, host_info, now=now)
 
 
 def main():

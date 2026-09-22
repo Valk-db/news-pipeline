@@ -440,6 +440,35 @@ class TestBuildReport:
         assert "No duplicates found." in result
 
 
+class TestNoPrintInDataLayer:
+    """Test that data layer functions don't contain print statements."""
+
+    def test_no_print_in_data_layer(self):
+        """No print() calls inside run_audit or fetch_audit_data."""
+        import ast
+
+        with open("scripts/story_audit.py", "r") as f:
+            source = f.read()
+
+        tree = ast.parse(source)
+
+        class PrintVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.prints_in_data_layer = []
+
+            def visit_FunctionDef(self, node):
+                if node.name in ("run_audit", "fetch_audit_data"):
+                    for child in ast.walk(node):
+                        if isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "print":
+                            self.prints_in_data_layer.append((node.name, child.lineno))
+                self.generic_visit(node)
+
+        visitor = PrintVisitor()
+        visitor.visit(tree)
+
+        assert not visitor.prints_in_data_layer, f"Found print() in data layer: {visitor.prints_in_data_layer}"
+
+
 class TestComputeJaccardHistogram:
     """Test compute_jaccard_histogram function."""
 
