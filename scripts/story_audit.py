@@ -78,11 +78,12 @@ def compute_jaccard_histogram(
     unit_owner_groups: Dict[str, Dict[str, int]],
     articles: Dict[str, Dict[str, Any]],
     days: int = 3,
+    hours_window: int = 48,
     now: datetime | None = None
 ) -> Dict[str, Any]:
     """
     For units created in last N days: best Jaccard vs units with disjoint owner groups
-    within 48h. Returns dict with histogram, near_misses, and stats.
+    within hours_window. Returns dict with histogram, near_misses, and stats.
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -102,6 +103,7 @@ def compute_jaccard_histogram(
         "units_with_no_entities": 0,
         "units_with_no_candidates": 0,
         "zero_overlap_pairs": 0,
+        "would_attach": 0,
     }
 
     # Dedup set for near-misses: frozenset({a,b}) -> max jaccard entry
@@ -133,9 +135,9 @@ def compute_jaccard_histogram(
             if owners_a & owners_b:
                 continue
 
-            # Check within 48h
+            # Check within hours_window
             time_diff = abs((unit_a["created_at"] - unit_b["created_at"]).total_seconds())
-            if time_diff > 48 * 3600:
+            if time_diff > hours_window * 3600:
                 continue
 
             entities_b = unit_entities.get(unit_b_id, set())
@@ -155,6 +157,10 @@ def compute_jaccard_histogram(
 
         if not has_candidate:
             stats["units_with_no_candidates"] += 1
+
+        # Track would_attach: best Jaccard >= 0.4
+        if best_jaccard >= 0.4:
+            stats["would_attach"] += 1
 
         # Always bucket (including 0.0)
         bucket = bucket_for(best_jaccard)
@@ -235,8 +241,562 @@ def format_near_misses(near_misses: List[Dict[str, Any]]) -> str:
 
 
 # =============================================================================
+# Step C: Story metrics (pure functions)
+# =============================================================================
+
+def compute_story_metrics(
+    stories: List[Dict[str, Any]],
+    story_units: Dict[str, List[str]],
+    unit_info: Dict[str, Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Compute per-story metrics comparing stored vs computed values.
+
+    Args:
+        stories: List of dicts with {id, status, tier1_unit_count, distinct_owners}
+        story_units: Dict story_id -> list of unit ids
+        unit_info: Dict unit_id -> {"source_tiers": {...}, "tier1_owner_groups": {...}}
+
+    Returns:
+        List of dicts with computed and stored metrics, plus mismatch flag.
+    """
+    metrics = []
+    for story in stories:
+        story_id = str(story["id"])
+        linked_units = story_units.get(story_id, [])
+
+        # Compute tier1 count: sum of source_tiers["tier1"] over linked units
+        computed_tier1_count = 0
+        all_tier1_owners = set()
+        for unit_id in linked_units:
+            info = unit_info.get(unit_id, {})
+            computed_tier1_count += info.get("source_tiers", {}).get("tier1", 0)
+            all_tier1_owners.update(info.get("tier1_owner_groups", {}).keys())
+
+        computed_distinct_owners = len(all_tier1_owners)
+        stored_tier1_count = story.get("tier1_unit_count", 0)
+        stored_distinct_owners = story.get("distinct_owners", 0)
+
+        mismatch = (computed_tier1_count != stored_tier1_count) or (computed_distinct_owners != stored_distinct_owners)
+
+        metrics.append({
+            "id": story_id,
+            "status": story.get("status", ""),
+            "linked_units": len(linked_units),
+            "computed_tier1_count": computed_tier1_count,
+            "computed_distinct_owners": computed_distinct_owners,
+            "stored_tier1_count": stored_tier1_count,
+            "stored_distinct_owners": stored_distinct_owners,
+            "mismatch": mismatch,
+        })
+    return metrics
+
+
+def summarize_story_metrics(
+    metrics: List[Dict[str, Any]],
+    max_examples: int = 10
+) -> Dict[str, Any]:
+    """
+    Summarize story metrics into crosstab, statuses, mismatch count, and examples.
+
+    Returns:
+        Dict with keys: crosstab, statuses, mismatch_count, examples
+    """
+    # Build crosstab: {(linked_units, computed_distinct_owners): {status: count}}
+    crosstab = defaultdict(lambda: defaultdict(int))
+    statuses_set = set()
+    mismatch_count = 0
+    mismatch_examples = []
+
+    for m in metrics:
+        key = (m["linked_units"], m["computed_distinct_owners"])
+        crosstab[key][m["status"]] += 1
+        statuses_set.add(m["status"])
+
+        if m["mismatch"]:
+            mismatch_count += 1
+            if len(mismatch_examples) < max_examples:
+                mismatch_examples.append({
+                    "story_id": m["id"],
+                    "linked_units": m["linked_units"],
+                    "computed_tier1_count": m["computed_tier1_count"],
+                    "computed_distinct_owners": m["computed_distinct_owners"],
+                    "stored_tier1_count": m["stored_tier1_count"],
+                    "stored_distinct_owners": m["stored_distinct_owners"],
+                })
+
+    # Convert crosstab to regular dict
+    crosstab_dict = {k: dict(v) for k, v in crosstab.items()}
+    statuses = sorted(statuses_set)
+
+    return {
+        "crosstab": crosstab_dict,
+        "statuses": statuses,
+        "mismatch_count": mismatch_count,
+        "examples": mismatch_examples,
+    }
+
+
+# =============================================================================
+# Step D: Report assembly (pure functions)
+# =============================================================================
+
+def format_crosstab(summary: Dict[str, Any]) -> str:
+    """Format the crosstab as a markdown table."""
+    crosstab = summary.get("crosstab", {})
+    statuses = summary.get("statuses", [])
+
+    if not crosstab:
+        return "No stories."
+
+    # Build header
+    header = "| Linked Units | Tier-1 Owners |"
+    for status in statuses:
+        header += f" {status} |"
+    header += " Total |"
+
+    separator = "|--------------|---------------|"
+    for _ in statuses:
+        separator += "-------|"
+    separator += "-------|"
+
+    lines = [header, separator]
+
+    # Sort keys for consistent output
+    for key in sorted(crosstab.keys()):
+        linked, owners = key
+        row = f"| {linked} | {owners} |"
+        total = 0
+        for status in statuses:
+            count = crosstab[key].get(status, 0)
+            row += f" {count} |"
+            total += count
+        row += f" {total} |"
+        lines.append(row)
+
+    return "\n".join(lines)
+
+
+def format_per_day(rows: List[Dict[str, Any]], title: str) -> str:
+    """Format per-day counts as a markdown table."""
+    if not rows:
+        return f"### {title}\n\nNo data."
+
+    # Group by day and status
+    day_status = defaultdict(lambda: defaultdict(int))
+    all_statuses = set()
+    for row in rows:
+        day = row.get("day")
+        status = row.get("status", "")
+        count = row.get("count", 0)
+        if day:
+            day_status[str(day)][status] += count
+            all_statuses.add(status)
+
+    if not day_status:
+        return f"### {title}\n\nNo data."
+
+    statuses = sorted(all_statuses)
+
+    lines = [f"### {title}", ""]
+    header = "| Day |"
+    for s in statuses:
+        header += f" {s} |"
+    header += " Total |"
+
+    separator = "|-----|"
+    for _ in statuses:
+        separator += "-------|"
+    separator += "-------|"
+
+    lines.append(header)
+    lines.append(separator)
+
+    for day in sorted(day_status.keys(), reverse=True):
+        row = f"| {day} |"
+        total = 0
+        for s in statuses:
+            count = day_status[day].get(s, 0)
+            row += f" {count} |"
+            total += count
+        row += f" {total} |"
+        lines.append(row)
+
+    return "\n".join(lines)
+
+
+def build_report(data: Dict[str, Any], days: int, host: str, now: datetime | None = None) -> str:
+    """
+    Build the complete markdown report.
+
+    Expected data keys:
+    - counts: dict with raw_articles, reporting_units, story_unit_links, stories,
+              stories_no_units, units_missing_rep, articles_no_unit
+    - stories_per_day: list of {day, status, count}
+    - articles_per_day: list of {day, count}
+    - units_per_day: list of {day, count}
+    - orphans_per_day: list of {day, status, count} (stories with no linked units)
+    - story_summary: dict with crosstab, statuses, mismatch_count, examples
+    - entity_sizes: dict with min, median, max, empty_count
+    - jaccard: dict with histogram, near_misses, stats (from compute_jaccard_histogram)
+    - duplicates: list of duplicate title dicts
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    lines = []
+
+    # Header
+    lines.append(f"# Story Audit Report (last {days} days)")
+    lines.append("")
+    lines.append(f"**Database host:** {host}")
+    lines.append(f"**Generated:** {now.isoformat()}")
+    lines.append("")
+    lines.append("> **Note:** This audit uses approximate canonical IDs via `_normalize_text(surface, label)`")
+    lines.append("> for PERSON/ORG/GPE only. This does not merge aliases, so it can understate production overlap.")
+    lines.append("")
+
+    # Section 1: Counts
+    counts = data.get("counts", {})
+    lines.append("## 1. Counts")
+    lines.append("")
+    lines.append("| Metric | Count |")
+    lines.append("|--------|-------|")
+    lines.append(f"| raw_articles | {counts.get('raw_articles', 0)} |")
+    lines.append(f"| reporting_units | {counts.get('reporting_units', 0)} |")
+    lines.append(f"| story_unit_links | {counts.get('story_unit_links', 0)} |")
+    lines.append(f"| stories | {counts.get('stories', 0)} |")
+    lines.append(f"| stories with no linked units | {counts.get('stories_no_units', 0)} |")
+    lines.append(f"| units whose representative article is missing | {counts.get('units_missing_rep', 0)} |")
+    lines.append(f"| articles with no unit | {counts.get('articles_no_unit', 0)} |")
+    lines.append("")
+
+    # Section 2: Per-day activity (all time)
+    lines.append("## 2. Per-day activity (all time)")
+    lines.append("")
+    lines.append(format_per_day(data.get("stories_per_day", []), "Stories Created"))
+    lines.append("")
+    lines.append(format_per_day(data.get("articles_per_day", []), "Articles Fetched"))
+    lines.append("")
+    lines.append(format_per_day(data.get("units_per_day", []), "Units Created"))
+    lines.append("")
+    lines.append(format_per_day(data.get("orphans_per_day", []), "Stories with No Linked Units (by created day, status)"))
+    lines.append("")
+
+    # Section 3: Story shape
+    story_summary = data.get("story_summary", {})
+    lines.append("## 3. Story shape: linked units x tier-1 owners")
+    lines.append("")
+    lines.append(format_crosstab(story_summary))
+    lines.append("")
+    lines.append(f"**Mismatching rows (stored vs computed):** {story_summary.get('mismatch_count', 0)}")
+    lines.append("")
+    if story_summary.get("examples"):
+        lines.append("### Mismatch Examples")
+        lines.append("")
+        lines.append("| Story ID | Linked Units | Computed Tier-1 | Computed Owners | Stored Tier-1 | Stored Owners |")
+        lines.append("|----------|--------------|-----------------|-----------------|---------------|---------------|")
+        for ex in story_summary["examples"]:
+            lines.append(
+                f"| {ex['story_id'][:8]} | {ex['linked_units']} | "
+                f"{ex['computed_tier1_count']} | {ex['computed_distinct_owners']} | "
+                f"{ex['stored_tier1_count']} | {ex['stored_distinct_owners']} |"
+            )
+        lines.append("")
+
+    # Section 4: Entity-set size
+    entity_sizes = data.get("entity_sizes", {})
+    lines.append("## 4. Entity-set size per unit")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Min | {entity_sizes.get('min', 0)} |")
+    lines.append(f"| Median | {entity_sizes.get('median', 0)} |")
+    lines.append(f"| Max | {entity_sizes.get('max', 0)} |")
+    lines.append(f"| Units with empty set | {entity_sizes.get('empty_count', 0)} |")
+    lines.append("")
+
+    # Section 5: Cross-owner Jaccard
+    jaccard = data.get("jaccard", {})
+    histogram = jaccard.get("histogram", {})
+    near_misses = jaccard.get("near_misses", [])
+    jaccard_stats = jaccard.get("stats", {})
+
+    lines.append("## 5. Cross-owner Jaccard")
+    lines.append("")
+    lines.append("### Histogram (0.1 buckets)")
+    lines.append("")
+    lines.append(format_histogram(histogram))
+    lines.append("")
+    lines.append("### Stats")
+    lines.append("")
+    lines.append("| Stat | Value |")
+    lines.append("|------|-------|")
+    lines.append(f"| Total recent units | {jaccard_stats.get('total_recent_units', 0)} |")
+    lines.append(f"| Units with entities | {jaccard_stats.get('units_with_entities', 0)} |")
+    lines.append(f"| Units with no entities | {jaccard_stats.get('units_with_no_entities', 0)} |")
+    lines.append(f"| Units with no candidates | {jaccard_stats.get('units_with_no_candidates', 0)} |")
+    lines.append(f"| Zero-overlap pairs | {jaccard_stats.get('zero_overlap_pairs', 0)} |")
+    lines.append(f"| Would attach (Jaccard >= 0.4) | {jaccard_stats.get('would_attach', 0)} |")
+    lines.append("")
+    lines.append("### Top 25 Near-Misses in [0.2, 0.4)")
+    lines.append("")
+    lines.append(format_near_misses(near_misses))
+    lines.append("")
+
+    # Section 6: Duplicate titles
+    duplicates = data.get("duplicates", [])
+    lines.append("## 6. Duplicate (source_domain, title)")
+    lines.append("")
+    if duplicates:
+        lines.append("| Source Domain | Title | Count | Fetched At Range |")
+        lines.append("|---------------|-------|-------|------------------|")
+        for dup in duplicates[:25]:
+            title_short = dup["title"][:80] + "..." if len(dup["title"]) > 80 else dup["title"]
+            lines.append(f"| {dup['source_domain']} | {title_short} | {dup['count']} | {dup['fetched_at_range']} |")
+    else:
+        lines.append("No duplicates found.")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+# =============================================================================
 # Database access layer (thin)
 # =============================================================================
+
+async def fetch_audit_data(session: AsyncSession, days: int, now: datetime | None = None) -> Dict[str, Any]:
+    """
+    Fetch all data needed for the audit using SELECT-only statements.
+
+    Returns a dict with keys:
+    - counts
+    - stories_per_day, articles_per_day, units_per_day, orphans_per_day
+    - story_summary
+    - entity_sizes
+    - jaccard
+    - duplicates
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    # ---- Counts ----
+    raw_count = await session.scalar(select(func.count(RawArticle.id)))
+    unit_count = await session.scalar(select(func.count(ReportingUnit.id)))
+    link_count = await session.scalar(select(func.count(StoryUnitLink.id)))
+    story_count = await session.scalar(select(func.count(Story.id)))
+
+    # Stories with no linked units
+    stmt = select(func.count(Story.id)).outerjoin(StoryUnitLink).where(StoryUnitLink.id.is_(None))
+    stories_no_units = await session.scalar(stmt)
+
+    # Units whose representative article is missing
+    stmt = (
+        select(func.count(ReportingUnit.id))
+        .outerjoin(RawArticle, RawArticle.id == ReportingUnit.representative_article_id)
+        .where(RawArticle.id.is_(None))
+    )
+    units_missing_rep = await session.scalar(stmt)
+
+    # Articles with no unit (D4: reporting_unit_id IS NULL)
+    stmt = select(func.count(RawArticle.id)).where(RawArticle.reporting_unit_id.is_(None))
+    articles_no_unit = await session.scalar(stmt)
+
+    counts = {
+        "raw_articles": raw_count,
+        "reporting_units": unit_count,
+        "story_unit_links": link_count,
+        "stories": story_count,
+        "stories_no_units": stories_no_units,
+        "units_missing_rep": units_missing_rep,
+        "articles_no_unit": articles_no_unit,
+    }
+
+    # ---- Per-day tables (all time, using created_at/fetched_at, enum .value) ----
+    # Stories per day (by created_at)
+    stmt = (
+        select(
+            func.date(Story.created_at).label("day"),
+            Story.status,
+            func.count(Story.id).label("count")
+        )
+        .group_by(func.date(Story.created_at), Story.status)
+        .order_by(func.date(Story.created_at).desc())
+    )
+    result = await session.execute(stmt)
+    stories_per_day = [
+        {"day": row.day, "status": row.status.value if hasattr(row.status, 'value') else str(row.status), "count": row.count}
+        for row in result.all()
+    ]
+
+    # Articles per day (by fetched_at)
+    stmt = (
+        select(
+            func.date(RawArticle.fetched_at).label("day"),
+            func.count(RawArticle.id).label("count")
+        )
+        .group_by(func.date(RawArticle.fetched_at))
+        .order_by(func.date(RawArticle.fetched_at).desc())
+    )
+    result = await session.execute(stmt)
+    articles_per_day = [
+        {"day": row.day, "status": "", "count": row.count}
+        for row in result.all()
+    ]
+
+    # Units per day (by created_at)
+    stmt = (
+        select(
+            func.date(ReportingUnit.created_at).label("day"),
+            func.count(ReportingUnit.id).label("count")
+        )
+        .group_by(func.date(ReportingUnit.created_at))
+        .order_by(func.date(ReportingUnit.created_at).desc())
+    )
+    result = await session.execute(stmt)
+    units_per_day = [
+        {"day": row.day, "status": "", "count": row.count}
+        for row in result.all()
+    ]
+
+    # Orphans per day: stories with no linked units, by created day and status
+    stmt = (
+        select(
+            func.date(Story.created_at).label("day"),
+            Story.status,
+            func.count(Story.id).label("count")
+        )
+        .outerjoin(StoryUnitLink, StoryUnitLink.story_id == Story.id)
+        .where(StoryUnitLink.id.is_(None))
+        .group_by(func.date(Story.created_at), Story.status)
+        .order_by(func.date(Story.created_at).desc())
+    )
+    result = await session.execute(stmt)
+    orphans_per_day = [
+        {"day": row.day, "status": row.status.value if hasattr(row.status, 'value') else str(row.status), "count": row.count}
+        for row in result.all()
+    ]
+
+    # ---- Story shape: all stories, all links, unit_info for D6 ----
+    stmt = select(Story)
+    result = await session.execute(stmt)
+    stories = result.scalars().all()
+
+    # Get unit -> source_tiers and tier1_owner_groups mapping
+    stmt = select(ReportingUnit.id, ReportingUnit.source_tiers, ReportingUnit.tier1_owner_groups)
+    result = await session.execute(stmt)
+    unit_info = {
+        str(row.id): {
+            "source_tiers": row.source_tiers or {},
+            "tier1_owner_groups": row.tier1_owner_groups or {},
+        }
+        for row in result
+    }
+
+    # Get story -> units mapping
+    stmt = select(StoryUnitLink.story_id, StoryUnitLink.unit_id)
+    result = await session.execute(stmt)
+    story_units = defaultdict(list)
+    for row in result:
+        story_units[str(row.story_id)].append(str(row.unit_id))
+
+    # Build story list for compute_story_metrics
+    story_list = [
+        {
+            "id": str(s.id),
+            "status": s.status.value if hasattr(s.status, 'value') else str(s.status),
+            "tier1_unit_count": s.tier1_unit_count,
+            "distinct_owners": s.distinct_owners,
+        }
+        for s in stories
+    ]
+
+    story_metrics = compute_story_metrics(story_list, story_units, unit_info)
+    story_summary = summarize_story_metrics(story_metrics)
+
+    # ---- Entity-set size per unit ----
+    # Fetch units with created_at >= now - (days*24 + 48) hours for D9
+    extended_cutoff = now - timedelta(hours=days * 24 + 48)
+    stmt = (
+        select(ReportingUnit.id, ReportingUnit.representative_article_id, ReportingUnit.created_at, ReportingUnit.day)
+        .where(ReportingUnit.created_at >= extended_cutoff)
+    )
+    result = await session.execute(stmt)
+    units = result.all()
+
+    unit_list = []
+    rep_article_ids = set()
+    for u in units:
+        unit_list.append({
+            "id": u.id,
+            "representative_article_id": u.representative_article_id,
+            "created_at": u.created_at,
+            "day": u.day,
+        })
+        rep_article_ids.add(str(u.representative_article_id))
+
+    stmt = select(RawArticle).where(RawArticle.id.in_(rep_article_ids))
+    result = await session.execute(stmt)
+    articles_dict = {
+        str(a.id): {"entities": a.entities, "title": a.title, "source_domain": a.source_domain, "fetched_at": a.fetched_at}
+        for a in result.scalars().all()
+    }
+
+    unit_entities = build_unit_entity_sets(unit_list, articles_dict)
+
+    # For section 4, only count units within the days window
+    recent_unit_list = [u for u in unit_list if u["created_at"] >= now - timedelta(days=days)]
+    recent_entity_sizes = [len(unit_entities.get(str(u["id"]), set())) for u in recent_unit_list]
+
+    if recent_entity_sizes:
+        min_size = min(recent_entity_sizes)
+        max_size = max(recent_entity_sizes)
+        median_size = sorted(recent_entity_sizes)[len(recent_entity_sizes) // 2]
+        empty_count = sum(1 for es in recent_entity_sizes if es == 0)
+    else:
+        min_size = max_size = median_size = empty_count = 0
+
+    entity_sizes = {
+        "min": min_size,
+        "median": median_size,
+        "max": max_size,
+        "empty_count": empty_count,
+    }
+
+    # ---- Cross-owner Jaccard ----
+    # Get unit -> owner_groups mapping for Jaccard
+    stmt = select(ReportingUnit.id, ReportingUnit.owner_groups)
+    result = await session.execute(stmt)
+    unit_owner_groups = {str(row.id): row.owner_groups or {} for row in result}
+
+    jaccard_result = compute_jaccard_histogram(
+        recent_unit_list, unit_entities, unit_owner_groups, articles_dict, days=days, hours_window=48, now=now
+    )
+
+    # ---- Duplicate titles ----
+    stmt = select(RawArticle).where(RawArticle.fetched_at >= now - timedelta(days=days))
+    result = await session.execute(stmt)
+    recent_articles = [{
+        "id": a.id,
+        "source_domain": a.source_domain,
+        "title": a.title,
+        "fetched_at": a.fetched_at,
+    } for a in result.scalars().all()]
+
+    duplicates = find_duplicate_titles(recent_articles)
+
+    return {
+        "counts": counts,
+        "stories_per_day": stories_per_day,
+        "articles_per_day": articles_per_day,
+        "units_per_day": units_per_day,
+        "orphans_per_day": orphans_per_day,
+        "story_summary": story_summary,
+        "entity_sizes": entity_sizes,
+        "jaccard": jaccard_result,
+        "duplicates": duplicates,
+    }
+
 
 async def run_audit(db_url: str, days: int = 3) -> str:
     """Run the full audit and return markdown output."""
@@ -245,224 +805,21 @@ async def run_audit(db_url: str, days: int = 3) -> str:
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
-        # SET TRANSACTION READ ONLY
+        # SET TRANSACTION READ ONLY (first statement)
         await session.execute(text("SET TRANSACTION READ ONLY"))
 
         # Print DB host at startup (never credentials)
         host_info = f"{url.host}:{url.port}" if url.port else url.host
-        print(f"# Story Audit Report (last {days} days)")
-        print(f"")
-        print(f"**Database host:** {host_info}")
-        print(f"**Generated:** {datetime.now(timezone.utc).isoformat()}")
-        print(f"")
-        print(f"> **Note:** This audit uses approximate canonical IDs via `_normalize_text(surface, label)`")
-        print(f"> for PERSON/ORG/GPE only. This does not merge aliases, so it can understate production overlap.")
-        print(f"")
 
-        # 1. Counts
-        raw_count = await session.scalar(select(func.count(RawArticle.id)))
-        unit_count = await session.scalar(select(func.count(ReportingUnit.id)))
-        link_count = await session.scalar(select(func.count(StoryUnitLink.id)))
-        story_count = await session.scalar(select(func.count(Story.id)))
+        # Fetch all data
+        now = datetime.now(timezone.utc)
+        data = await fetch_audit_data(session, days, now=now)
 
-        # Stories with no linked units
-        stmt = select(func.count(Story.id)).outerjoin(StoryUnitLink).where(StoryUnitLink.id.is_(None))
-        stories_no_units = await session.scalar(stmt)
+        # Rollback (read-only transaction, but good practice)
+        await session.rollback()
 
-        # Units whose representative article is missing
-        stmt = (
-            select(func.count(ReportingUnit.id))
-            .outerjoin(RawArticle, RawArticle.id == ReportingUnit.representative_article_id)
-            .where(RawArticle.id.is_(None))
-        )
-        units_missing_rep = await session.scalar(stmt)
-
-        # Articles with no unit
-        stmt = (
-            select(func.count(RawArticle.id))
-            .outerjoin(ReportingUnit, ReportingUnit.representative_article_id == RawArticle.id)
-            .where(ReportingUnit.id.is_(None))
-        )
-        articles_no_unit = await session.scalar(stmt)
-
-        print(f"## 1. Counts")
-        print(f"")
-        print(f"| Metric | Count |")
-        print(f"|--------|-------|")
-        print(f"| raw_articles | {raw_count} |")
-        print(f"| reporting_units | {unit_count} |")
-        print(f"| story_unit_links | {link_count} |")
-        print(f"| stories | {story_count} |")
-        print(f"| stories with no linked units | {stories_no_units} |")
-        print(f"| units whose representative article is missing | {units_missing_rep} |")
-        print(f"| articles with no unit | {articles_no_unit} |")
-        print(f"")
-
-        # 2. Stories created per day, by status
-        stmt = (
-            select(
-                func.date(Story.day).label("day"),
-                Story.status,
-                func.count(Story.id).label("count")
-            )
-            .where(Story.day >= datetime.now(timezone.utc) - timedelta(days=days))
-            .group_by(func.date(Story.day), Story.status)
-            .order_by(func.date(Story.day).desc())
-        )
-        result = await session.execute(stmt)
-        daily_status = result.all()
-
-        print(f"## 2. Stories Created Per Day (last {days} days), by Status")
-        print(f"")
-        print(f"| Day | Status | Count |")
-        print(f"|-----|--------|-------|")
-        for row in daily_status:
-            print(f"| {row.day} | {row.status} | {row.count} |")
-        print(f"")
-
-        # 3. Stories by (linked-unit count, distinct owner-group count)
-        # Get all stories with their linked units and owner groups
-        stmt = (
-            select(Story)
-            .where(Story.day >= datetime.now(timezone.utc) - timedelta(days=days))
-        )
-        result = await session.execute(stmt)
-        stories = result.scalars().all()
-
-        # Get unit -> owner_groups mapping
-        stmt = select(ReportingUnit.id, ReportingUnit.owner_groups)
-        result = await session.execute(stmt)
-        unit_owner_groups = {str(row.id): row.owner_groups or {} for row in result}
-
-        # Get story -> units mapping
-        stmt = select(StoryUnitLink.story_id, StoryUnitLink.unit_id)
-        result = await session.execute(stmt)
-        story_units = defaultdict(list)
-        for row in result:
-            story_units[str(row.story_id)].append(str(row.unit_id))
-
-        # Compute actual counts vs stored
-        disagrees = 0
-        print(f"## 3. Stories by (Linked-Unit Count, Distinct Owner-Group Count)")
-        print(f"")
-        print(f"| Story ID | Linked Units | Distinct Owners | Stored tier1_unit_count | Stored distinct_owners | Match |")
-        print(f"|----------|--------------|-----------------|-------------------------|------------------------|-------|")
-        for story in stories:
-            linked = story_units.get(str(story.id), [])
-            all_owners = set()
-            for unit_id in linked:
-                all_owners.update(unit_owner_groups.get(unit_id, {}).keys())
-            actual_units = len(linked)
-            actual_owners = len(all_owners)
-            match = "✓" if (actual_units == story.tier1_unit_count and actual_owners == story.distinct_owners) else "✗"
-            if match == "✗":
-                disagrees += 1
-            print(f"| {str(story.id)[:8]} | {actual_units} | {actual_owners} | {story.tier1_unit_count} | {story.distinct_owners} | {match} |")
-        print(f"")
-        print(f"**Rows that disagree:** {disagrees}")
-        print(f"")
-
-        # 4. Entity-set size per unit (min / median / max)
-        # Get all units and their representative articles
-        stmt = (
-            select(ReportingUnit.id, ReportingUnit.representative_article_id, ReportingUnit.created_at, ReportingUnit.day)
-            .where(ReportingUnit.day >= datetime.now(timezone.utc) - timedelta(days=days))
-        )
-        result = await session.execute(stmt)
-        units = result.all()
-
-        unit_list = []
-        rep_article_ids = set()
-        for u in units:
-            unit_list.append({
-                "id": u.id,
-                "representative_article_id": u.representative_article_id,
-                "created_at": u.created_at,
-                "day": u.day,
-            })
-            rep_article_ids.add(str(u.representative_article_id))
-
-        stmt = select(RawArticle).where(RawArticle.id.in_(rep_article_ids))
-        result = await session.execute(stmt)
-        articles_dict = {str(a.id): {"entities": a.entities, "title": a.title, "source_domain": a.source_domain, "fetched_at": a.fetched_at} for a in result.scalars().all()}
-
-        unit_entities = build_unit_entity_sets(unit_list, articles_dict)
-        entity_sizes = [len(es) for es in unit_entities.values()]
-
-        if entity_sizes:
-            min_size = min(entity_sizes)
-            max_size = max(entity_sizes)
-            median_size = sorted(entity_sizes)[len(entity_sizes) // 2]
-        else:
-            min_size = max_size = median_size = 0
-
-        print(f"## 4. Entity-Set Size Per Unit (last {days} days)")
-        print(f"")
-        print(f"| Metric | Value |")
-        print(f"|--------|-------|")
-        print(f"| Min | {min_size} |")
-        print(f"| Median | {median_size} |")
-        print(f"| Max | {max_size} |")
-        print(f"")
-
-        # 5. Near-miss Jaccard analysis (48h window, disjoint owners)
-        jaccard_result = compute_jaccard_histogram(
-            unit_list, unit_entities, unit_owner_groups, articles_dict, days=days
-        )
-        histogram = jaccard_result["histogram"]
-        near_misses = jaccard_result["near_misses"]
-        jaccard_stats = jaccard_result["stats"]
-
-        print(f"## 5. Near-Miss Jaccard Analysis (last {days} days, 48h window, disjoint owners)")
-        print(f"")
-        print(f"### Histogram (0.1 buckets)")
-        print(f"")
-        print(format_histogram(histogram))
-        print(f"")
-        print(f"### Top 25 Near-Misses in [0.2, 0.4)")
-        print(f"")
-        print(format_near_misses(near_misses))
-        print(f"")
-
-        # 6. Duplicate (source_domain, title)
-        stmt = select(RawArticle).where(RawArticle.fetched_at >= datetime.now(timezone.utc) - timedelta(days=days))
-        result = await session.execute(stmt)
-        recent_articles = [{
-            "id": a.id,
-            "source_domain": a.source_domain,
-            "title": a.title,
-            "fetched_at": a.fetched_at,
-        } for a in result.scalars().all()]
-
-        duplicates = find_duplicate_titles(recent_articles)
-
-        print(f"## 6. Duplicate (source_domain, title) in last {days} days")
-        print(f"")
-        if duplicates:
-            print(f"| Source Domain | Title | Count | Fetched At Range |")
-            print(f"|---------------|-------|-------|------------------|")
-            for dup in duplicates:
-                title_short = dup["title"][:80] + "..." if len(dup["title"]) > 80 else dup["title"]
-                print(f"| {dup['source_domain']} | {title_short} | {dup['count']} | {dup['fetched_at_range']} |")
-        else:
-            print("No duplicates found.")
-        print(f"")
-
-        # Build full markdown output
-        markdown_output = []
-        markdown_output.append(f"# Story Audit Report (last {days} days)")
-        markdown_output.append(f"")
-        markdown_output.append(f"**Database host:** {host_info}")
-        markdown_output.append(f"**Generated:** {datetime.now(timezone.utc).isoformat()}")
-        markdown_output.append(f"")
-        markdown_output.append(f"> **Note:** This audit uses approximate canonical IDs via `_normalize_text(surface, label)`")
-        markdown_output.append(f"> for PERSON/ORG/GPE only. This does not merge aliases, so it can understate production overlap.")
-        markdown_output.append(f"")
-
-        # Re-construct full output
-        # ... (similar to above but collected)
-
-        return "\n".join(markdown_output)
+    # Build and return the complete report
+    return build_report(data, days, host_info, now=now)
 
 
 def main():

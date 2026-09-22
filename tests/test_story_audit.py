@@ -12,6 +12,11 @@ from scripts.story_audit import (
     find_duplicate_titles,
     format_histogram,
     format_near_misses,
+    compute_story_metrics,
+    summarize_story_metrics,
+    format_crosstab,
+    format_per_day,
+    build_report,
 )
 from datetime import datetime, timezone, timedelta
 
@@ -221,6 +226,249 @@ class TestFormatNearMisses:
         assert result == "None found."
 
 
+class TestComputeStoryMetrics:
+    """Test compute_story_metrics function."""
+
+    def test_story_with_no_links(self):
+        """A story with no linked units returns (0, 0)."""
+        stories = [{"id": "story1", "status": "OPEN", "tier1_unit_count": 0, "distinct_owners": 0}]
+        story_units = {"story1": []}
+        unit_info = {}
+
+        result = compute_story_metrics(stories, story_units, unit_info)
+
+        assert len(result) == 1
+        assert result[0]["linked_units"] == 0
+        assert result[0]["computed_tier1_count"] == 0
+        assert result[0]["computed_distinct_owners"] == 0
+        assert result[0]["mismatch"] is False
+
+    def test_tier1_count_is_sum_not_linked_count(self):
+        """Tier-1 count is sum of source_tiers['tier1'], not number of linked units."""
+        stories = [{"id": "story1", "status": "OPEN", "tier1_unit_count": 2, "distinct_owners": 1}]
+        story_units = {"story1": ["unit1", "unit2"]}
+        unit_info = {
+            "unit1": {"source_tiers": {"tier1": 2}, "tier1_owner_groups": {"BBC": 1}},
+            "unit2": {"source_tiers": {"tier1": 3}, "tier1_owner_groups": {"BBC": 1}},
+        }
+
+        result = compute_story_metrics(stories, story_units, unit_info)
+
+        assert result[0]["linked_units"] == 2
+        assert result[0]["computed_tier1_count"] == 5  # sum, not count
+
+    def test_stale_stored_value_flagged(self):
+        """A stale stored value is flagged as mismatch."""
+        stories = [{"id": "story1", "status": "OPEN", "tier1_unit_count": 5, "distinct_owners": 2}]
+        story_units = {"story1": ["unit1"]}
+        unit_info = {
+            "unit1": {"source_tiers": {"tier1": 3}, "tier1_owner_groups": {"BBC": 1}},
+        }
+
+        result = compute_story_metrics(stories, story_units, unit_info)
+
+        assert result[0]["stored_tier1_count"] == 5
+        assert result[0]["computed_tier1_count"] == 3
+        assert result[0]["mismatch"] is True
+
+    def test_distinct_owners_union(self):
+        """Distinct owners is union of tier1_owner_groups keys."""
+        stories = [{"id": "story1", "status": "OPEN", "tier1_unit_count": 1, "distinct_owners": 1}]
+        story_units = {"story1": ["unit1", "unit2"]}
+        unit_info = {
+            "unit1": {"source_tiers": {"tier1": 1}, "tier1_owner_groups": {"BBC": 1}},
+            "unit2": {"source_tiers": {"tier1": 1}, "tier1_owner_groups": {"Guardian": 1}},
+        }
+
+        result = compute_story_metrics(stories, story_units, unit_info)
+
+        assert result[0]["computed_distinct_owners"] == 2
+
+
+class TestSummarizeStoryMetrics:
+    """Test summarize_story_metrics function."""
+
+    def test_crosstab_counts_by_status(self):
+        """Crosstab counts stories by (linked_units, computed_distinct_owners) and status."""
+        metrics = [
+            {"id": "s1", "status": "OPEN", "linked_units": 2, "computed_tier1_count": 3, "computed_distinct_owners": 1,
+             "stored_tier1_count": 3, "stored_distinct_owners": 1, "mismatch": False},
+            {"id": "s2", "status": "OPEN", "linked_units": 2, "computed_tier1_count": 3, "computed_distinct_owners": 1,
+             "stored_tier1_count": 3, "stored_distinct_owners": 1, "mismatch": False},
+            {"id": "s3", "status": "CLOSED", "linked_units": 2, "computed_tier1_count": 3, "computed_distinct_owners": 1,
+             "stored_tier1_count": 3, "stored_distinct_owners": 1, "mismatch": False},
+            {"id": "s4", "status": "OPEN", "linked_units": 3, "computed_tier1_count": 4, "computed_distinct_owners": 2,
+             "stored_tier1_count": 4, "stored_distinct_owners": 2, "mismatch": False},
+        ]
+
+        result = summarize_story_metrics(metrics)
+
+        assert result["crosstab"][(2, 1)]["OPEN"] == 2
+        assert result["crosstab"][(2, 1)]["CLOSED"] == 1
+        assert result["crosstab"][(3, 2)]["OPEN"] == 1
+        assert "OPEN" in result["statuses"]
+        assert "CLOSED" in result["statuses"]
+        assert result["mismatch_count"] == 0
+
+    def test_mismatch_examples_limited(self):
+        """Mismatch examples limited to max_examples."""
+        metrics = [
+            {"id": f"s{i}", "status": "OPEN", "linked_units": 1, "computed_tier1_count": 1, "computed_distinct_owners": 1,
+             "stored_tier1_count": 2, "stored_distinct_owners": 1, "mismatch": True}
+            for i in range(15)
+        ]
+
+        result = summarize_story_metrics(metrics, max_examples=5)
+
+        assert result["mismatch_count"] == 15
+        assert len(result["examples"]) == 5
+
+
+class TestFormatCrosstab:
+    """Test format_crosstab function."""
+
+    def test_formats_as_markdown_table(self):
+        """Formats crosstab as markdown with statuses as columns."""
+        summary = {
+            "crosstab": {
+                (2, 1): {"OPEN": 3, "CLOSED": 1},
+                (3, 2): {"OPEN": 2},
+            },
+            "statuses": ["CLOSED", "OPEN"],
+            "mismatch_count": 0,
+            "examples": [],
+        }
+
+        result = format_crosstab(summary)
+
+        assert "| Linked Units | Tier-1 Owners |" in result
+        assert "CLOSED" in result
+        assert "OPEN" in result
+        assert "| 2 | 1 | 1 | 3 | 4 |" in result  # sorted statuses: CLOSED first, then OPEN
+        assert "| 3 | 2 | 0 | 2 | 2 |" in result
+
+    def test_empty_crosstab(self):
+        """Empty crosstab returns 'No stories.'"""
+        summary = {"crosstab": {}, "statuses": [], "mismatch_count": 0, "examples": []}
+        result = format_crosstab(summary)
+        assert result == "No stories."
+
+
+class TestFormatPerDay:
+    """Test format_per_day function."""
+
+    def test_formats_per_day_table(self):
+        """Formats per-day rows as markdown table."""
+        rows = [
+            {"day": "2026-09-20", "status": "OPEN", "count": 2},
+            {"day": "2026-09-20", "status": "CLOSED", "count": 1},
+            {"day": "2026-09-19", "status": "OPEN", "count": 3},
+        ]
+
+        result = format_per_day(rows, "Test Title")
+
+        assert "### Test Title" in result
+        assert "| Day | CLOSED | OPEN | Total |" in result
+        assert "| 2026-09-20 | 1 | 2 | 3 |" in result
+        assert "| 2026-09-19 | 0 | 3 | 3 |" in result
+
+    def test_empty_rows(self):
+        """Empty rows returns 'No data.'"""
+        result = format_per_day([], "Empty")
+        assert "### Empty" in result
+        assert "No data." in result
+
+
+class TestBuildReport:
+    """Test build_report function."""
+
+    def test_all_headings_appear_once(self):
+        """Each heading appears exactly once in the report."""
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        data = {
+            "counts": {
+                "raw_articles": 10, "reporting_units": 5, "story_unit_links": 4,
+                "stories": 3, "stories_no_units": 0, "units_missing_rep": 0, "articles_no_unit": 0,
+            },
+            "stories_per_day": [],
+            "articles_per_day": [],
+            "units_per_day": [],
+            "orphans_per_day": [],
+            "story_summary": {"crosstab": {}, "statuses": [], "mismatch_count": 0, "examples": []},
+            "entity_sizes": {"min": 1, "median": 3, "max": 5, "empty_count": 0},
+            "jaccard": {"histogram": {0.0: 3}, "near_misses": [], "stats": {
+                "total_recent_units": 3, "units_with_entities": 3, "units_with_no_entities": 0,
+                "units_with_no_candidates": 0, "zero_overlap_pairs": 0, "would_attach": 0
+            }},
+            "duplicates": [],
+        }
+
+        result = build_report(data, days=3, host="db.example.com:5432", now=now)
+
+        # Check each heading appears exactly once
+        assert result.count("# Story Audit Report") == 1
+        assert result.count("## 1. Counts") == 1
+        assert result.count("## 2. Per-day activity") == 1
+        assert result.count("## 3. Story shape") == 1
+        assert result.count("## 4. Entity-set size") == 1
+        assert result.count("## 5. Cross-owner Jaccard") == 1
+        assert result.count("## 6. Duplicate") == 1
+        # Check host and note
+        assert "db.example.com:5432" in result
+        assert "approximate canonical IDs" in result
+
+    def test_empty_data_renders(self):
+        """All-empty data renders without crashing."""
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        data = {
+            "counts": {},
+            "stories_per_day": [],
+            "articles_per_day": [],
+            "units_per_day": [],
+            "orphans_per_day": [],
+            "story_summary": {"crosstab": {}, "statuses": [], "mismatch_count": 0, "examples": []},
+            "entity_sizes": {},
+            "jaccard": {"histogram": {}, "near_misses": [], "stats": {}},
+            "duplicates": [],
+        }
+
+        result = build_report(data, days=3, host="db.example.com:5432", now=now)
+
+        # Should not crash and should have structure
+        assert "# Story Audit Report" in result
+        assert "No stories." in result
+        assert "No duplicates found." in result
+
+
+class TestNoPrintInDataLayer:
+    """Test that data layer functions don't contain print statements."""
+
+    def test_no_print_in_data_layer(self):
+        """No print() calls inside run_audit or fetch_audit_data."""
+        import ast
+
+        with open("scripts/story_audit.py", "r") as f:
+            source = f.read()
+
+        tree = ast.parse(source)
+
+        class PrintVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.prints_in_data_layer = []
+
+            def visit_FunctionDef(self, node):
+                if node.name in ("run_audit", "fetch_audit_data"):
+                    for child in ast.walk(node):
+                        if isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "print":
+                            self.prints_in_data_layer.append((node.name, child.lineno))
+                self.generic_visit(node)
+
+        visitor = PrintVisitor()
+        visitor.visit(tree)
+
+        assert not visitor.prints_in_data_layer, f"Found print() in data layer: {visitor.prints_in_data_layer}"
+
+
 class TestComputeJaccardHistogram:
     """Test compute_jaccard_histogram function."""
 
@@ -374,3 +622,70 @@ class TestComputeJaccardHistogram:
         assert stats["units_with_entities"] == 1
         assert stats["units_with_no_entities"] == 1
         assert stats["units_with_no_candidates"] == 1
+        assert stats["would_attach"] == 0
+
+    def test_hours_window_honored(self):
+        """hours_window parameter is honored."""
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        units = [
+            {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
+            {"id": "unit2", "created_at": now - timedelta(hours=30), "representative_article_id": "art2"},  # 30h ago
+        ]
+        unit_entities = {
+            "unit1": {"A", "B"},
+            "unit2": {"A", "B"},
+        }
+        unit_owner_groups = {
+            "unit1": {"BBC": 1},
+            "unit2": {"Guardian": 1},
+        }
+        articles = {f"art{i}": {"title": f"Article {i}"} for i in range(1, 3)}
+
+        # With hours_window=24, they are 30h apart -> excluded
+        result = compute_jaccard_histogram(
+            units, unit_entities, unit_owner_groups, articles, days=3, hours_window=24, now=now
+        )
+        stats = result["stats"]
+        assert stats["units_with_no_candidates"] == 2  # Neither has a candidate within 24h
+
+        # With hours_window=48, they are 30h apart -> included
+        result = compute_jaccard_histogram(
+            units, unit_entities, unit_owner_groups, articles, days=3, hours_window=48, now=now
+        )
+        stats = result["stats"]
+        assert stats["units_with_entities"] == 2
+        assert stats["would_attach"] == 2  # Jaccard = 1.0 >= 0.4
+
+    def test_would_attach_threshold(self):
+        """would_attach counts best Jaccard >= 0.4, not 0.39."""
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        # Jaccard = 0.4 exactly (2 shared out of 5 total = 0.4)
+        units = [
+            {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
+            {"id": "unit2", "created_at": now, "representative_article_id": "art2"},
+            {"id": "unit3", "created_at": now, "representative_article_id": "art3"},
+            {"id": "unit4", "created_at": now, "representative_article_id": "art4"},
+        ]
+        unit_entities = {
+            "unit1": {"A", "B", "C", "D", "E"},  # 5 entities
+            "unit2": {"A", "B"},  # 2 shared -> 2/5 = 0.4
+            "unit3": {"A", "B", "C", "D", "E", "F", "G", "H", "I"},  # 9 entities
+            "unit4": {"X", "Y", "Z"},  # No shared with unit3 -> Jaccard = 0
+        }
+        unit_owner_groups = {
+            "unit1": {"BBC": 1},
+            "unit2": {"Guardian": 1},
+            "unit3": {"BBC": 1},
+            "unit4": {"Guardian": 1},
+        }
+        articles = {f"art{i}": {"title": f"Article {i}"} for i in range(1, 5)}
+
+        result = compute_jaccard_histogram(
+            units, unit_entities, unit_owner_groups, articles, days=3, hours_window=48, now=now
+        )
+        stats = result["stats"]
+        # unit1's best is unit2 (0.4) -> would_attach
+        # unit2's best is unit1 (0.4) -> would_attach
+        # unit3's best is unit4 (0.0) -> NOT would_attach
+        # unit4's best is unit3 (0.0) -> NOT would_attach
+        assert stats["would_attach"] == 2
