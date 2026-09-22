@@ -374,3 +374,70 @@ class TestComputeJaccardHistogram:
         assert stats["units_with_entities"] == 1
         assert stats["units_with_no_entities"] == 1
         assert stats["units_with_no_candidates"] == 1
+        assert stats["would_attach"] == 0
+
+    def test_hours_window_honored(self):
+        """hours_window parameter is honored."""
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        units = [
+            {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
+            {"id": "unit2", "created_at": now - timedelta(hours=30), "representative_article_id": "art2"},  # 30h ago
+        ]
+        unit_entities = {
+            "unit1": {"A", "B"},
+            "unit2": {"A", "B"},
+        }
+        unit_owner_groups = {
+            "unit1": {"BBC": 1},
+            "unit2": {"Guardian": 1},
+        }
+        articles = {f"art{i}": {"title": f"Article {i}"} for i in range(1, 3)}
+
+        # With hours_window=24, they are 30h apart -> excluded
+        result = compute_jaccard_histogram(
+            units, unit_entities, unit_owner_groups, articles, days=3, hours_window=24, now=now
+        )
+        stats = result["stats"]
+        assert stats["units_with_no_candidates"] == 2  # Neither has a candidate within 24h
+
+        # With hours_window=48, they are 30h apart -> included
+        result = compute_jaccard_histogram(
+            units, unit_entities, unit_owner_groups, articles, days=3, hours_window=48, now=now
+        )
+        stats = result["stats"]
+        assert stats["units_with_entities"] == 2
+        assert stats["would_attach"] == 2  # Jaccard = 1.0 >= 0.4
+
+    def test_would_attach_threshold(self):
+        """would_attach counts best Jaccard >= 0.4, not 0.39."""
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        # Jaccard = 0.4 exactly (2 shared out of 5 total = 0.4)
+        units = [
+            {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
+            {"id": "unit2", "created_at": now, "representative_article_id": "art2"},
+            {"id": "unit3", "created_at": now, "representative_article_id": "art3"},
+            {"id": "unit4", "created_at": now, "representative_article_id": "art4"},
+        ]
+        unit_entities = {
+            "unit1": {"A", "B", "C", "D", "E"},  # 5 entities
+            "unit2": {"A", "B"},  # 2 shared -> 2/5 = 0.4
+            "unit3": {"A", "B", "C", "D", "E", "F", "G", "H", "I"},  # 9 entities
+            "unit4": {"X", "Y", "Z"},  # No shared with unit3 -> Jaccard = 0
+        }
+        unit_owner_groups = {
+            "unit1": {"BBC": 1},
+            "unit2": {"Guardian": 1},
+            "unit3": {"BBC": 1},
+            "unit4": {"Guardian": 1},
+        }
+        articles = {f"art{i}": {"title": f"Article {i}"} for i in range(1, 5)}
+
+        result = compute_jaccard_histogram(
+            units, unit_entities, unit_owner_groups, articles, days=3, hours_window=48, now=now
+        )
+        stats = result["stats"]
+        # unit1's best is unit2 (0.4) -> would_attach
+        # unit2's best is unit1 (0.4) -> would_attach
+        # unit3's best is unit4 (0.0) -> NOT would_attach
+        # unit4's best is unit3 (0.0) -> NOT would_attach
+        assert stats["would_attach"] == 2

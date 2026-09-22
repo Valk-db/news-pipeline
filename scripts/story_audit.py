@@ -78,11 +78,12 @@ def compute_jaccard_histogram(
     unit_owner_groups: Dict[str, Dict[str, int]],
     articles: Dict[str, Dict[str, Any]],
     days: int = 3,
+    hours_window: int = 48,
     now: datetime | None = None
 ) -> Dict[str, Any]:
     """
     For units created in last N days: best Jaccard vs units with disjoint owner groups
-    within 48h. Returns dict with histogram, near_misses, and stats.
+    within hours_window. Returns dict with histogram, near_misses, and stats.
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -102,6 +103,7 @@ def compute_jaccard_histogram(
         "units_with_no_entities": 0,
         "units_with_no_candidates": 0,
         "zero_overlap_pairs": 0,
+        "would_attach": 0,
     }
 
     # Dedup set for near-misses: frozenset({a,b}) -> max jaccard entry
@@ -133,9 +135,9 @@ def compute_jaccard_histogram(
             if owners_a & owners_b:
                 continue
 
-            # Check within 48h
+            # Check within hours_window
             time_diff = abs((unit_a["created_at"] - unit_b["created_at"]).total_seconds())
-            if time_diff > 48 * 3600:
+            if time_diff > hours_window * 3600:
                 continue
 
             entities_b = unit_entities.get(unit_b_id, set())
@@ -155,6 +157,10 @@ def compute_jaccard_histogram(
 
         if not has_candidate:
             stats["units_with_no_candidates"] += 1
+
+        # Track would_attach: best Jaccard >= 0.4
+        if best_jaccard >= 0.4:
+            stats["would_attach"] += 1
 
         # Always bucket (including 0.0)
         bucket = bucket_for(best_jaccard)
