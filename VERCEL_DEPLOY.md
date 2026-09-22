@@ -51,12 +51,6 @@ vercel env add GROQ_MODEL
 vercel env add CEREBRAS_API_KEY
 # Paste your Cerebras API key (optional)
 
-vercel env add REDDIT_CLIENT_ID
-# Paste your Reddit client ID
-
-vercel env add REDDIT_CLIENT_SECRET
-# Paste your Reddit client secret
-
 vercel env add REDDIT_USER_AGENT
 # Enter: news-pipeline/0.1
 ```
@@ -74,8 +68,6 @@ vercel env add REDDIT_USER_AGENT
 | `GROQ_MODEL` | No | `openai/gpt-oss-20b` |
 | `CEREBRAS_API_KEY` | No | `csk_xxx` |
 | `CEREBRAS_MODEL` | No | `gpt-oss-120b` |
-| `REDDIT_CLIENT_ID` | Yes | `xxx` |
-| `REDDIT_CLIENT_SECRET` | Yes | `xxx` |
 | `REDDIT_USER_AGENT` | No | `news-pipeline/0.1` |
 | `YOUTUBE_API_KEY` | No | `xxx` |
 
