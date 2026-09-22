@@ -1,8 +1,9 @@
-# AGENT_TASKS.md: news-pipeline task file (v8, updated 2026-09-22)
+# AGENT_TASKS.md: news-pipeline task file (v9, updated 2026-09-22)
 
 This file is the only task file in force. Ignore any older task files and anything you remember
-from earlier rounds, including earlier reports that work was "complete". Read it fully before
-doing anything.
+from earlier rounds, including earlier reports that work was "complete" — a previous round's report
+claimed a "Task 3" was done when it wasn't (see Verified state). Read this file fully before doing
+anything.
 
 Repo: Valk-db/news-pipeline. Python 3.12, uv, async SQLAlchemy, Supabase Postgres, GitHub Actions,
 FastAPI curation UI on Vercel.
@@ -23,15 +24,15 @@ FastAPI curation UI on Vercel.
   what you tried.
 
 ## Working agreement
-1. Work on a NEW branch created from the latest `origin/main` (names are given per task). Never
-   push to main, never force-push, never merge a pull request yourself. main receives bot commits
-   ("chore: heartbeat"), so always `git fetch origin` first.
-2. Modify ONLY the files a task names. No features, endpoints, settings, DB schema changes or
-   dependency changes beyond what a task explicitly says. Do NOT touch `src/ingestion`,
-   `src/verification` (grouping/gate/tiers/cleanup logic), GDELT, or the heartbeat mechanism this
-   round. `curation_ui/` IS in scope this round, but only for the two things Task 2 and Task 3 name
-   — do not touch triage/business logic (approve/reject/edit/mark-posted) or the dark-theme CSS/
-   templates merged in #9.
+1. Continue on the EXISTING branch `chore/cleanup-and-coverage` (already pushed, 3 commits ahead of
+   main). Do not create a new branch for Task 3. Never push to main, never force-push, never merge a
+   pull request yourself. main receives bot commits ("chore: heartbeat"), so always `git fetch
+   origin` first and rebase-free (`git merge --no-edit origin/main` only if main has moved and you
+   need it — check first, don't assume).
+2. Modify ONLY the files this task names: `tests/test_curation_ui.py` (new) and, if genuinely
+   required to make it work, `tests/conftest.py`. Do NOT touch `src/ingestion`, `src/verification`
+   (grouping/gate/tiers/cleanup logic), GDELT, the heartbeat mechanism, or curation_ui's
+   triage/business logic (approve/reject/edit/mark-posted) or its dark-theme CSS/templates from #9.
 3. Each commit message = a short subject plus a body paragraph explaining WHY, describing only what
    the diff contains. Never mention work that is not in the diff.
 4. Tests run with DATABASE_URL UNSET: `uv run pytest tests/ -q`. Never set DATABASE_URL to the
@@ -42,154 +43,63 @@ FastAPI curation UI on Vercel.
    `enable_rls.py`, `seed_*.py`/`print_*_reference.py` writes, or `python -m src.ingestion.run`
    without `--dry-run`.
 6. Do not weaken, delete or skip existing tests except where a task says so. Never commit `.env`.
-7. Before using `ruff --fix` or `--unsafe-fixes` anywhere, read Task 2's warning about
-   `curation_ui/main.py` in full. A blind autofix in that file will delete a name that is still in
-   use and break the app at runtime — this is not hypothetical, see Verified state below.
-8. Do NOT claim a pull request exists unless you created it. A `github.com/.../pull/new/...` link is
-   only the compare page.
-9. EVIDENCE RULE. A step is "done" only when its VERIFY commands were run and passed. In every
-   report paste the last lines of each VERIFY output. If a VERIFY fails, say so and stop. Never
-   write "complete" from memory. GitHub Actions (Ubuntu) is the source of truth for tests: passing
-   on this machine does not prove CI is green. If `gh` is not installed, write "CI status unknown,
-   Tyler must check the Actions tab".
-10. Do the steps in order without asking me between steps, but stop at every CHECKPOINT.
+7. EVIDENCE RULE, stricter than before: a step is "done" only when (a) its VERIFY commands were run
+   and passed, AND (b) `git --no-pager diff --stat` after committing shows a change to the exact
+   file(s) that step named. Before writing your final report, re-read this task file's Task 3
+   section side by side with `git --no-pager diff main...HEAD --stat` and confirm every named
+   deliverable (`tests/test_curation_ui.py` existing, containing the three cases below) is actually
+   there. The previous round's report described "Task 3" work that didn't match any task in that
+   round's file — don't let that happen again. Never write "complete" from memory.
+8. GitHub Actions (Ubuntu) is the source of truth for tests, not this machine. If `gh` is not
+   installed, write "CI status unknown, Tyler must check the Actions tab" — do not guess a pass/fail.
+9. Do NOT claim a pull request exists unless you created it or confirmed one already exists for this
+   branch with `gh pr view chore/cleanup-and-coverage` (or equivalent). A `github.com/.../pull/new/...`
+   link is only the compare page.
+10. Do the steps in order without asking me between steps, but stop at the CHECKPOINT.
 
-## Verified state (main = 628ccd9, checked from a fresh clone on Linux, 2026-09-22)
-- **CI is fixed.** All three workflows (`ci.yml`, `daily-ingest.yml`, `cleanup.yml`) now use
-  `astral-sh/setup-uv@v4` with `enable-cache: true` and no longer pass `cache: 'uv'` to
-  `actions/setup-python@v5`. The v7 blocker is resolved. I cannot confirm the scheduled Actions runs
-  are actually green (no `gh` CLI, unauthenticated GitHub API is rate-limited from this sandbox) —
-  Tyler must check the Actions tab.
-- **Tests: 220 passed, 5 skipped, 0 failed** (`uv run pytest tests/ -q`, DATABASE_URL unset, fresh
-  `uv sync --extra dev --extra pipeline` + `spacy download en_core_web_sm`). The v7 flaky
-  `test_outside_48h_excluded` failure is gone.
-- **`scripts/story_audit.py` rewrite (v7 Task 2, steps C/D/E) is complete.** All 7 functions exist
-  (`bucket_for`, `compute_story_metrics`, `summarize_story_metrics`, `format_crosstab`,
-  `format_per_day`, `build_report`, `fetch_audit_data`), no "similar to above" placeholder remains,
-  `--help` exits 0 both as a script and as `-m scripts.story_audit`. I have not run it against
-  production (correctly off-limits) so I can't confirm the numbers it prints are right — that's
-  Tyler's job per v7's Task 3 gate, which is still untouched (correctly: no grouping/gate code has
-  changed).
-- **The DB-password-in-skip-message leak from v7 is fixed** — `tests/test_verification.py` now
-  shows only the parsed hostname, per the `#10` commit body.
-- **New finding — two dead, misleading config files.** `curation_ui/pyproject.toml` and
-  `curation_ui/uv.lock` duplicate the root project's dependencies (and disagree with it:
-  `requires-python = ">=3.11"` there vs `"==3.12.*"` at the root). Nothing installs from them:
-  `pyproject.toml`'s own comment says "Vercel installs ONLY this list" referring to the root
-  `[project.dependencies]`, `VERCEL_DEPLOY.md` confirms deps live in the root `pyproject.toml`, and
-  no workflow or doc `cd`s into `curation_ui/` or references its pyproject. They are pure clutter
-  that could mislead someone into editing the wrong file when adding a dependency. Safe to delete.
-- **New finding — a real bug hiding in the current lint output.** `curation_ui/main.py` line 27
-  imports `Story` twice: `from src.schema.models import Story, ..., Story as StoryModel`. The
-  `StoryModel` alias is never used anywhere in the file (verified: `grep -n StoryModel
-  curation_ui/main.py` matches only the import line itself). Bare `Story` IS used throughout the
-  file (`select(Story)`, `Story.Status.PENDING`, etc., in `approve_story`, `reject_story`,
-  `edit_story`, `save_story`, `mark_posted`). `ruff --fix` on this line proposes deleting the FIRST
-  `Story` (the one actually used) and keeping `Story as StoryModel` (the one that's dead) — because
-  ruff can't see that `_render_stories_grid` shadows `Story` with its own local import three lines
-  later while every other function relies on the module-level name. Applying that autofix verbatim
-  would delete a name still in use elsewhere in the file and break every route except the story
-  grid at runtime, with no test to catch it (see next finding). The correct fix is to remove only
-  `, Story as StoryModel`, not `Story`.
-- **New finding — zero test coverage for `curation_ui/`.** No `tests/test_curation_ui*.py` exists.
-  Nothing imports `curation_ui.main` or `curation_ui.health` in the test suite, so a bug like the
-  one above — or anything else that breaks import time or a route — would not be caught by
-  `pytest` or by CI, only by opening the live site. This got riskier after `#9`'s 1,033-line
-  template/CSS rewrite shipped with no corresponding tests.
-- **No `[tool.ruff.lint] select` is pinned in `pyproject.toml`.** Whatever ruleset ruff defaults to
-  is whatever that installed ruff version defaults to, which can silently grow or shrink across
-  ruff upgrades — this is likely why the v7 "~220 pre-existing findings" figure doesn't match what
-  I see now. With ruff 0.16.8's actual default families (`E4`, `E7`, `E9`, `F` — the ones ruff
-  documents as "always on" without a `select`), current count is **62 findings**: 37 `F401` (unused
-  import — mostly genuine, one is the bug above), 16 `E402` (module import not at top of file — 15
-  of these are in `curation_ui/main.py` and are NOT a real problem, see below), 7 `F841` (unused
-  variable), 2 `F541` (f-string with no placeholders).
-- **`curation_ui/main.py`'s E402 findings are a false positive, don't touch them.** Lines 3–17
-  monkey-patch `socket.getaddrinfo` to force IPv4-only DNS *before* importing FastAPI/SQLAlchemy/
-  asyncpg, because "Vercel's lack of outbound IPv6 routes" (per the file's own comment) breaks
-  asyncpg's connection unless the patch is applied first. Reordering these imports to satisfy E402
-  would silently reintroduce that production bug. Any lint task must either leave `E402` off the
-  selected rule set for this file or add a scoped `# noqa: E402` / per-file-ignore, never reorder.
-- **`/healthz` on the curation UI is still unauthenticated** (unchanged from v7): it returns story
-  counts by status and scrubbed-but-present exception text with no auth. Still a decision for
-  Tyler, not a task — see below.
-- Unchanged from v7, still true, still Tyler's calls to make: GDELT/embeddings/celebrity-vertical/
-  heartbeat-race items, and the reminder to rotate the Supabase password if a pre-fix pytest run
-  with `-v`/`-rs` ever printed the skip message while `.env` pointed at Supabase.
+## Verified state (checked independently from a fresh clone, 2026-09-22)
+- main = `628ccd9` (includes #9 dark theme, #10 audit-round-2 fixes). `cache: 'uv'` is confirmed
+  gone from all three workflow files — the v7 CI blocker is resolved on main.
+- Branch `chore/cleanup-and-coverage` = `16aecbe`, 3 commits ahead of main:
+  `d62765b` (docs: AGENT_TASKS.md v8), `3d229cd` (Task 1: remove dead curation_ui project files),
+  `16aecbe` (Task 2: pin ruff ruleset + fix findings, including mypy overrides for
+  feedparser/datasketch and `__init__.py` for curation_ui/ and scripts/).
+- **Independently re-ran and confirmed**, fresh `uv sync --extra dev --extra pipeline` +
+  `spacy download en_core_web_sm`: `uv run pytest tests/ -q` → 220 passed, 5 skipped, 0 failed.
+  `uv run ruff check .` → 0 findings.
+- **Task 1 and Task 2 are genuinely complete and correct.** In particular, the
+  `curation_ui/main.py` fix removed only the dead `Story as StoryModel` alias and kept the real
+  `Story` import that `approve_story`/`reject_story`/`edit_story`/`save_story`/`mark_posted`
+  actually use — the non-obvious, behavior-preserving fix v8 asked for, not the naive autofix that
+  would have broken those routes.
+- **Task 3 from v8 (add `tests/test_curation_ui.py` smoke coverage) was NOT done**, despite a round
+  report describing a "Task 3" as complete. There is no `tests/test_curation_ui.py` file on this
+  branch or anywhere in the repo. What that report actually described (unused test imports/vars
+  cleaned up, `__init__.py` added for mypy module resolution, mypy overrides added, spaCy model
+  downloaded) is real, verified work — but it's part of Task 2's diff and R0 setup, not a separate
+  completed task. Task 3 below is that same, still-outstanding work, reissued.
+- **CI/PR status is unverified by me.** GitHub's REST API is rate-limiting unauthenticated requests
+  from the sandbox I checked this in, and I don't have `gh` there either, so I could not confirm (a)
+  that GitHub Actions is actually green for `16aecbe`, or (b) that a PR for this branch exists. If
+  one exists, do not merge it — Task 3 isn't in it yet. Check the Actions tab and the PR yourself.
+- Unchanged from v8, still true, still Tyler's calls to make: `/healthz` unauthenticated, whether to
+  widen the ruff ruleset beyond `E4/E7/E9/F`, the Supabase password rotation reminder, and the
+  off-limits list below.
 
-## Task R0: preflight
-R0.1 Set the environment variables from "Non-interactive shell rules".
-R0.2 `git --no-pager status --short` and `git --no-pager stash list`. Report the output as plain
-     text. Do not edit any file yet.
-R0.3 `git fetch origin`, then `git checkout -b chore/cleanup-and-coverage origin/main`. If git
-     refuses because AGENT_TASKS.md is dirty, `git stash push -m v8-tasks`, checkout, then
-     `git stash pop`. First commit: `git add AGENT_TASKS.md` then
-     `git commit -m "docs: AGENT_TASKS.md v8" -m "Task file for the dead-file cleanup, lint, and curation_ui coverage round."`
-     and push with `git push -u origin chore/cleanup-and-coverage`.
-R0.4 Baseline: `uv run pytest tests/ -q` with DATABASE_URL unset. Expect 220 passed, 5 skipped, 0
-     failed. If you see something else, stop and report it before continuing.
-
-## Task 1: remove dead curation_ui project files (branch chore/cleanup-and-coverage)
-1.1 Confirm nothing references them before deleting:
-    `git --no-pager grep -rn "curation_ui/pyproject\|curation_ui/uv.lock" -- . ':!curation_ui/pyproject.toml' ':!curation_ui/uv.lock'`
-    must print nothing. Also check no workflow does `working-directory: curation_ui` or `cd
-    curation_ui`: `git --no-pager grep -n "curation_ui" .github/workflows/*.yml` — if this shows
-    anything beyond the `functions` path in `vercel.json`, STOP and report instead of deleting.
-1.2 `git rm curation_ui/pyproject.toml curation_ui/uv.lock`.
-1.3 VERIFY: `uv run pytest tests/ -q` still shows 220 passed, 5 skipped, 0 failed. `uv sync --extra
-    dev --extra pipeline` still succeeds from the root (proves the root lockfile alone is
-    sufficient). Paste both outputs.
-1.4 Commit subject: `chore: remove unused curation_ui/pyproject.toml and uv.lock` — body explains
-    they duplicated the root project file, disagreed with it on the Python version pin, and nothing
-    installed from them (cite the root pyproject.toml comment and VERCEL_DEPLOY.md).
-1.5 Push.
-
-## Task 2: pin ruff's rule set and fix the resulting findings (same branch)
-2.1 Add to `pyproject.toml`:
-    ```
-    [tool.ruff.lint]
-    select = ["E4", "E7", "E9", "F"]
-    ```
-    directly under the existing `[tool.ruff]` table. This is a lock-in of ruff's current documented
-    defaults, not a new stricter policy — it exists so the finding count can't silently drift again
-    as ruff versions change. Do not add any other rule families (no `UP`, `I`, `BLE`, `S`, `SIM`,
-    etc.) — those are a separate decision for Tyler, not this task.
-2.2 Add a per-file ignore for the DNS-patch ordering:
-    ```
-    [tool.ruff.lint.per-file-ignores]
-    "curation_ui/main.py" = ["E402"]
-    ```
-    with a one-line comment above it in the TOML referencing the IPv4-only monkeypatch and why
-    reordering would break it.
-2.3 Run `uv run ruff check .` and read every remaining finding yourself before touching anything —
-    do not run `--fix` blind. For `curation_ui/main.py:27`, the fix is to remove only
-    `, Story as StoryModel` from the import line (verify first with
-    `grep -n "StoryModel" curation_ui/main.py` that it still shows zero uses besides the import
-    line you're editing). For every other `F401` finding, confirm with `grep -n` that the name is
-    genuinely unused in that file before removing it — do not trust the autofix diff without that
-    check, per the Story/StoryModel example above. `F841` and `F541` findings are safe to autofix
-    with `uv run ruff check --fix --select F841,F541 .` after eyeballing the diff.
-2.4 VERIFY, paste all output: `uv run ruff check .` shows 0 findings. `uv run pytest tests/ -q`
-    still shows 220 passed, 5 skipped, 0 failed.
-2.5 Commit subject: `chore: pin ruff lint rules and fix unused-import/unused-variable findings` —
-    body must explicitly call out the Story/StoryModel fix as a behavior-preserving bug fix, not
-    just a lint fix, and must explain the `E402` per-file-ignore.
-2.6 Push.
-
-## Task 3: add minimal test coverage for curation_ui (same branch)
-The goal is a smoke-test safety net, not full coverage of the triage workflow — that's a bigger
-task for another round. New file: `tests/test_curation_ui.py`.
-3.1 A test that imports `curation_ui.main` and `curation_ui.health` and asserts the import
-    succeeds. This alone would have caught the Story/StoryModel bug in Task 2 had it existed before
-    the fix — write it in a way that would fail on that specific bug (e.g. also exercise the route
-    that constructs `select(Story)` outside `_render_stories_grid`, such as by calling
-    `approve_story`'s handler through a `TestClient` request, not just importing the module).
+## Task 3: add minimal test coverage for curation_ui (branch chore/cleanup-and-coverage, same branch)
+The goal is a smoke-test safety net, not full coverage of the triage workflow — that's a bigger task
+for another round. New file: `tests/test_curation_ui.py`.
+3.1 A test that imports `curation_ui.main` and `curation_ui.health` and asserts the import succeeds.
+    This alone would have caught the Story/StoryModel bug from Task 2 had it existed before the fix
+    — write it so it would fail on that specific bug (e.g. also exercise the route that constructs
+    `select(Story)` outside `_render_stories_grid`, such as by calling `approve_story`'s handler
+    through a `TestClient` request, not just importing the module).
 3.2 Reuse the existing `test_settings`/`db_engine`/`db_session` fixture pattern from
     `tests/conftest.py` (sqlite+aiosqlite in-memory). Because `get_settings()` and the module-level
     `_engine` in `src/shared/database.py` are cached (`lru_cache`, module globals), use
     `monkeypatch.setenv` plus `get_settings.cache_clear()` before constructing the `TestClient`, and
-    confirm in a comment why that's necessary — do not silently work around caching without
-    explaining it, since a future reader needs to know the fixture depends on cache-clearing order.
+    add a comment explaining why that ordering matters — a future reader needs to know the fixture
+    depends on cache-clearing order.
 3.3 Cover, at minimum:
     - `GET /healthz` with `DATABASE_URL` unset returns `env_set.DATABASE_URL: false` and a verdict
       string, without raising.
@@ -202,28 +112,32 @@ task for another round. New file: `tests/test_curation_ui.py`.
     report as a follow-up.
 3.5 VERIFY, paste all output: `uv run pytest tests/test_curation_ui.py -v` all pass. Full suite
     `uv run pytest tests/ -q` shows the new tests plus the existing 220 (so ~223+ passed, 5 skipped,
-    0 failed — exact new count depends on how many you write).
+    0 failed — exact new count depends on how many you write). `uv run ruff check .` still 0
+    findings on the new file.
 3.6 Commit subject: `test(curation-ui): add smoke tests for health and auth boundary` — body
     explains the cache-clearing requirement and lists what is and isn't covered.
 3.7 Push.
 
 ## CHECKPOINT: STOP
 Push and report: `git --no-pager log --oneline -6`, full test counts, `uv run ruff check .` output,
-files changed, and the compare URL (never claim a PR exists unless you opened one). Tyler will
-review and open the PR himself.
+files changed (`git --no-pager diff main...HEAD --stat`), and — per the stricter evidence rule above
+— confirm explicitly that `tests/test_curation_ui.py` exists and covers the 3 cases in 3.3 before
+calling this done. State the compare URL or PR URL if one exists; never claim a PR exists unless you
+verified it. Tyler will review and merge himself.
 
 ## Decisions for Tyler (agent: do nothing about these)
 - Confirm the Actions tab actually shows green runs for `ci.yml`, `daily-ingest.yml`, and
-  `cleanup.yml` since the cache fix landed — I could not check this from the sandbox.
-- `/healthz` is still unauthenticated and returns story-status counts and scrubbed exception text
-  to anyone. Options: put it behind the same `CURATION_USER`/`CURATION_PASSWORD` basic auth (loses
-  the ability for an external uptime monitor to hit it without credentials), or leave as-is since it
+  `cleanup.yml`, and check whether PR #11 (or whatever number this branch's PR is) already exists
+  before telling the agent to open a new one.
+- `/healthz` is still unauthenticated and returns story-status counts and scrubbed exception text to
+  anyone. Options: put it behind the same `CURATION_USER`/`CURATION_PASSWORD` basic auth (loses the
+  ability for an external uptime monitor to hit it without credentials), or leave as-is since it
   never returns secrets. Not touched this round either way.
-- Whether to expand the pinned ruff rule set beyond `E4/E7/E9/F` (e.g. `UP` for the ~94+56 typing/
-  datetime modernizations, `I` for import sorting, `BLE`/`S` for exception-handling hygiene) is a
-  separate, bigger cleanup — deliberately left out of Task 2 so that task stays small and reviewable.
-- Rotate the Supabase database password if a pre-`#10` pytest run with `-v` or `-rs` ever printed
-  the skip message while `.env` pointed at Supabase (carried over from v7 — unverifiable by me).
+- Whether to expand the pinned ruff rule set beyond `E4/E7/E9/F` (e.g. `UP` for typing/datetime
+  modernizations, `I` for import sorting, `BLE`/`S` for exception-handling hygiene) is a separate,
+  bigger cleanup — deliberately left out of Task 2/3 so those stay small and reviewable.
+- Rotate the Supabase database password if a pre-#10 pytest run with `-v` or `-rs` ever printed the
+  skip message while `.env` pointed at Supabase (carried over from v7/v8 — unverifiable by me).
 - Off-limits until Tyler instructs: GDELT changes, embeddings/pgvector, the heartbeat mechanism,
   gate logic, grouping code, the curation UI's triage/business logic or its dark theme, expiring or
   deleting orphan stories, editing production data, and v7's Task 3 (grouping-change proposal),
@@ -239,6 +153,7 @@ review and open the PR himself.
 - After `uv sync`, spaCy's `en_core_web_sm` may be missing locally:
   `uv run python -m spacy download en_core_web_sm`.
 
-## Report format after every checkpoint
+## Report format after the checkpoint
 Files changed; tests run with pass/fail counts; the pasted VERIFY output; ruff output; CI result or
-"unknown"; anything surprising; what you need from me.
+"unknown"; whether `tests/test_curation_ui.py` exists and what it covers (explicitly); anything
+surprising; what you need from me.

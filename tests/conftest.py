@@ -4,7 +4,6 @@ import pytest
 import asyncio
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.pool import NullPool
 
 from src.schema.models import Base, SourceTier
 from src.shared.config import Settings
@@ -32,10 +31,18 @@ def test_settings() -> Settings:
 
 @pytest.fixture
 async def db_engine(test_settings: Settings):
-    """Create async engine for testing."""
+    """Create async engine for testing with shared in-memory SQLite.
+
+    Uses StaticPool so all connections reuse the same underlying connection
+    (and thus the same in-memory database). This is critical for tests that
+    inject the engine into database_module._engine and expect tables to
+    persist across connections (e.g., the FastAPI TestClient creating new
+    connections).
+    """
+    from sqlalchemy.pool import StaticPool
     engine = create_async_engine(
-        test_settings.database_url,
-        poolclass=NullPool,
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
         connect_args={"check_same_thread": False},
         echo=False,
     )
