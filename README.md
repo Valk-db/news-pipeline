@@ -18,7 +18,7 @@ GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → C
 | **Database** | Supabase/Neon | PostgreSQL + pgvector, free tier |
 | **LLM Primary** | Groq (`openai/gpt-oss-20b`) | Caption generation, classification |
 | **LLM Backup** | Cerebras (`gpt-oss-120b`) | 30-day trial fallback |
-| **Ingestion** | RSS (BBC, Guardian, NPR) + GDELT (disabled) + Reddit | Tier-1 news, social; AP/Reuters via GDELT only (currently disabled) |
+| **Ingestion** | RSS (BBC, Guardian, DW, France24, NPR) + GDELT (disabled) + Reddit | Tier-1 news, social; AP/Reuters via GDELT only (currently disabled) |
 | **Verification** | MinHash containment | Near-dup clustering → reporting units |
 | **Grouping** | Entity Jaccard (top-3, threshold 0.4) | Semantic story grouping |
 | **Gate** | Tier-1 distinct owners ≥2 | Defamation-safe threshold |
@@ -62,9 +62,6 @@ cp .env.example .env
 
 # Initialize database
 uv run python -m scripts.init_db
-
-# Verify tier-1 sources
-uv run python -m scripts.verify_sources
 
 # Test ingestion (dry run)
 uv run python -m src.ingestion.run --dry-run
@@ -162,12 +159,6 @@ scripts/                             # Init, seed, verify
 | New tier-1 source | `src/verification/tiers.py` → `TIER1_DOMAINS` |
 | New LLM model | `.env` → `GROQ_MODEL` (no code change) |
 | Celebrity vertical | Week 3: add `tier2_gate` in `tiers.py` |
-
-## Monitoring
-
-- **Actions tab**: Run history, logs
-- **Heartbeat**: `.github/last-run` (committed each workflow run, keeps cron alive)
-- **Database**: Query `stories` table for gate pass/block rates
 
 ## Cost
 
