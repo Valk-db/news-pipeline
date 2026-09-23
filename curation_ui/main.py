@@ -3,7 +3,6 @@
 import logging
 import socket
 import secrets
-from functools import wraps
 
 # Force IPv4-only DNS resolution to avoid Vercel's lack of outbound IPv6 routes
 # This patches the resolver asyncio (and asyncpg through it) calls underneath
@@ -24,13 +23,18 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.shared.database import get_session
-from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, Story as StoryModel
+from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost
 from src.shared.llm import get_llm_client, validate_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
 from datetime import datetime, timezone
 import uuid
 import os
+
+# Rate limiting for auth endpoints
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 
 # Get the directory where this file is located
@@ -44,12 +48,18 @@ settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
+# Rate limiter for auth endpoints
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.include_router(health_router)
 
 security = HTTPBasic()
 
 
-def require_auth(creds: HTTPBasicCredentials = Depends(security)) -> str:
+@limiter.limit("10/minute")
+async def require_auth(request: Request, creds: HTTPBasicCredentials = Depends(security)) -> str:
     """Require HTTP Basic auth for all mutating endpoints."""
     if not settings.has_curation_auth:
         raise HTTPException(
@@ -95,7 +105,7 @@ async def _render_stories_grid(session: AsyncSession) -> list:
     """Render the stories grid fragment for HTMX swap."""
     from sqlalchemy import select, desc
     from sqlalchemy.orm import selectinload
-    from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle
+    from src.schema.models import Story, ReportingUnit
 
     stmt = (
         select(Story)

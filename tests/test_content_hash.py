@@ -2,7 +2,6 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
 import uuid
 
 from src.utils.trafilatura_extract import compute_content_hash, compute_url_hash

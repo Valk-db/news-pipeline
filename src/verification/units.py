@@ -10,7 +10,6 @@ from src.utils.minhash_utils import (
 from src.shared.config import get_settings
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-import uuid
 
 
 OWNERSHIP_GROUPS = {

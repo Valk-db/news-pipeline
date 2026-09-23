@@ -53,7 +53,7 @@ async def main():
         result = await run_cleanup(session, pending_hours, blocked_hours, queued_hours)
 
     # Print results
-    print(f"Cleanup completed:")
+    print("Cleanup completed:")
     print(f"  Stories expired: {result.stories_expired}")
     print(f"  Orphaned units removed: {result.orphaned_units_removed}")
     print(f"  Stale links removed: {result.stale_links_removed}")

@@ -1,7 +1,6 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from uuid import uuid4
-from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
@@ -24,6 +23,7 @@ def prepare_database_url(raw_url: str):
     does not understand ``sslmode``, so both are translated here instead of failing at request time.
     """
     url = make_url(raw_url.strip())
+    is_sqlite = url.drivername.startswith("sqlite")
     if url.drivername in ("postgres", "postgresql", "postgresql+psycopg2", "postgresql+psycopg"):
         url = url.set(drivername="postgresql+asyncpg")
 
@@ -33,13 +33,15 @@ def prepare_database_url(raw_url: str):
         query.pop(param, None)
     url = url.set(query=query)
 
-    connect_args = {
+    connect_args = {}
+    if not is_sqlite:
         # Safe behind Supabase's transaction pooler (port 6543) / PgBouncer, which cannot keep
-        # named prepared statements between transactions.
-        "statement_cache_size": 0,
-        "prepared_statement_cache_size": 0,
-        "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
-    }
+        # named prepared statements between transactions. Only applies to asyncpg (PostgreSQL).
+        connect_args = {
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+            "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+        }
     if isinstance(sslmode, str) and sslmode in _VALID_SSL_MODES:
         connect_args["ssl"] = sslmode
     return url, connect_args

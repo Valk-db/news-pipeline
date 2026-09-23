@@ -100,7 +100,7 @@ def _extract_article_sync(url: str, html: Optional[str] = None, source_key: Opti
     except Exception:
         if source_key:
             # STATS is available at module level
-            STATS.record(source_key, f"fetch_failed:error_Exception")
+            STATS.record(source_key, "fetch_failed:error_Exception")
         return None, None
 
 

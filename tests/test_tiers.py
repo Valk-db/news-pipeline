@@ -1,6 +1,5 @@
 """Tests for tier classification and tier-1 gate logic."""
 
-import pytest
 from src.verification.tiers import TIER1_DOMAINS, TIER2_DOMAINS, classify_source_tier, evaluate_tier1_gate
 from src.verification.units import get_owner_group
 from src.schema.models import SourceTier

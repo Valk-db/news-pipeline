@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, Boolean, JSON, func
+    Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, JSON
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship

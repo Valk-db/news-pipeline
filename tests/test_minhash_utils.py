@@ -1,12 +1,10 @@
 """Tests for MinHash utilities."""
 
-import pytest
 from src.utils.minhash_utils import (
     shingle_text,
     tokens_to_minhash,
     minhash_to_json,
     minhash_from_json,
-    jaccard_from_minhash,
     containment_from_jaccard,
     compute_containment,
     cluster_articles_by_containment,
