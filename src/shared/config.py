@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,7 +44,7 @@ class Settings(BaseSettings):
     # Verification settings
     containment_threshold: float = 0.9
     min_reporting_units_per_story: int = 2
-    top_n_entities: int = 3
+    top_n_entities: int = Field(default=3, ge=1)
 
     # Scheduling
     cron_schedule: str = "0 6,18 * * *"  # 6 AM and 6 PM UTC

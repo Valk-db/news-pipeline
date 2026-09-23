@@ -25,7 +25,7 @@ class CanonicalMention:
     confidence: float = 1.0     # Resolution confidence (0-1)
 
 
-def extract_entities(text: str, top_n: int = 3) -> Dict[str, List[str]]:
+def extract_entities(text: str, top_n: Optional[int] = 3) -> Dict[str, List[str]]:
     """
     Extract named entities from text.
     Returns dict of label -> list of entity texts (top N by frequency).
@@ -33,15 +33,17 @@ def extract_entities(text: str, top_n: int = 3) -> Dict[str, List[str]]:
     return extract_entities_top_n(text, top_n=top_n)
 
 
-def extract_entities_top_n(text: str, top_n: int = 3) -> Dict[str, List[str]]:
+def extract_entities_top_n(text: str, top_n: Optional[int] = 3) -> Dict[str, List[str]]:
     """
     Extract named entities from text, honoring an explicit top-N cap.
 
     ``top_n`` is the per-label cap (top N entities per PERSON/ORG/GPE label by
     frequency), so callers can drive it from configuration instead of hardcoding
     the value at each call site. Pass ``top_n=None`` to keep all entities per
-    label.
+    label. ``top_n`` must be >= 0; negative values raise ValueError.
     """
+    if top_n is not None and top_n < 0:
+        raise ValueError("top_n must be >= 0 (or None to keep all)")
     nlp = get_nlp()
     doc = nlp(text)
 

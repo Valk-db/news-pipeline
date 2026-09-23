@@ -12,6 +12,7 @@ from src.ingestion.gdelt import (
     GDELT_TIER1_CRITICAL_DOMAINS,
     DOMAIN_FILTERS,
 )
+from src.shared.config import Settings
 from src.schema.models import RawArticle, SourceTier
 
 
@@ -238,6 +239,79 @@ class TestIngestGdeltCircuitBreaker:
             # Verify verify_sources logic would work
             articles_count = len(result.articles)
             assert articles_count == 5
+
+    @pytest.mark.asyncio
+    async def test_gdelt_call_site_respects_top_n_entities_5(self):
+        """GDELT ingestion passes top_n=5 when settings.top_n_entities=5."""
+        with patch("src.ingestion.gdelt.fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("src.ingestion.gdelt.extract_article", new_callable=AsyncMock) as mock_extract, \
+             patch("src.ingestion.gdelt.extract_entities_top_n") as mock_entities, \
+             patch("src.ingestion.gdelt.compute_url_hash") as mock_url_hash, \
+             patch("src.ingestion.gdelt.compute_content_hash") as mock_content_hash, \
+             patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock), \
+             patch("src.ingestion.gdelt.get_settings") as mock_settings:
+
+            mock_settings.return_value = Settings(
+                database_url="sqlite+aiosqlite:///:memory:",
+                groq_api_key="",
+                cerebras_api_key="",
+                top_n_entities=5,
+            )
+            mock_fetch.return_value = MockResponse(
+                status_code=200,
+                json_data={"articles": [{"url": "https://apnews.com/a", "title": "A", "seendate": "20240101120000", "excerpt": "excerpt"}]}
+            )
+            # Body text >= 200 chars to pass MIN_BODY_LENGTH
+            mock_extract.return_value = (
+                "body text long enough to pass the 200 character minimum requirement for article extraction in the pipeline and then some more text to ensure it is definitely over two hundred characters total and then even more text to make sure it is clearly over the limit",
+                "title"
+            )
+            mock_entities.return_value = {"PERSON": [], "ORG": ["AP"], "GPE": []}
+            mock_url_hash.return_value = "hash1"
+            mock_content_hash.return_value = "chash1"
+
+            result = await fetch_gdelt_articles("apnews.com", hours_back=24, max_records=10, throttle_seconds=0)
+
+            assert result.ok is True
+            mock_entities.assert_called_once()
+            # Verify the call site passed top_n=5
+            assert mock_entities.call_args.kwargs["top_n"] == 5
+
+    @pytest.mark.asyncio
+    async def test_gdelt_call_site_respects_top_n_entities_1(self):
+        """GDELT ingestion passes top_n=1 when settings.top_n_entities=1."""
+        with patch("src.ingestion.gdelt.fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
+             patch("src.ingestion.gdelt.extract_article", new_callable=AsyncMock) as mock_extract, \
+             patch("src.ingestion.gdelt.extract_entities_top_n") as mock_entities, \
+             patch("src.ingestion.gdelt.compute_url_hash") as mock_url_hash, \
+             patch("src.ingestion.gdelt.compute_content_hash") as mock_content_hash, \
+             patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock), \
+             patch("src.ingestion.gdelt.get_settings") as mock_settings:
+
+            mock_settings.return_value = Settings(
+                database_url="sqlite+aiosqlite:///:memory:",
+                groq_api_key="",
+                cerebras_api_key="",
+                top_n_entities=1,
+            )
+            mock_fetch.return_value = MockResponse(
+                status_code=200,
+                json_data={"articles": [{"url": "https://apnews.com/a", "title": "A", "seendate": "20240101120000", "excerpt": "excerpt"}]}
+            )
+            mock_extract.return_value = (
+                "body text long enough to pass the 200 character minimum requirement for article extraction in the pipeline and then some more text to ensure it is definitely over two hundred characters total and then even more text to make sure it is clearly over the limit",
+                "title"
+            )
+            mock_entities.return_value = {"PERSON": [], "ORG": ["AP"], "GPE": []}
+            mock_url_hash.return_value = "hash1"
+            mock_content_hash.return_value = "chash1"
+
+            result = await fetch_gdelt_articles("apnews.com", hours_back=24, max_records=10, throttle_seconds=0)
+
+            assert result.ok is True
+            mock_entities.assert_called_once()
+            # Verify the call site passed top_n=1
+            assert mock_entities.call_args.kwargs["top_n"] == 1
 
 
 class TestRunIngestionIntegration:
