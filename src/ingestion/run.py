@@ -43,9 +43,21 @@ def dedupe_articles(all_articles, existing_url_hashes, existing_content_hashes):
 
 async def log_status(session, phase: str, status: str, details: dict = None):
     """Log pipeline status to database."""
-    import subprocess
+    import os
     try:
-        commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+        git_dir = ".git"
+        head_path = os.path.join(git_dir, "HEAD")
+        if os.path.exists(head_path):
+            with open(head_path) as f:
+                head_content = f.read().strip()
+            if head_content.startswith("ref: "):
+                ref_path = os.path.join(git_dir, head_content[5:])
+                with open(ref_path) as f:
+                    commit_sha = f.read().strip()
+            else:
+                commit_sha = head_content
+        else:
+            commit_sha = None
     except Exception:
         commit_sha = None
 

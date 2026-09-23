@@ -31,6 +31,11 @@ from datetime import datetime, timezone
 import uuid
 import os
 
+# Rate limiting for auth endpoints
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 
 # Get the directory where this file is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,12 +48,18 @@ settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
+# Rate limiter for auth endpoints
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.include_router(health_router)
 
 security = HTTPBasic()
 
 
-def require_auth(creds: HTTPBasicCredentials = Depends(security)) -> str:
+@limiter.limit("10/minute")
+async def require_auth(request: Request, creds: HTTPBasicCredentials = Depends(security)) -> str:
     """Require HTTP Basic auth for all mutating endpoints."""
     if not settings.has_curation_auth:
         raise HTTPException(

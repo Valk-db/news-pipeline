@@ -3,9 +3,10 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import List
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import Story, ReportingUnit, StoryUnitLink, StatusLog
+from src.verification.tiers import recompute_story_counters
 
 
 @dataclass
@@ -127,25 +128,27 @@ async def cleanup_stale_story_links(session: AsyncSession) -> CleanupResult:
     (Should be handled by CASCADE, but defensive cleanup.)
     """
     result = CleanupResult()
+    affected_story_ids = set()
 
-    # Find links where story or unit doesn't exist
-    stmt = select(StoryUnitLink)
+    # Single query with LEFT JOINs - find links where story OR unit is missing
+    stmt = (
+        select(StoryUnitLink)
+        .outerjoin(Story, Story.id == StoryUnitLink.story_id)
+        .outerjoin(ReportingUnit, ReportingUnit.id == StoryUnitLink.unit_id)
+        .where(or_(Story.id.is_(None), ReportingUnit.id.is_(None)))
+    )
     result_exec = await session.execute(stmt)
-    links = result_exec.scalars().all()
+    stale_links = result_exec.scalars().all()
 
-    for link in links:
-        story_stmt = select(Story).where(Story.id == link.story_id)
-        story_result = await session.execute(story_stmt)
-        story = story_result.scalar_one_or_none()
+    for link in stale_links:
+        affected_story_ids.add(link.story_id)
+        await session.delete(link)
+        result.stale_links_removed += 1
+        result.details.append(f"Removed stale link {link.id} (story: {link.story_id}, unit: {link.unit_id})")
 
-        unit_stmt = select(ReportingUnit).where(ReportingUnit.id == link.unit_id)
-        unit_result = await session.execute(unit_stmt)
-        unit = unit_result.scalar_one_or_none()
-
-        if not story or not unit:
-            await session.delete(link)
-            result.stale_links_removed += 1
-            result.details.append(f"Removed stale link {link.id} (story: {link.story_id}, unit: {link.unit_id})")
+    # Recompute counters for affected stories
+    if affected_story_ids:
+        await recompute_story_counters(session, list(affected_story_ids))
 
     await session.flush()
     return result

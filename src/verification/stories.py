@@ -8,6 +8,7 @@ from src.utils.ner import (
     resolve_entities_to_canonical,
     canonical_jaccard,
 )
+from src.verification.tiers import recompute_story_counters
 from datetime import datetime, timezone, timedelta
 import uuid
 
@@ -101,6 +102,10 @@ async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
             # Add to recent_stories so subsequent units in same batch can attach to it
             recent_stories[story.id] = set(story.primary_entities or [])
             modified_story_ids.add(story.id)
+
+    # Recompute counters for all modified stories after all attachments are done
+    if modified_story_ids:
+        await recompute_story_counters(session, list(modified_story_ids))
 
     return list(modified_story_ids)
 

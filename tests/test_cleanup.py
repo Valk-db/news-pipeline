@@ -200,29 +200,13 @@ class TestCleanupStaleStoryLinks:
         valid_link.story_id = uuid.uuid4()
         valid_link.unit_id = uuid.uuid4()
 
+        # New implementation uses single query with LEFT JOINs
+        # Return stale_link (missing story/unit) but NOT valid_link (both exist)
         mock_link_result = MagicMock()
-        mock_link_result.scalars.return_value.all.return_value = [stale_link, valid_link]
+        mock_link_result.scalars.return_value.all.return_value = [stale_link]
 
-        # Total calls: 1 (initial select) + 2 links * 2 checks each = 5 calls
-        # call 1: select(StoryUnitLink) - returns both links
-        # call 2: check story for stale_link -> None
-        # call 3: check unit for stale_link -> None
-        # call 4: check story for valid_link -> exists
-        # call 5: check unit for valid_link -> exists
-        call_count = [0]
         async def mock_execute(stmt):
-            call_count[0] += 1
-            result = MagicMock()
-            if call_count[0] == 1:
-                # Initial select of all links
-                result.scalars.return_value.all.return_value = [stale_link, valid_link]
-            elif call_count[0] <= 3:
-                # stale_link: story and unit both missing
-                result.scalar_one_or_none.return_value = None
-            else:
-                # valid_link: story and unit both exist
-                result.scalar_one_or_none.return_value = MagicMock()
-            return result
+            return mock_link_result
 
         mock_session.execute.side_effect = mock_execute
         mock_session.delete = AsyncMock()

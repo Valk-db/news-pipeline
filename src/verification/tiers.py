@@ -1,12 +1,75 @@
 """Source tier definitions and tier-1 gate logic."""
 
 import uuid
+from collections import defaultdict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import (
     ReportingUnit, Story, StoryUnitLink, SourceTier
 )
 from typing import List, Optional, Tuple
+
+
+async def recompute_story_counters(session: AsyncSession, story_ids: List[uuid.UUID]) -> None:
+    """
+    Recompute story tier1_unit_count, tier2_unit_count, and distinct_owners
+    from current StoryUnitLinks.
+
+    This should be called whenever StoryUnitLinks change (attach/detach/merge).
+
+    Note: distinct_owners is computed from tier1_owner_groups to match
+    the tier-1 gate logic which requires >=2 distinct tier-1 owners.
+    """
+    if not story_ids:
+        return
+
+    # Get all linked units for these stories with their tier and tier1_owner_groups
+    stmt = (
+        select(StoryUnitLink.story_id, ReportingUnit.source_tiers, ReportingUnit.tier1_owner_groups)
+        .join(ReportingUnit, ReportingUnit.id == StoryUnitLink.unit_id)
+        .where(StoryUnitLink.story_id.in_(story_ids))
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    # Aggregate by story_id
+    story_tiers: dict[uuid.UUID, dict[str, int]] = {}
+    story_tier1_owners: dict[uuid.UUID, set[str]] = {}
+
+    for story_id, source_tiers, tier1_owner_groups in rows:
+        if story_id not in story_tiers:
+            story_tiers[story_id] = {}
+            story_tier1_owners[story_id] = set()
+
+        # Sum up tier counts
+        for tier_str, count in (source_tiers or {}).items():
+            story_tiers[story_id][tier_str] = story_tiers[story_id].get(tier_str, 0) + count
+
+        # Collect tier-1 owners (owners that have tier-1 units)
+        for owner, _ in (tier1_owner_groups or {}).items():
+            story_tier1_owners[story_id].add(owner)
+
+    # Now compute tier1_unit_count, tier2_unit_count, and distinct_owners for each story
+    # Batch fetch all stories in one query
+    stmt_stories = select(Story).where(Story.id.in_(story_ids))
+    result_stories = await session.execute(stmt_stories)
+    stories = {s.id: s for s in result_stories.scalars().all()}
+
+    for story_id in story_ids:
+        tiers = story_tiers.get(story_id, {})
+        tier1_owners = story_tier1_owners.get(story_id, set())
+
+        tier1_count = tiers.get("tier1", 0)
+        tier2_count = tiers.get("tier2", 0)
+        distinct_owners = len(tier1_owners)  # distinct tier-1 owners
+
+        story = stories.get(story_id)
+        if story:
+            story.tier1_unit_count = tier1_count
+            story.tier2_unit_count = tier2_count
+            story.distinct_owners = distinct_owners
+
+    await session.flush()
 
 
 # Tier-1 sources (verified editorial standards)
@@ -92,56 +155,51 @@ async def apply_tier1_gate(
     queued = 0
     blocked = 0
 
-    for story in stories:
-        # Get linked reporting units
+    # First, recompute all counters from current StoryUnitLinks
+    story_id_list = [s.id for s in stories]
+    if story_id_list:
+        await recompute_story_counters(session, story_id_list)
+
+    # Batch fetch all units for all stories in a single query
+    story_units: defaultdict[uuid.UUID, list] = defaultdict(list)
+    if story_id_list:
         stmt = (
-            select(ReportingUnit)
+            select(Story, ReportingUnit)
             .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
-            .where(StoryUnitLink.story_id == story.id)
+            .join(Story, Story.id == StoryUnitLink.story_id)
+            .where(Story.id.in_(story_id_list))
         )
         result = await session.execute(stmt)
-        units = result.scalars().all()
+        for story, unit in result.all():
+            story_units[story.id].append(unit)
+
+    for story in stories:
+        # Get linked reporting units for gate evaluation (from batched query)
+        units = story_units.get(story.id, [])
 
         # Convert real ReportingUnit rows to (tier, owner_group) tuples for pure function
         # tier1_owner_groups is already a JSON dict like {"AP": 1, "BBC": 2} computed in units.py
         tier_owner_pairs = []
-        tier1_total = 0
-        tier2_total = 0
-        tier1_owners = set()
 
         for u in units:
             # source_tiers is JSON like {"tier1": 2, "tier2": 1}
             source_tiers = u.source_tiers or {}
             for tier, count in source_tiers.items():
-                # Use tier1_owner_groups for tier1 owners (already correct ownership mapping)
-                # For tier2, we don't need owners for the gate
                 if tier == "tier1":
                     tier1_owner_groups = u.tier1_owner_groups or {}
                     for owner, owner_count in tier1_owner_groups.items():
                         for _ in range(owner_count):
                             tier_owner_pairs.append((tier, owner))
-                    tier1_total += count
-                    tier1_owners.update(tier1_owner_groups.keys())
-                elif tier == "tier2":
-                    tier2_total += count
+                # tier2 doesn't matter for the gate
 
         # Use pure function for gate decision
         should_queue, reason = evaluate_tier1_gate(tier_owner_pairs)
 
-        # Count for storage
-        tier1_count = tier1_total
-        tier2_count = tier2_total
-        distinct_owners = len(tier1_owners)
-
-        # Update story
-        story.tier1_unit_count = tier1_count
-        story.tier2_unit_count = tier2_count
-        story.distinct_owners = distinct_owners
-
+        # Update story status and gate_reason (counters already updated by recompute_story_counters)
         if should_queue:
             # Gate passes: keep PENDING (awaiting curator approval)
             story.status = Story.Status.PENDING
-            story.gate_reason = f"Passed gate: {tier1_count} tier-1 units, {distinct_owners} distinct owners"
+            story.gate_reason = f"Passed gate: {story.tier1_unit_count} tier-1 units, {story.distinct_owners} distinct owners"
             queued += 1
         else:
             story.status = Story.Status.BLOCKED
