@@ -62,7 +62,7 @@ class TestFetchGdeltArticles:
              patch("src.ingestion.gdelt.extract_entities") as mock_entities, \
              patch("src.ingestion.gdelt.compute_url_hash") as mock_url_hash, \
              patch("src.ingestion.gdelt.compute_content_hash") as mock_content_hash, \
-             patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock):
 
             mock_fetch.return_value = MockResponse(
                 status_code=200,
@@ -217,7 +217,7 @@ class TestIngestGdeltCircuitBreaker:
              patch("src.ingestion.gdelt.extract_entities") as mock_entities, \
              patch("src.ingestion.gdelt.compute_url_hash") as mock_url_hash, \
              patch("src.ingestion.gdelt.compute_content_hash") as mock_content_hash, \
-             patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock):
 
             mock_fetch.return_value = MockResponse(
                 status_code=200,
@@ -253,7 +253,7 @@ class TestRunIngestionIntegration:
              patch("src.ingestion.run.ingest_reddit") as mock_reddit, \
              patch("src.ingestion.run.init_db"), \
              patch("src.ingestion.run.get_session") as mock_session, \
-             patch("src.ingestion.run.log_status") as mock_log:
+             patch("src.ingestion.run.log_status"):
 
             mock_rss.return_value = []
             mock_gdelt.return_value = (

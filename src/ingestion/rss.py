@@ -2,7 +2,7 @@
 
 import feedparser
 import httpx
-from typing import List, Dict, Optional
+from typing import List, Optional
 from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
 from src.utils.ner import extract_entities

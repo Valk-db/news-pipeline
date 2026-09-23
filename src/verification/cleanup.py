@@ -3,10 +3,9 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import List
-from sqlalchemy import select, delete, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import Story, ReportingUnit, StoryUnitLink, StatusLog
-from src.shared.config import get_settings
 
 
 @dataclass
@@ -39,7 +38,6 @@ async def cleanup_stale_stories(
     POSTED/REJECTED: never expired (curator explicitly acted)
     """
     result = CleanupResult()
-    settings = get_settings()
     now = datetime.now(timezone.utc)
 
     # Expire PENDING stories

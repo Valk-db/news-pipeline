@@ -45,10 +45,31 @@ dev = [
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+# Pin to ruff's documented default rule families so finding counts don't drift
+# across ruff upgrades. E4, E7, E9, F are the "always on" families per ruff docs.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# curation_ui/main.py monkey-patches socket.getaddrinfo (lines 3-17) to force
+# IPv4-only DNS before importing FastAPI/SQLAlchemy/asyncpg — required because
+# Vercel lacks outbound IPv6 routes and asyncpg fails otherwise. Reordering
+# these imports to satisfy E402 would silently break production.
+"curation_ui/main.py" = ["E402"]
+
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = true
 warn_unused_ignores = true
+# These optional dependencies don't provide stubs; silence the warnings.
+[[tool.mypy.overrides]]
+module = "feedparser"
+ignore_missing_imports = true
+[[tool.mypy.overrides]]
+module = "datasketch"
+ignore_missing_imports = true
+# Exclude scripts from regular mypy run (run as standalone if needed)
+exclude = ["scripts/"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

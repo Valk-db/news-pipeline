@@ -1,7 +1,7 @@
 """Tests for entity canonicalization."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from src.utils.ner import (
     _normalize_text,
     _generate_aliases,

@@ -4,13 +4,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import ReportingUnit, Story, StoryUnitLink, RawArticle
 from src.utils.ner import (
-    get_primary_entity_set,
-    entity_set_jaccard,
     EntityCanonicalizer,
     resolve_entities_to_canonical,
     canonical_jaccard,
 )
-from src.shared.config import get_settings
 from datetime import datetime, timezone, timedelta
 import uuid
 
@@ -25,9 +22,6 @@ async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
 
     Returns list of story IDs that were created or modified.
     """
-    settings = get_settings()
-    top_n = settings.top_n_entities
-
     # Initialize canonicalizer with session
     canonicalizer = EntityCanonicalizer(session)
     await canonicalizer.initialize()
@@ -45,7 +39,6 @@ async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
         return []
 
     # Fetch representative articles for entity extraction
-    unit_ids = [u.id for u in new_units]
     stmt = select(RawArticle).where(RawArticle.id.in_([u.representative_article_id for u in new_units]))
     result = await session.execute(stmt)
     articles = {str(a.id): a for a in result.scalars().all()}

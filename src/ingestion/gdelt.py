@@ -9,7 +9,6 @@ from src.utils.trafilatura_extract import extract_article, compute_url_hash, com
 from src.utils.ner import extract_entities
 from src.schema.models import RawArticle, SourceTier
 from src.shared.config import get_settings
-import re
 import random
 
 
