@@ -59,7 +59,7 @@ class TestFetchGdeltArticles:
         """200 + valid JSON + articles → ok=True, articles populated."""
         with patch("src.ingestion.gdelt.fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
              patch("src.ingestion.gdelt.extract_article", new_callable=AsyncMock) as mock_extract, \
-             patch("src.ingestion.gdelt.extract_entities") as mock_entities, \
+             patch("src.ingestion.gdelt.extract_entities_top_n") as mock_entities, \
              patch("src.ingestion.gdelt.compute_url_hash") as mock_url_hash, \
              patch("src.ingestion.gdelt.compute_content_hash") as mock_content_hash, \
              patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock):
@@ -214,7 +214,7 @@ class TestIngestGdeltCircuitBreaker:
         """verify_sources() updated for new DomainResult return type."""
         with patch("src.ingestion.gdelt.fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
              patch("src.ingestion.gdelt.extract_article", new_callable=AsyncMock) as mock_extract, \
-             patch("src.ingestion.gdelt.extract_entities") as mock_entities, \
+             patch("src.ingestion.gdelt.extract_entities_top_n") as mock_entities, \
              patch("src.ingestion.gdelt.compute_url_hash") as mock_url_hash, \
              patch("src.ingestion.gdelt.compute_content_hash") as mock_content_hash, \
              patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock):

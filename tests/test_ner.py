@@ -2,6 +2,7 @@
 
 from src.utils.ner import (
     extract_entities,
+    extract_entities_top_n,
     get_primary_entity_set,
     entity_set_jaccard,
 )
@@ -26,6 +27,37 @@ class TestExtractEntities:
         text = " ".join([f"Person{i}" for i in range(10)])
         entities = extract_entities(text, top_n=3)
         assert len(entities.get("PERSON", [])) <= 3
+
+    def test_top_n_none_keeps_all(self):
+        """top_n=None returns every entity per label, no cap."""
+        names = ["John", "Mary", "Robert", "Patricia", "James", "Jennifer",
+                 "Michael", "Linda", "William", "Elizabeth"]
+        # Period separators so spaCy treats each name as a distinct PERSON
+        # entity (a space-separated run gets merged into one entity).
+        text = ". ".join(names) + "."
+        entities = extract_entities_top_n(text, top_n=None)
+        assert len(entities.get("PERSON", [])) == 10
+
+    def test_top_n_config_drives_cap(self):
+        """extract_entities_top_n honors the cap from settings.top_n_entities.
+
+        Regression: the per-label cap used to be hardcoded to 3 at each call
+        site, so settings.top_n_entities was dead config. This test reads the
+        same Settings object the ingestion modules read and asserts the cap
+        it exposes actually bounds the extraction.
+        """
+        from src.shared.config import get_settings
+
+        # Real first names so spaCy actually classifies them as PERSON; period
+        # separators so each is a distinct entity rather than one merged span.
+        names = ["John", "Mary", "Robert", "Patricia", "James", "Jennifer",
+                 "Michael", "Linda", "William", "Elizabeth"]
+        text = ". ".join(names) + "."
+
+        cap = get_settings().top_n_entities
+        assert isinstance(cap, int) and cap > 0
+        entities = extract_entities_top_n(text, top_n=cap)
+        assert len(entities.get("PERSON", [])) == min(10, cap)
 
     def test_org_entities(self):
         text = "Microsoft and Google announced partnerships with OpenAI."

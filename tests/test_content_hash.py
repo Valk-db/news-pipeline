@@ -346,7 +346,7 @@ class TestIngestionSourcesHaveContentHash:
         mock_entry = MockEntry()
 
         with patch("src.ingestion.rss.extract_article", new_callable=AsyncMock) as mock_extract, \
-             patch("src.ingestion.rss.extract_entities", return_value={"PERSON": [], "ORG": ["BBC"], "GPE": []}), \
+             patch("src.ingestion.rss.extract_entities_top_n", return_value={"PERSON": [], "ORG": ["BBC"], "GPE": []}), \
              patch("src.ingestion.rss.compute_url_hash", return_value="test_url_hash"), \
              patch("src.ingestion.rss.compute_content_hash", return_value="test_content_hash"):
 
@@ -383,7 +383,7 @@ class TestIngestionSourcesHaveContentHash:
         }
 
         with patch("src.ingestion.reddit.extract_article", new_callable=AsyncMock) as mock_extract, \
-             patch("src.ingestion.reddit.extract_entities", return_value={"PERSON": [], "ORG": [], "GPE": []}), \
+             patch("src.ingestion.reddit.extract_entities_top_n", return_value={"PERSON": [], "ORG": [], "GPE": []}), \
              patch("src.ingestion.reddit.compute_url_hash", return_value="test_url_hash"), \
              patch("src.ingestion.reddit.compute_content_hash", return_value="test_content_hash"):
 
@@ -405,7 +405,7 @@ class TestIngestionSourcesHaveContentHash:
 
         with patch("src.ingestion.gdelt.fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
              patch("src.ingestion.gdelt.extract_article", new_callable=AsyncMock) as mock_extract, \
-             patch("src.ingestion.gdelt.extract_entities", return_value={"PERSON": [], "ORG": ["AP"], "GPE": ["Washington"]}), \
+             patch("src.ingestion.gdelt.extract_entities_top_n", return_value={"PERSON": [], "ORG": ["AP"], "GPE": ["Washington"]}), \
              patch("src.ingestion.gdelt.compute_url_hash", return_value="urlhash"), \
              patch("src.ingestion.gdelt.compute_content_hash", return_value="contenthash"), \
              patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock):

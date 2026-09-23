@@ -10,7 +10,7 @@ from src.ingestion.rss import fetch_feed
 from src.schema.models import RawArticle, SourceTier
 from src.shared.config import get_settings
 from src.utils.ingest_stats import STATS
-from src.utils.ner import extract_entities
+from src.utils.ner import extract_entities_top_n
 from src.utils.trafilatura_extract import compute_content_hash, compute_url_hash, extract_article
 
 # Target subreddits for geopolitics/news
@@ -57,6 +57,7 @@ def extract_outbound_url(entry, comments_url: str) -> str | None:
 
 async def process_entry(entry, source_key: str = "reddit") -> RawArticle | None:
     """Process a single Reddit RSS entry into a RawArticle."""
+    settings = get_settings()
     comments_url = entry.get("link", "")
     url = extract_outbound_url(entry, comments_url)
     if not url or url.lower().endswith(NON_ARTICLE_EXTENSIONS):
@@ -82,8 +83,8 @@ async def process_entry(entry, source_key: str = "reddit") -> RawArticle | None:
     elif "updated_parsed" in entry and entry.updated_parsed:
         published_at = datetime(*entry.updated_parsed[:6], tzinfo=UTC)
 
-    # Entities
-    entities = extract_entities(body_text, top_n=3)
+    # Entities (cap driven by settings.top_n_entities)
+    entities = extract_entities_top_n(body_text, top_n=settings.top_n_entities)
 
     # Content hash
     content_hash = compute_content_hash(body_text)
