@@ -478,9 +478,10 @@ class TestIngestionSourcesHaveContentHash:
             # NOTE: the GDELT path here does not exercise extract_entities_top_n
             # (process_entry rejects the mocked body as below MIN_BODY_LENGTH, so
             # the loop never runs). The config-driven cap for GDELT is covered by
-            # test_ner.py::test_top_n_config_drives_cap and by the rss/reddit
-            # assertions below. Kept as a single assertion to avoid a test that
-            # cannot fail for the reason it exists.
+            # tests/test_gdelt.py::test_gdelt_call_site_respects_top_n_entities_5
+            # and ::test_gdelt_call_site_respects_top_n_entities_1.
+            # Kept as a single assertion to avoid a test that cannot fail for the
+            # reason it exists.
 
 
 if __name__ == "__main__":
