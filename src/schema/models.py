@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, JSON
+    Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, JSON, Boolean
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -163,6 +163,15 @@ class CanonicalEntity(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
+    # Geolocation fields for globe visualization
+    latitude = Column(String(50), nullable=True)
+    longitude = Column(String(50), nullable=True)
+    location_type = Column(String(50), nullable=True)
+    geonames_id = Column(String(50), nullable=True)
+    geojson = Column(JSON, nullable=True)
+    geometry_id = Column(UUID(as_uuid=True), ForeignKey("event_geometries.id", ondelete="SET NULL"), nullable=True)
+    layer_id = Column(UUID(as_uuid=True), ForeignKey("event_layers.id", ondelete="SET NULL"), nullable=True)
+
     # Relationship
     aliases = relationship("EntityAlias", back_populates="canonical_entity", cascade="all, delete-orphan")
 
@@ -181,3 +190,123 @@ class EntityAlias(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     canonical_entity = relationship("CanonicalEntity", back_populates="aliases")
+
+
+class EventType(str, PyEnum):
+    CONFLICT = "conflict"
+    PROTEST = "protest"
+    ELECTION = "election"
+    DISASTER = "disaster"
+    ACCIDENT = "accident"
+    POLITICAL = "political"
+    ECONOMIC = "economic"
+    HEALTH = "health"
+    ENVIRONMENTAL = "environmental"
+    CRIME = "crime"
+    SPORTS = "sports"
+    CULTURAL = "cultural"
+    SCIENTIFIC = "scientific"
+    OTHER = "other"
+
+
+class EventGeometryType(str, PyEnum):
+    POINT = "point"
+    POLYGON = "polygon"
+    LINESTRING = "linestring"
+    MULTIPOINT = "multipoint"
+    MULTIPOLYGON = "multipolygon"
+    MULTILINESTRING = "multilinestring"
+    GEOMETRYCOLLECTION = "geometrycollection"
+
+
+class EventGeometry(Base):
+    """Geometry data for events (points, polygons, etc.)."""
+    __tablename__ = "event_geometries"
+    __table_args__ = (
+        Index("ix_event_geometries_event_id", "event_id"),
+    )
+
+    GeometryType = EventGeometryType
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
+    geometry_type = Column(Enum(EventGeometryType, name="event_geometry_type"), nullable=False)
+    geojson = Column(JSON, nullable=False)  # Full GeoJSON geometry object
+    properties = Column(JSON, nullable=True)  # Additional properties
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    # Relationship - explicitly specify foreign_keys to disambiguate
+    event = relationship("Event", back_populates="geometry", foreign_keys="Event.geometry_id")
+
+
+class EventLayer(Base):
+    """Layer configuration for globe visualization."""
+    __tablename__ = "event_layers"
+    __table_args__ = (
+        Index("ix_event_layers_name", "name"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    filter_criteria = Column(JSON, nullable=False, default={})  # e.g., {"event_type": ["conflict"], "min_confidence": 0.7}
+    style = Column(JSON, nullable=False, default={})  # e.g., {"color": "red", "radius": 10000}
+    is_default = Column(Boolean, nullable=False, default=False)
+    is_visible = Column(Boolean, nullable=False, default=True)
+    min_zoom = Column(Integer, nullable=False, default=0)
+    max_zoom = Column(Integer, nullable=False, default=20)
+    color = Column(String(7), nullable=False, default="#3b82f6")  # Hex color
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    # Relationship
+    events = relationship("Event", back_populates="layer")
+
+
+class Event(Base):
+    """Event on the globe - linked to stories and geography."""
+    __tablename__ = "events"
+    __table_args__ = (
+        Index("ix_events_story_id", "story_id"),
+        Index("ix_events_layer_id", "layer_id"),
+        Index("ix_events_event_type", "event_type"),
+        Index("ix_events_location", "latitude", "longitude"),
+        Index("ix_events_start_time", "start_time"),
+    )
+
+    class EventType(str, PyEnum):
+        CONFLICT = "conflict"
+        PROTEST = "protest"
+        ELECTION = "election"
+        DISASTER = "disaster"
+        ACCIDENT = "accident"
+        POLITICAL = "political"
+        ECONOMIC = "economic"
+        HEALTH = "health"
+        ENVIRONMENTAL = "environmental"
+        CRIME = "crime"
+        SPORTS = "sports"
+        CULTURAL = "cultural"
+        SCIENTIFIC = "scientific"
+        OTHER = "other"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
+    latitude = Column(String(50), nullable=False)  # Stored as string for precision
+    longitude = Column(String(50), nullable=False)
+    location_name = Column(String(255), nullable=True)
+    location_type = Column(String(50), nullable=True)  # city, country, region, etc.
+    radius_km = Column(String(50), nullable=True)  # Stored as string
+    start_time = Column(DateTime(timezone=True), nullable=False)
+    event_type = Column(Enum(EventType, name="event_type"), nullable=False, default=EventType.OTHER)
+    confidence = Column(String(50), nullable=False, default="0.5")
+    source_count = Column(Integer, nullable=False, default=0)
+    tier1_source_count = Column(Integer, nullable=False, default=0)
+    entities = Column(JSON, nullable=True)  # Aggregated entities from articles
+    geometry_id = Column(UUID(as_uuid=True), ForeignKey("event_geometries.id", ondelete="SET NULL"), nullable=True)
+    layer_id = Column(UUID(as_uuid=True), ForeignKey("event_layers.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    # Relationships - explicitly specify foreign_keys
+    story = relationship("Story", backref="events")
+    geometry = relationship("EventGeometry", back_populates="event", uselist=False, foreign_keys=[geometry_id])
+    layer = relationship("EventLayer", back_populates="events", foreign_keys=[layer_id])
