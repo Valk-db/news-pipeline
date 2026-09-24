@@ -1,12 +1,19 @@
-# AGENT_TASKS.md: news-pipeline task file (v9, updated 2026-09-22)
+# AGENT_TASKS.md: news-pipeline task file (v10, updated 2026-09-24)
 
-This file is the only task file in force. Ignore any older task files and anything you remember
-from earlier rounds, including earlier reports that work was "complete" — a previous round's report
-claimed a "Task 3" was done when it wasn't (see Verified state). Read this file fully before doing
-anything.
+This file is the only task file in force. Ignore any older task files (including v9's "Task 3",
+which is finished and merged) and anything you remember from earlier rounds. Read this file fully
+before doing anything.
 
 Repo: Valk-db/news-pipeline. Python 3.12, uv, async SQLAlchemy, Supabase Postgres, GitHub Actions,
 FastAPI curation UI on Vercel.
+
+## Problem
+In the curation UI, every story card shows a wall of UUID "pills" (for example
+`c847e979-d6a7-4ac1-87f7-bd312e966733`) between the header row (PENDING / date / gate reason) and
+the source list. Those are canonical entity IDs. `Story.primary_entities` stores them on purpose
+(`src/verification/stories.py` uses them to match new articles to existing stories), and
+`story_card.html` renders them raw as `.entity-tag` spans. They mean nothing to a reviewer.
+Goal: stop rendering them. Do NOT change the data.
 
 ## Non-interactive shell rules (read first)
 - Before anything else set these for your shell session.
@@ -17,143 +24,154 @@ FastAPI curation UI on Vercel.
   `git add -p`, `less`, `vim`, `nano`, or anything that waits for keyboard input.
 - Never use commands that block until finished (for example `gh run watch`). Use one-shot commands
   such as `gh pr checks` and report "pending" if it is not done.
-- Make targeted edits only. Never rewrite a whole script in one tool call, never print whole files
-  to the terminal, read only the function you are editing.
+- Make targeted edits only. Never rewrite a whole file in one tool call, never print whole files to
+  the terminal, read only the section you are editing.
 - If a command shows no output for about 2 minutes, cancel it and report which command. Do not
   retry the same command more than twice. If you are stuck, stop and say which step you are on and
   what you tried.
 
 ## Working agreement
-1. Continue on the EXISTING branch `chore/cleanup-and-coverage` (already pushed, 3 commits ahead of
-   main). Do not create a new branch for Task 3. Never push to main, never force-push, never merge a
-   pull request yourself. main receives bot commits ("chore: heartbeat"), so always `git fetch
-   origin` first and rebase-free (`git merge --no-edit origin/main` only if main has moved and you
-   need it — check first, don't assume).
-2. Modify ONLY the files this task names: `tests/test_curation_ui.py` (new) and, if genuinely
-   required to make it work, `tests/conftest.py`. Do NOT touch `src/ingestion`, `src/verification`
-   (grouping/gate/tiers/cleanup logic), GDELT, the heartbeat mechanism, or curation_ui's
-   triage/business logic (approve/reject/edit/mark-posted) or its dark-theme CSS/templates from #9.
+1. Start from a fresh `git fetch origin` and branch from `origin/main`:
+   `git switch -c fix/hide-entity-ids-in-curation-ui origin/main`. main receives bot commits
+   ("chore: heartbeat"), so do not assume its SHA; record the SHA you branched from. Never push to
+   main, never force-push, never merge a pull request yourself.
+2. Modify ONLY these files:
+   - `curation_ui/templates/story_card.html` (remove one block, see 1.1)
+   - `curation_ui/static/style.css` (remove three rules, see 1.2)
+   - `tests/test_curation_ui_templates.py` (new, see 1.3)
+   - `AGENT_TASKS.md` (this file, commit it as-is, see step 0)
+   Do NOT touch `src/**`, `scripts/**`, `Story.primary_entities` or any model/column, GDELT, the
+   heartbeat, gate/grouping/tier logic, `curation_ui/main.py` triage logic, `tests/conftest.py`, or
+   `tests/test_curation_ui.py`. The dark theme from #9 stays; this task authorizes removing only
+   the entity-tag markup and its three CSS rules, nothing else in those two files.
 3. Each commit message = a short subject plus a body paragraph explaining WHY, describing only what
-   the diff contains. Never mention work that is not in the diff.
+   the diff contains.
 4. Tests run with DATABASE_URL UNSET: `uv run pytest tests/ -q`. Never set DATABASE_URL to the
    Supabase URL. Never print it, and never repeat anything that looks like a connection string or
    API key in your report.
 5. Nothing runs against the production database from your machine. Do not run
    `scripts/story_audit.py` (except `--help`), `scripts/init_db.py`, `cleanup_stale.py`,
-   `enable_rls.py`, `seed_*.py`/`print_*_reference.py` writes, or `python -m src.ingestion.run`
-   without `--dry-run`.
-6. Do not weaken, delete or skip existing tests except where a task says so. Never commit `.env`.
-7. EVIDENCE RULE, stricter than before: a step is "done" only when (a) its VERIFY commands were run
-   and passed, AND (b) `git --no-pager diff --stat` after committing shows a change to the exact
-   file(s) that step named. Before writing your final report, re-read this task file's Task 3
-   section side by side with `git --no-pager diff main...HEAD --stat` and confirm every named
-   deliverable (`tests/test_curation_ui.py` existing, containing the three cases below) is actually
-   there. The previous round's report described "Task 3" work that didn't match any task in that
-   round's file — don't let that happen again. Never write "complete" from memory.
+   `enable_rls.py`, or `python -m src.ingestion.run` without `--dry-run`.
+6. Do not weaken, delete or skip existing tests. Never commit `.env`.
+7. EVIDENCE RULE: a step is "done" only when (a) its VERIFY commands were run and passed, AND
+   (b) `git --no-pager diff --stat` after committing shows a change to the exact file(s) that step
+   named. Before writing your final report, re-read this file's Task 1 side by side with
+   `git --no-pager diff origin/main...HEAD --stat` and confirm every named deliverable is there.
+   Never write "complete" from memory.
 8. GitHub Actions (Ubuntu) is the source of truth for tests, not this machine. If `gh` is not
-   installed, write "CI status unknown, Tyler must check the Actions tab" — do not guess a pass/fail.
-9. Do NOT claim a pull request exists unless you created it or confirmed one already exists for this
-   branch with `gh pr view chore/cleanup-and-coverage` (or equivalent). A `github.com/.../pull/new/...`
-   link is only the compare page.
-10. Do the steps in order without asking me between steps, but stop at the CHECKPOINT.
+   installed, write "CI status unknown, Tyler must check the Actions tab". Do not guess pass/fail.
+9. Do NOT claim a pull request exists unless you created it or confirmed one exists with
+   `gh pr view fix/hide-entity-ids-in-curation-ui`. A `github.com/.../pull/new/...` link is only the
+   compare page.
+10. Do the steps in order without asking between steps, but stop at the CHECKPOINT.
 
-## Verified state (checked independently from a fresh clone, 2026-09-22)
-- main = `628ccd9` (includes #9 dark theme, #10 audit-round-2 fixes). `cache: 'uv'` is confirmed
-  gone from all three workflow files — the v7 CI blocker is resolved on main.
-- Branch `chore/cleanup-and-coverage` = `16aecbe`, 3 commits ahead of main:
-  `d62765b` (docs: AGENT_TASKS.md v8), `3d229cd` (Task 1: remove dead curation_ui project files),
-  `16aecbe` (Task 2: pin ruff ruleset + fix findings, including mypy overrides for
-  feedparser/datasketch and `__init__.py` for curation_ui/ and scripts/).
-- **Independently re-ran and confirmed**, fresh `uv sync --extra dev --extra pipeline` +
-  `spacy download en_core_web_sm`: `uv run pytest tests/ -q` → 220 passed, 5 skipped, 0 failed.
-  `uv run ruff check .` → 0 findings.
-- **Task 1 and Task 2 are genuinely complete and correct.** In particular, the
-  `curation_ui/main.py` fix removed only the dead `Story as StoryModel` alias and kept the real
-  `Story` import that `approve_story`/`reject_story`/`edit_story`/`save_story`/`mark_posted`
-  actually use — the non-obvious, behavior-preserving fix v8 asked for, not the naive autofix that
-  would have broken those routes.
-- **Task 3 from v8 (add `tests/test_curation_ui.py` smoke coverage) was NOT done**, despite a round
-  report describing a "Task 3" as complete. There is no `tests/test_curation_ui.py` file on this
-  branch or anywhere in the repo. What that report actually described (unused test imports/vars
-  cleaned up, `__init__.py` added for mypy module resolution, mypy overrides added, spaCy model
-  downloaded) is real, verified work — but it's part of Task 2's diff and R0 setup, not a separate
-  completed task. Task 3 below is that same, still-outstanding work, reissued.
-- **CI/PR status is unverified by me.** GitHub's REST API is rate-limiting unauthenticated requests
-  from the sandbox I checked this in, and I don't have `gh` there either, so I could not confirm (a)
-  that GitHub Actions is actually green for `16aecbe`, or (b) that a PR for this branch exists. If
-  one exists, do not merge it — Task 3 isn't in it yet. Check the Actions tab and the PR yourself.
-- Unchanged from v8, still true, still Tyler's calls to make: `/healthz` unauthenticated, whether to
-  widen the ruff ruleset beyond `E4/E7/E9/F`, the Supabase password rotation reminder, and the
-  off-limits list below.
+## Verified state (checked from a fresh clone, 2026-09-24; main was `be60821`)
+- `curation_ui/templates/story_card.html` lines 10-14 render `item.story.primary_entities` as
+  `<span class="entity-tag">{{ entity }}</span>`. This is the only place in the repo that renders
+  them. `primary_entities` is otherwise only read/written in `src/verification/stories.py` and
+  declared in `src/schema/models.py`.
+- `.story-entities`, `.entity-tag`, `.entity-tag:hover` exist only in
+  `curation_ui/static/style.css` (about lines 420-441) and are referenced nowhere else (not in
+  `edit.html`, `main.py`, tests, or README).
+- Dry-run of this change in a scratch copy: removing the block and the CSS leaves the header row
+  (margin-bottom 16px) directly above `.story-sources`, spacing looks correct, and a render-only
+  regression test fails on the old template and passes on the new one. The full suite was NOT run
+  in that scratch copy; you must run it.
 
-## Task 3: add minimal test coverage for curation_ui (branch chore/cleanup-and-coverage, same branch)
-The goal is a smoke-test safety net, not full coverage of the triage workflow — that's a bigger task
-for another round. New file: `tests/test_curation_ui.py`.
-3.1 A test that imports `curation_ui.main` and `curation_ui.health` and asserts the import succeeds.
-    This alone would have caught the Story/StoryModel bug from Task 2 had it existed before the fix
-    — write it so it would fail on that specific bug (e.g. also exercise the route that constructs
-    `select(Story)` outside `_render_stories_grid`, such as by calling `approve_story`'s handler
-    through a `TestClient` request, not just importing the module).
-3.2 Reuse the existing `test_settings`/`db_engine`/`db_session` fixture pattern from
-    `tests/conftest.py` (sqlite+aiosqlite in-memory). Because `get_settings()` and the module-level
-    `_engine` in `src/shared/database.py` are cached (`lru_cache`, module globals), use
-    `monkeypatch.setenv` plus `get_settings.cache_clear()` before constructing the `TestClient`, and
-    add a comment explaining why that ordering matters — a future reader needs to know the fixture
-    depends on cache-clearing order.
-3.3 Cover, at minimum:
-    - `GET /healthz` with `DATABASE_URL` unset returns `env_set.DATABASE_URL: false` and a verdict
-      string, without raising.
-    - `GET /` without HTTP Basic credentials returns 401 (via `require_auth`'s dependency), and with
-      `CURATION_USER`/`CURATION_PASSWORD` unset it returns the "not configured" 401/403 detail
-      rather than a 500.
-    - `GET /` with valid credentials against an empty in-memory DB (no stories) returns 200.
-3.4 Do not add tests for `approve_story`/`reject_story`/`edit_story`/`mark_posted` full flows this
-    round — that needs LLM-client mocking that's out of scope here. Note that gap explicitly in your
-    report as a follow-up.
-3.5 VERIFY, paste all output: `uv run pytest tests/test_curation_ui.py -v` all pass. Full suite
-    `uv run pytest tests/ -q` shows the new tests plus the existing 220 (so ~223+ passed, 5 skipped,
-    0 failed — exact new count depends on how many you write). `uv run ruff check .` still 0
-    findings on the new file.
-3.6 Commit subject: `test(curation-ui): add smoke tests for health and auth boundary` — body
-    explains the cache-clearing requirement and lists what is and isn't covered.
-3.7 Push.
+## Task 1: hide entity IDs from the curation UI
+1.0 Step 0: `git switch -c fix/hide-entity-ids-in-curation-ui origin/main`. Commit this file:
+    `docs: AGENT_TASKS.md v10` with a body saying it scopes the entity-ID removal.
+1.1 In `curation_ui/templates/story_card.html`, delete exactly this block (including the blank
+    line after it), so `</div>` of `.story-header` is followed by one blank line and then
+    `<div class="story-sources">`:
+
+        <div class="story-entities">
+            {% for entity in item.story.primary_entities %}
+            <span class="entity-tag">{{ entity }}</span>
+            {% endfor %}
+        </div>
+
+1.2 In `curation_ui/static/style.css`, delete the rules `.story-entities`, `.entity-tag`, and
+    `.entity-tag:hover` (from the line `.story-entities {` up to, but not including, the
+    `/* Story Sources */` comment). Keep that comment and everything after it intact.
+    VERIFY: `git --no-pager grep -n "story-entities\|entity-tag" -- curation_ui tests` returns
+    nothing except the new test's assertion string.
+1.3 Create `tests/test_curation_ui_templates.py` (separate file on purpose: do not add to
+    `tests/test_curation_ui.py`, whose fixtures depend on settings cache-clearing order). It must
+    render `story_card.html` directly with a plain `jinja2.Environment` and
+    `jinja2.FileSystemLoader`, no app import, no DB, no fixtures. Use this exact content:
+
+        """Regression test: story card must not render internal canonical entity IDs."""
+
+        from datetime import date, datetime
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        import jinja2
+
+        TEMPLATES = Path(__file__).resolve().parent.parent / "curation_ui" / "templates"
+
+
+        def test_story_card_hides_primary_entity_ids():
+            entity_id = "c847e979-d6a7-4ac1-87f7-bd312e966733"
+            env = jinja2.Environment(loader=jinja2.FileSystemLoader(str(TEMPLATES)))
+            story = SimpleNamespace(
+                id="00000000-0000-0000-0000-000000000001",
+                status=SimpleNamespace(value="pending"),
+                day=date(2026, 9, 24),
+                gate_reason="Passed gate: 2 tier-1 units, 2 distinct owners",
+                primary_entities=[entity_id],
+                tier1_unit_count=2,
+                distinct_owners=2,
+            )
+            article = SimpleNamespace(
+                url="https://example.com/a",
+                title="Example headline",
+                source_domain="example.com",
+                published_at=datetime(2026, 9, 24, 15, 38),
+                source_tier=SimpleNamespace(value="tier1"),
+            )
+            html = env.get_template("story_card.html").render(
+                item=SimpleNamespace(story=story, articles=[article], units=[object(), object()])
+            )
+            assert entity_id not in html
+            assert "entity-tag" not in html
+            assert "Example headline" in html
+
+    If `jinja2` is not importable in the uv env, stop and report it (it should come in via
+    fastapi/starlette templating). Do not add a dependency.
+1.4 PROVE THE TEST BITES: run it once against the OLD template and confirm it FAILS, then confirm it
+    PASSES on the new one. Do it with `git stash` around the two curation_ui files only, or
+    equivalently `git --no-pager show origin/main:curation_ui/templates/story_card.html` into a temp
+    copy. Paste both outcomes. Leave the working tree with the fix applied.
+1.5 VERIFY, paste all output:
+    - `uv run pytest tests/test_curation_ui_templates.py -v` passes.
+    - `uv run pytest tests/ -q`: 0 failed. Report exact passed/skipped counts; the new file adds
+      exactly 1 passing test.
+    - `uv run ruff check .` shows 0 findings.
+    - `git --no-pager diff origin/main...HEAD --stat` shows only the four files named in
+      Working agreement 2.
+1.6 Commit the fix: subject `fix(curation-ui): stop rendering raw entity IDs on story cards`; body
+    explains that `primary_entities` holds canonical entity IDs used for story matching, that they
+    are not human-readable, and that only the display markup and its CSS were removed while the
+    stored data is unchanged. Test goes in the same commit or a second `test:` commit, your choice.
+1.7 Push the branch.
 
 ## CHECKPOINT: STOP
 Push and report: `git --no-pager log --oneline -6`, full test counts, `uv run ruff check .` output,
-files changed (`git --no-pager diff main...HEAD --stat`), and — per the stricter evidence rule above
-— confirm explicitly that `tests/test_curation_ui.py` exists and covers the 3 cases in 3.3 before
-calling this done. State the compare URL or PR URL if one exists; never claim a PR exists unless you
-verified it. Tyler will review and merge himself.
+`git --no-pager diff origin/main...HEAD --stat`, the fail-before/pass-after output from 1.4, and
+the branch's compare URL or PR URL if you verified one exists. Tyler will review, check the live
+page after Vercel redeploys, and merge himself.
 
 ## Decisions for Tyler (agent: do nothing about these)
-- Confirm the Actions tab actually shows green runs for `ci.yml`, `daily-ingest.yml`, and
-  `cleanup.yml`, and check whether PR #11 (or whatever number this branch's PR is) already exists
-  before telling the agent to open a new one.
-- `/healthz` is still unauthenticated and returns story-status counts and scrubbed exception text to
-  anyone. Options: put it behind the same `CURATION_USER`/`CURATION_PASSWORD` basic auth (loses the
-  ability for an external uptime monitor to hit it without credentials), or leave as-is since it
-  never returns secrets. Not touched this round either way.
-- Whether to expand the pinned ruff rule set beyond `E4/E7/E9/F` (e.g. `UP` for typing/datetime
-  modernizations, `I` for import sorting, `BLE`/`S` for exception-handling hygiene) is a separate,
-  bigger cleanup — deliberately left out of Task 2/3 so those stay small and reviewable.
-- Rotate the Supabase database password if a pre-#10 pytest run with `-v` or `-rs` ever printed the
-  skip message while `.env` pointed at Supabase (carried over from v7/v8 — unverifiable by me).
+- If you ever want the entity context back in a readable form, the fix is to resolve the canonical
+  IDs to names (join through the canonicalizer/entity table) and show the top 3-5 names. That is a
+  separate feature; not done here.
+- `/healthz` is still unauthenticated (carried over from v9). Untouched.
 - Off-limits until Tyler instructs: GDELT changes, embeddings/pgvector, the heartbeat mechanism,
-  gate logic, grouping code, the curation UI's triage/business logic or its dark theme, expiring or
-  deleting orphan stories, editing production data, and v7's Task 3 (grouping-change proposal),
-  which still requires Tyler to run `story_audit.py` against production and paste the output first.
-
-## Test-compatibility notes
-- `tests/test_story_audit.py` imports the script as `from story_audit import ...` after inserting
-  the `scripts/` directory into `sys.path`; keep that working. `python -m scripts.story_audit` must
-  keep working too.
-- Existing tests elsewhere patch by name `src.ingestion.run.ingest_rss_feeds / ingest_gdelt /
-  ingest_reddit` and `src.ingestion.{rss,gdelt,reddit}.extract_article`; do not touch those modules
-  this round regardless.
-- After `uv sync`, spaCy's `en_core_web_sm` may be missing locally:
-  `uv run python -m spacy download en_core_web_sm`.
+  gate logic, grouping code, the curation UI's triage/business logic, editing production data.
 
 ## Report format after the checkpoint
-Files changed; tests run with pass/fail counts; the pasted VERIFY output; ruff output; CI result or
-"unknown"; whether `tests/test_curation_ui.py` exists and what it covers (explicitly); anything
-surprising; what you need from me.
+Files changed; tests run with pass/fail counts; pasted VERIFY output; fail-before/pass-after
+evidence; ruff output; CI result or "unknown"; the SHA you branched from; anything surprising;
+what you need from me.
