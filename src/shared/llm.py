@@ -306,6 +306,44 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
         if self.cerebras_client:
             await self.cerebras_client.close()
 
+    async def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 500,
+        temperature: float = 0.3,
+    ) -> Dict[str, Any]:
+        """
+        General chat completion interface compatible with OpenAI API format.
+
+        Returns:
+            Dict with "choices": [{"message": {"content": "..."}}]
+        """
+        # Try Groq first
+        if self.groq_client:
+            try:
+                return await self._chat_completion_groq(
+                    self.settings.groq_model,
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            except Exception as e:
+                logger.warning(f"Groq chat completion failed: {e}")
+
+        # Fallback to Cerebras
+        if self.cerebras_client:
+            try:
+                return await self._chat_completion_cerebras(
+                    self.settings.cerebras_model,
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            except Exception as e:
+                logger.warning(f"Cerebras chat completion failed: {e}")
+
+        raise LLMError("No LLM provider available")
+
 
 # Singleton instance
 _llm_client = None

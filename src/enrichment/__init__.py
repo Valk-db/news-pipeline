@@ -14,6 +14,9 @@ from src.enrichment.embedding_service import (
     embed_article,
     embed_story,
     cluster_embeddings,
+    cosine_similarity,
+    normalize_embedding,
+    average_embeddings,
 )
 from src.enrichment.pipeline import enrich_story, enrich_stories_batch, enrich_recent_stories
 
@@ -37,6 +40,9 @@ __all__ = [
     "embed_article",
     "embed_story",
     "cluster_embeddings",
+    "cosine_similarity",
+    "normalize_embedding",
+    "average_embeddings",
     # Pipeline
     "enrich_story",
     "enrich_stories_batch",

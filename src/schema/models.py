@@ -411,3 +411,112 @@ class MediaAsset(Base):
 
     article = relationship("RawArticle")
     story = relationship("Story")
+
+
+class SourceReliabilitySnapshot(Base):
+    """Daily reliability score snapshot for a source."""
+    __tablename__ = "source_reliability_snapshots"
+    __table_args__ = (
+        Index("ix_source_reliability_source_date", "source_domain", "snapshot_date"),
+        Index("ix_source_reliability_date", "snapshot_date"),
+        UniqueConstraint("source_domain", "snapshot_date", name="uq_source_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_domain = Column(String(255), nullable=False)
+    snapshot_date = Column(DateTime(timezone=True), nullable=False)  # UTC midnight
+
+    # Core scores (0-100)
+    factual_accuracy = Column(Integer, nullable=True)      # % verified claims rated True/Mostly True
+    correction_rate = Column(Integer, nullable=True)       # Corrections per 100 articles (inverted)
+    consensus_alignment = Column(Integer, nullable=True)   # Cosine similarity vs tier-1 median
+    transparency_score = Column(Integer, nullable=True)    # Binary flags composite
+
+    # Composite score (0-100)
+    reliability_score = Column(Integer, nullable=False)    # Weighted composite
+
+    # Supporting metrics
+    total_claims_verified = Column(Integer, nullable=False, default=0)
+    claims_true = Column(Integer, nullable=False, default=0)
+    claims_false = Column(Integer, nullable=False, default=0)
+    claims_mixed = Column(Integer, nullable=False, default=0)
+    corrections_count = Column(Integer, nullable=False, default=0)
+    articles_sampled = Column(Integer, nullable=False, default=0)
+
+    # Metadata
+    tier_at_snapshot = Column(String(20), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class FactCheckRecord(Base):
+    """Record of a fact-check performed on a claim from a source."""
+    __tablename__ = "fact_check_records"
+    __table_args__ = (
+        Index("ix_fact_check_source_date", "source_domain", "checked_at"),
+        Index("ix_fact_check_verdict", "verdict"),
+        Index("ix_fact_check_claim_hash", "claim_hash"),
+    )
+
+    class Verdict(str, PyEnum):
+        TRUE = "true"
+        MOSTLY_TRUE = "mostly_true"
+        MIXED = "mixed"
+        MOSTLY_FALSE = "mostly_false"
+        FALSE = "false"
+        UNVERIFIED = "unverified"
+
+    class FactChecker(str, PyEnum):
+        CLAIMBUSTER = "claimbuster"
+        LLM_VERIFIER = "llm_verifier"
+        CLAIMREVIEW = "claimreview"
+        MANUAL = "manual"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_domain = Column(String(255), nullable=False)
+    article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id", ondelete="SET NULL"), nullable=True)
+    claim = Column(Text, nullable=False)
+    claim_hash = Column(String(64), nullable=False)  # SHA256 for dedup
+
+    verdict = Column(Enum(Verdict), nullable=False)
+    confidence = Column(Integer, nullable=False, default=50)  # 0-100
+
+    fact_checker = Column(Enum(FactChecker), nullable=False)
+    fact_checker_url = Column(Text, nullable=True)  # URL to fact-check source
+    explanation = Column(Text, nullable=True)
+
+    checked_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    claim_date = Column(DateTime(timezone=True), nullable=True)  # When claim was made
+
+    article = relationship("RawArticle")
+
+
+class CorrectionRecord(Base):
+    """Record of a correction issued by a source."""
+    __tablename__ = "correction_records"
+    __table_args__ = (
+        Index("ix_correction_source_date", "source_domain", "correction_date"),
+        Index("ix_correction_article", "article_id"),
+        Index("ix_correction_severity", "severity"),
+    )
+
+    class Severity(str, PyEnum):
+        MINOR = "minor"          # Typos, formatting
+        MODERATE = "moderate"    # Factual errors corrected
+        MAJOR = "major"          # Significant factual changes
+        RETRACTION = "retraction"  # Article retracted
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_domain = Column(String(255), nullable=False)
+    article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id", ondelete="SET NULL"), nullable=True)
+
+    original_text = Column(Text, nullable=False)
+    corrected_text = Column(Text, nullable=False)
+    correction_summary = Column(Text, nullable=True)
+
+    severity = Column(Enum(Severity), nullable=False, default=Severity.MODERATE)
+    correction_date = Column(DateTime(timezone=True), nullable=False)
+    correction_url = Column(Text, nullable=True)  # URL to correction notice
+
+    detected_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    article = relationship("RawArticle")
