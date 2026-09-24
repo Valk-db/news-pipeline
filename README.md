@@ -88,7 +88,7 @@ cloudflared tunnel --url http://localhost:8000
 
 ### Ingestion (Twice Daily)
 1. **RSS**: BBC, Guardian, NPR (AP/Reuters removed 2026-09-21: 403/401 from GitHub runners)
-2. **GDELT DOC API**: Disabled by default (`GDELT_ENABLED=false`) — redundant with RSS for BBC/Guardian/NPR, rate-limited
+2. **GDELT DOC API**: Disabled in the daily-ingest workflow (`GDELT_ENABLED=false`); the code default in `src/shared/config.py` is enabled — redundant with RSS for BBC/Guardian/NPR, rate-limited
 3. **Reddit**: Top posts from r/worldnews, r/geopolitics, etc. (public `.rss` feeds, no credentials — anon-rate-limited, throttled to 1 subreddit/3s)
 
 ### Verification
