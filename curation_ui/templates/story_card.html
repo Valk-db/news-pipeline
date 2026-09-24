@@ -7,12 +7,6 @@
         <span class="story-gate">{{ item.story.gate_reason or 'Pending review' }}</span>
     </div>
 
-    <div class="story-entities">
-        {% for entity in item.story.primary_entities %}
-        <span class="entity-tag">{{ entity }}</span>
-        {% endfor %}
-    </div>
-
     <div class="story-sources">
         {% for article in item.articles %}
         <div class="source-item">
