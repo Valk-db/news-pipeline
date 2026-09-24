@@ -1,4 +1,4 @@
-"""Enable Row Level Security (RLS) on all tables with no policies.
+"""Enable Row Level Security (RLS) on all tables in the models with no policies.
 
 This closes the anonymous REST API path while the backend (connecting as
 service role) bypasses RLS entirely.
@@ -8,6 +8,7 @@ import asyncio
 from sqlalchemy import text
 from src.shared.database import _get_engine
 from src.shared.config import get_settings
+from src.schema.models import Base
 
 
 async def main():
@@ -21,25 +22,19 @@ async def main():
         print("Could not create engine")
         return
 
-    tables = [
-        "raw_articles",
-        "reporting_units",
-        "stories",
-        "story_unit_links",
-        "curated_posts",
-        "status_log",
-    ]
+    tables = sorted(Base.metadata.tables.keys())
 
     async with engine.begin() as conn:
         for table in tables:
-            # Enable RLS
-            await conn.execute(text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"))
+            # Enable RLS (quote the identifier)
+            await conn.execute(text(f'ALTER TABLE IF EXISTS "{table}" ENABLE ROW LEVEL SECURITY'))
             print(f"Enabled RLS on {table}")
 
-            # Verify no policies exist (should be 0 rows)
-            result = await conn.execute(text(f"""
-                SELECT policyname FROM pg_policies WHERE tablename = '{table}'
-            """))
+            # Verify no policies exist (should be 0 rows) - parametrize table name
+            result = await conn.execute(
+                text("SELECT policyname FROM pg_policies WHERE tablename = :t"),
+                {"t": table}
+            )
             policies = result.scalars().all()
             if policies:
                 print(f"  WARNING: {table} has {len(policies)} policies: {policies}")

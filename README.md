@@ -149,6 +149,10 @@ curation_ui/                         # FastAPI + HTMX
 scripts/                             # Init, seed, verify
 ```
 
+## Database Schema Changes
+
+`init_db()` only creates missing tables; any change to a column or enum on an **EXISTING** table needs an idempotent SQL file in `supabase/migrations/` applied to Supabase **BEFORE** deploying. Run `uv run python scripts/check_schema.py` to detect drift; run `uv run python scripts/enable_rls.py` after new tables are created.
+
 ## Extending
 
 | Need | Where to Add |

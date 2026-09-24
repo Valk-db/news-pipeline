@@ -55,6 +55,18 @@ jobs:
           fi
           echo "✅ Reddit RSS accessible (HTTP 200)"
 
+      - name: Schema drift check
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          GDELT_THROTTLE_SECONDS: "30"
+          PYTHONUNBUFFERED: "1"
+          GDELT_ENABLED: "false"
+        run: |
+          uv run python -m scripts.check_schema
+
       - name: Run ingestion pipeline
         id: ingest
         env:
