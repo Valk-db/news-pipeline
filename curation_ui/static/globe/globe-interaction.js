@@ -178,12 +178,14 @@ async function loadGlobeStats() {
 
         const data = await response.json();
 
-        document.getElementById('stat-total')?.textContent = data.total_events || 0;
+        const statTotal = document.getElementById('stat-total');
+        if (statTotal) statTotal.textContent = data.total_events || 0;
 
         // Calculate last 24h
         const eventsByDay = data.events_by_day || {};
         const last24h = Object.values(eventsByDay).reduce((a, b) => a + b, 0);
-        document.getElementById('stat-24h')?.textContent = last24h;
+        const stat24h = document.getElementById('stat-24h');
+        if (stat24h) stat24h.textContent = last24h;
 
         // Top locations
         const topLocations = data.top_locations || [];

@@ -86,7 +86,7 @@ class Geocoder:
                 "addressdetails": 1,
                 "extratags": 1,
             }
-            headers = {"User-Agent": "news-pipeline/1.0 (contact@example.com)"}
+            headers = {"User-Agent": "news-pipeline/1.0 (https://github.com/Valk-db/news-pipeline; admin@valk-db.com)"}
 
             response = await self._client.get(
                 f"{self.nominatim_url}/search",
@@ -272,7 +272,7 @@ class Geocoder:
                 "format": "json",
                 "addressdetails": 1,
             }
-            headers = {"User-Agent": "news-pipeline/1.0"}
+            headers = {"User-Agent": "news-pipeline/1.0 (https://github.com/Valk-db/news-pipeline; admin@valk-db.com)"}
 
             response = await self._client.get(
                 f"{self.nominatim_url}/reverse",

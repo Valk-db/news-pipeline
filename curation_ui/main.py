@@ -20,10 +20,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, and_, func
+from sqlalchemy.types import Float
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.shared.database import get_session
-from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, SourceTier
+from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, Event, EventLayer
 from src.shared.llm import get_llm_client, validate_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
@@ -511,7 +512,6 @@ async def get_story_sources(story_id: uuid.UUID, request: Request, user: str = D
         result = await session.execute(stmt)
         units = result.scalars().all()
 
-        source_breakdown = {}
         tier_counts = {"tier1": 0, "tier2": 0, "tier3": 0, "tier4": 0}
         owner_counts = {}
         geographic_counts = {}
@@ -542,6 +542,208 @@ async def get_story_sources(story_id: uuid.UUID, request: Request, user: str = D
         "geographic_distribution": geographic_counts,
         "total_units": len(units),
     }
+
+
+# Globe API endpoints
+@app.get("/api/globe/events")
+async def get_globe_events(
+    request: Request,
+    user: str = Depends(require_auth),
+    layer_id: uuid.UUID = None,
+    event_type: str = None,
+    min_confidence: float = None,
+    bbox: str = None,  # min_lon,min_lat,max_lon,max_lat
+    limit: int = 500,
+):
+    """Get events as GeoJSON FeatureCollection for globe visualization."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    async with get_session() as session:
+        stmt = select(Event).options(selectinload(Event.geometry), selectinload(Event.layer))
+
+        # Apply filters
+        conditions = []
+        if layer_id:
+            conditions.append(Event.layer_id == layer_id)
+        if event_type:
+            conditions.append(Event.event_type == event_type)
+        if min_confidence:
+            conditions.append(Event.confidence.cast(Float) >= min_confidence)
+        if bbox:
+            try:
+                min_lon, min_lat, max_lon, max_lat = map(float, bbox.split(","))
+                conditions.append(
+                    and_(
+                        Event.longitude.cast(Float) >= min_lon,
+                        Event.longitude.cast(Float) <= max_lon,
+                        Event.latitude.cast(Float) >= min_lat,
+                        Event.latitude.cast(Float) <= max_lat,
+                    )
+                )
+            except ValueError:
+                pass  # Invalid bbox, ignore
+
+        if conditions:
+            stmt = stmt.where(and_(*conditions))
+
+        stmt = stmt.order_by(desc(Event.start_time)).limit(limit)
+        result = await session.execute(stmt)
+        events = result.scalars().all()
+
+        # Build GeoJSON FeatureCollection
+        features = []
+        for event in events:
+            geometry = event.geometry
+            if geometry and geometry.geojson:
+                feature = {
+                    "type": "Feature",
+                    "id": str(event.id),
+                    "geometry": geometry.geojson,
+                    "properties": {
+                        "story_id": str(event.story_id),
+                        "layer_id": str(event.layer_id) if event.layer_id else None,
+                        "event_type": event.event_type.value if event.event_type else None,
+                        "confidence": float(event.confidence) if event.confidence else 0.5,
+                        "source_count": event.source_count,
+                        "tier1_source_count": event.tier1_source_count,
+                        "location_name": event.location_name,
+                        "location_type": event.location_type,
+                        "radius_km": float(event.radius_km) if event.radius_km else None,
+                        "start_time": event.start_time.isoformat() if event.start_time else None,
+                        "entities": event.entities,
+                        **(geometry.properties or {}),
+                    },
+                }
+            else:
+                # Fallback to point geometry
+                feature = {
+                    "type": "Feature",
+                    "id": str(event.id),
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [float(event.longitude), float(event.latitude)],
+                    },
+                    "properties": {
+                        "story_id": str(event.story_id),
+                        "layer_id": str(event.layer_id) if event.layer_id else None,
+                        "event_type": event.event_type.value if event.event_type else None,
+                        "confidence": float(event.confidence) if event.confidence else 0.5,
+                        "source_count": event.source_count,
+                        "tier1_source_count": event.tier1_source_count,
+                        "location_name": event.location_name,
+                        "location_type": event.location_type,
+                        "radius_km": float(event.radius_km) if event.radius_km else None,
+                        "start_time": event.start_time.isoformat() if event.start_time else None,
+                        "entities": event.entities,
+                    },
+                }
+            features.append(feature)
+
+    return {"type": "FeatureCollection", "features": features}
+
+
+@app.get("/api/globe/stats")
+async def get_globe_stats(
+    request: Request,
+    user: str = Depends(require_auth),
+):
+    """Get globe statistics."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    from sqlalchemy import select
+
+    async with get_session() as session:
+        # Total events
+        total_result = await session.execute(select(func.count(Event.id)))
+        total_events = total_result.scalar()
+
+        # By event type
+        type_result = await session.execute(
+            select(Event.event_type, func.count(Event.id))
+            .group_by(Event.event_type)
+        )
+        by_type = {row[0].value if row[0] else "other": row[1] for row in type_result.all()}
+
+        # By layer
+        layer_result = await session.execute(
+            select(EventLayer.name, func.count(Event.id))
+            .outerjoin(Event, Event.layer_id == EventLayer.id)
+            .group_by(EventLayer.name)
+        )
+        by_layer = {row[0] or "unlayered": row[1] for row in layer_result.all()}
+
+        # Date range
+        date_result = await session.execute(
+            select(func.min(Event.start_time), func.max(Event.start_time))
+        )
+        min_date, max_date = date_result.first()
+        date_range = [
+            min_date.isoformat() if min_date else None,
+            max_date.isoformat() if max_date else None,
+        ]
+
+    return {
+        "total_events": total_events,
+        "by_type": by_type,
+        "by_layer": by_layer,
+        "date_range": date_range,
+    }
+
+
+@app.get("/api/globe/layers")
+async def get_globe_layers(
+    request: Request,
+    user: str = Depends(require_auth),
+):
+    """Get all event layers for globe visualization."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    from sqlalchemy import select
+
+    async with get_session() as session:
+        stmt = select(EventLayer).order_by(EventLayer.name)
+        result = await session.execute(stmt)
+        layers = result.scalars().all()
+
+        return {
+            "layers": [
+                {
+                    "id": str(layer.id),
+                    "name": layer.name,
+                    "description": layer.description,
+                    "filter_criteria": layer.filter_criteria,
+                    "style": layer.style,
+                    "is_default": layer.is_default,
+                    "is_visible": layer.is_visible,
+                    "min_zoom": layer.min_zoom,
+                    "max_zoom": layer.max_zoom,
+                    "color": layer.color,
+                }
+                for layer in layers
+            ]
+        }
+
+
+# Globe page route
+@app.get("/globe", response_class=HTMLResponse)
+async def globe_page(request: Request, user: str = Depends(require_auth)):
+    """Globe visualization page."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return render_error_page(request, db_msg)
+
+    return templates.TemplateResponse(request, "globe.html", {
+        "request": request,
+    })
 
 
 if __name__ == "__main__":
