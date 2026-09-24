@@ -20,7 +20,7 @@ GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → C
 | **LLM Backup** | Cerebras (`gpt-oss-120b`) | 30-day trial fallback |
 | **Ingestion** | RSS (BBC, Guardian, DW, France24, NPR) + GDELT (disabled) + Reddit | Tier-1 news, social; AP/Reuters via GDELT only (currently disabled) |
 | **Verification** | MinHash containment | Near-dup clustering → reporting units |
-| **Grouping** | Entity Jaccard (top-3, threshold 0.4) | Semantic story grouping |
+| **Grouping** | Entity Jaccard (top-N, threshold 0.4) | Semantic story grouping |
 | **Gate** | Tier-1 distinct owners ≥2 | Defamation-safe threshold |
 | **Curation UI** | FastAPI + HTMX | Keyboard-driven triage (A/R/E) |
 
@@ -88,12 +88,12 @@ cloudflared tunnel --url http://localhost:8000
 
 ### Ingestion (Twice Daily)
 1. **RSS**: BBC, Guardian, NPR (AP/Reuters removed 2026-09-21: 403/401 from GitHub runners)
-2. **GDELT DOC API**: Disabled by default (`GDELT_ENABLED=false`) — redundant with RSS for BBC/Guardian/NPR, rate-limited
+2. **GDELT DOC API**: Disabled in the daily-ingest workflow (`GDELT_ENABLED=false`); the code default in `src/shared/config.py` is enabled — redundant with RSS for BBC/Guardian/NPR, rate-limited
 3. **Reddit**: Top posts from r/worldnews, r/geopolitics, etc. (public `.rss` feeds, no credentials — anon-rate-limited, throttled to 1 subreddit/3s)
 
 ### Verification
 1. **Extract**: trafilatura → body text
-2. **Entities**: spaCy NER (PERSON, ORG, GPE top-3)
+2. **Entities**: spaCy NER (PERSON, ORG, GPE top-N; N from `top_n_entities`, default 3)
 3. **MinHash**: 5-shingles → 128-perm MinHash
 4. **Cluster**: Direct containment (≥0.9) → Reporting Units
 5. **Owner mapping**: Domain → ownership group (20 core groups)

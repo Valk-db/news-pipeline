@@ -6,7 +6,7 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
-from src.utils.ner import extract_entities
+from src.utils.ner import extract_entities_top_n
 from src.schema.models import RawArticle, SourceTier
 from src.shared.config import get_settings
 import random
@@ -123,8 +123,8 @@ async def fetch_gdelt_articles(
                     except ValueError:
                         pass
 
-                # Entities
-                entities = extract_entities(body_text, top_n=3)
+                # Entities (cap driven by settings.top_n_entities)
+                entities = extract_entities_top_n(body_text, top_n=settings.top_n_entities)
 
                 # Content hash
                 content_hash = compute_content_hash(body_text)

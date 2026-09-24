@@ -7,6 +7,7 @@ import uuid
 from src.utils.trafilatura_extract import compute_content_hash, compute_url_hash
 from src.ingestion.run import run_ingestion
 from src.schema.models import RawArticle, SourceTier
+from src.shared.config import Settings
 
 
 class TestContentHash:
@@ -346,7 +347,7 @@ class TestIngestionSourcesHaveContentHash:
         mock_entry = MockEntry()
 
         with patch("src.ingestion.rss.extract_article", new_callable=AsyncMock) as mock_extract, \
-             patch("src.ingestion.rss.extract_entities", return_value={"PERSON": [], "ORG": ["BBC"], "GPE": []}), \
+             patch("src.ingestion.rss.extract_entities_top_n", return_value={"PERSON": [], "ORG": ["BBC"], "GPE": []}), \
              patch("src.ingestion.rss.compute_url_hash", return_value="test_url_hash"), \
              patch("src.ingestion.rss.compute_content_hash", return_value="test_content_hash"):
 
@@ -366,6 +367,29 @@ class TestIngestionSourcesHaveContentHash:
         assert article.content_hash == "test_content_hash"
         assert article.url_hash == "test_url_hash"
 
+        # Cap is driven by settings.top_n_entities, not hardcoded to 3.
+        with patch("src.ingestion.rss.extract_entities_top_n", new_callable=MagicMock, return_value={"PERSON": [], "ORG": ["BBC"], "GPE": []}) as mock_entities:
+            with patch("src.ingestion.rss.extract_article", new_callable=AsyncMock) as mock_extract, \
+                 patch("src.ingestion.rss.compute_url_hash", return_value="u"), \
+                 patch("src.ingestion.rss.compute_content_hash", return_value="c"):
+                mock_extract.return_value = (self.SUFFICIENT_BODY_TEXT, "T")
+                # settings.top_n_entities=1 must be honored, not ignored.
+                # Patch at the module namespace: rss.py does
+                # `from src.shared.config import get_settings`.
+                with patch("src.ingestion.rss.get_settings", return_value=Settings(
+                    database_url="sqlite+aiosqlite:///:memory:",
+                    groq_api_key="",
+                    cerebras_api_key="",
+                    top_n_entities=1,
+                )):
+                    await process_feed_entry(
+                        mock_entry,
+                        {"domain": "bbc.com", "tier": SourceTier.TIER1},
+                        set(),
+                        "bbc",
+                    )
+                assert mock_entities.call_args.kwargs["top_n"] == 1
+
     @pytest.mark.asyncio
     async def test_reddit_sets_content_hash(self):
         """Reddit RSS ingestion sets content_hash on articles."""
@@ -383,7 +407,7 @@ class TestIngestionSourcesHaveContentHash:
         }
 
         with patch("src.ingestion.reddit.extract_article", new_callable=AsyncMock) as mock_extract, \
-             patch("src.ingestion.reddit.extract_entities", return_value={"PERSON": [], "ORG": [], "GPE": []}), \
+             patch("src.ingestion.reddit.extract_entities_top_n", return_value={"PERSON": [], "ORG": [], "GPE": []}), \
              patch("src.ingestion.reddit.compute_url_hash", return_value="test_url_hash"), \
              patch("src.ingestion.reddit.compute_content_hash", return_value="test_content_hash"):
 
@@ -398,6 +422,21 @@ class TestIngestionSourcesHaveContentHash:
             assert article.content_hash == "test_content_hash"
             assert article.url_hash == "test_url_hash"
 
+        # Cap is driven by settings.top_n_entities, not hardcoded to 3.
+        with patch("src.ingestion.reddit.extract_entities_top_n", new_callable=MagicMock, return_value={"PERSON": [], "ORG": [], "GPE": []}) as mock_entities:
+            with patch("src.ingestion.reddit.extract_article", new_callable=AsyncMock) as mock_extract, \
+                 patch("src.ingestion.reddit.compute_url_hash", return_value="u"), \
+                 patch("src.ingestion.reddit.compute_content_hash", return_value="c"):
+                mock_extract.return_value = (self.SUFFICIENT_BODY_TEXT, "T")
+                with patch("src.ingestion.reddit.get_settings", return_value=Settings(
+                    database_url="sqlite+aiosqlite:///:memory:",
+                    groq_api_key="",
+                    cerebras_api_key="",
+                    top_n_entities=1,
+                )):
+                    await process_entry(mock_entry)
+                assert mock_entities.call_args.kwargs["top_n"] == 1
+
     @pytest.mark.asyncio
     async def test_gdelt_sets_content_hash(self):
         """GDELT ingestion sets content_hash on articles."""
@@ -405,10 +444,16 @@ class TestIngestionSourcesHaveContentHash:
 
         with patch("src.ingestion.gdelt.fetch_with_retry", new_callable=AsyncMock) as mock_fetch, \
              patch("src.ingestion.gdelt.extract_article", new_callable=AsyncMock) as mock_extract, \
-             patch("src.ingestion.gdelt.extract_entities", return_value={"PERSON": [], "ORG": ["AP"], "GPE": ["Washington"]}), \
+             patch("src.ingestion.gdelt.extract_entities_top_n", new_callable=MagicMock, return_value={"PERSON": [], "ORG": ["AP"], "GPE": ["Washington"]}), \
              patch("src.ingestion.gdelt.compute_url_hash", return_value="urlhash"), \
              patch("src.ingestion.gdelt.compute_content_hash", return_value="contenthash"), \
-             patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock):
+             patch("src.ingestion.gdelt.asyncio.sleep", new_callable=AsyncMock), \
+             patch("src.ingestion.gdelt.get_settings", return_value=Settings(
+                 database_url="sqlite+aiosqlite:///:memory:",
+                 groq_api_key="",
+                 cerebras_api_key="",
+                 top_n_entities=1,
+             )):
 
             mock_fetch.return_value = MagicMock(
                 status_code=200,
@@ -429,6 +474,14 @@ class TestIngestionSourcesHaveContentHash:
             # Note: extract_article is called, but we're mocking compute_content_hash to return "contenthash"
             # The actual article creation uses the mocked compute_content_hash
             assert len(result.articles) >= 0  # May be 0 if extract_article fails in test
+
+            # NOTE: the GDELT path here does not exercise extract_entities_top_n
+            # (process_entry rejects the mocked body as below MIN_BODY_LENGTH, so
+            # the loop never runs). The config-driven cap for GDELT is covered by
+            # tests/test_gdelt.py::test_gdelt_call_site_respects_top_n_entities_5
+            # and ::test_gdelt_call_site_respects_top_n_entities_1.
+            # Kept as a single assertion to avoid a test that cannot fail for the
+            # reason it exists.
 
 
 if __name__ == "__main__":

@@ -24,8 +24,6 @@ def test_settings() -> Settings:
         database_url="sqlite+aiosqlite:///:memory:",
         groq_api_key="",
         cerebras_api_key="",
-        reddit_client_id="",
-        reddit_client_secret="",
     )
 
 

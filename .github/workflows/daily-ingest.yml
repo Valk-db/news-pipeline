@@ -39,14 +39,18 @@ jobs:
         run: uv run python -m spacy download en_core_web_sm
 
       - name: Smoke test Reddit RSS accessibility
+        continue-on-error: true
         run: |
           set -euo pipefail
-          # Test one subreddit feed to catch IP blocks / 429s early
+          # Test one subreddit feed to catch IP blocks / 429s early.
+          # Non-fatal: Reddit is a tier-3 source that already degrades
+          # gracefully per-entry in ingest_reddit(); RSS (tier-1) and GDELT
+          # must not be held hostage to a blocked/flaky Reddit feed.
           test_url="https://www.reddit.com/r/worldnews/top.rss?t=day&limit=1"
           echo "Testing Reddit RSS: $test_url"
           status=$(curl -s -o /dev/null -w "%{http_code}" -H "User-Agent: news-pipeline/0.1 (by /u/valk_db)" "$test_url" --max-time 15)
           if [[ "$status" != "200" ]]; then
-            echo "❌ Reddit RSS returned HTTP $status — feed may be blocked from this runner."
+            echo "::warning title=Reddit smoke test failed::Reddit RSS returned HTTP $status — feed may be blocked from this runner. Continuing: Reddit is tier-3 and degrades gracefully, RSS/GDELT are unaffected."
             exit 1
           fi
           echo "✅ Reddit RSS accessible (HTTP 200)"

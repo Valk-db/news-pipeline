@@ -5,7 +5,7 @@ import httpx
 from typing import List, Optional
 from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
-from src.utils.ner import extract_entities
+from src.utils.ner import extract_entities_top_n
 from src.utils.ingest_stats import STATS
 from src.schema.models import RawArticle, SourceTier
 from src.shared.config import get_settings
@@ -116,6 +116,7 @@ async def process_feed_entry(
     source_key: str,
 ) -> Optional[RawArticle]:
     """Process a single feed entry into a RawArticle."""
+    settings = get_settings()
     url = entry.get("link", "")
     if not url or url in seen_urls:
         return None
@@ -147,8 +148,8 @@ async def process_feed_entry(
     if extracted_title and len(extracted_title) > len(title):
         title = extracted_title
 
-    # Extract entities
-    entities = extract_entities(body_text, top_n=3)
+    # Extract entities (cap driven by settings.top_n_entities)
+    entities = extract_entities_top_n(body_text, top_n=settings.top_n_entities)
 
     # Compute content hash for exact dedup
     content_hash = compute_content_hash(body_text)

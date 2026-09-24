@@ -130,7 +130,7 @@ If you see module import errors:
 }
 ```
 
-**Note:** This documentation has not been verified against the live Vercel deployment's actual routing. Tyler should confirm non-root paths still resolve before trusting it fully.
+**Routing verified against the live deployment** (`https://<your-app>.vercel.app`, 2026-09-23): the FastAPI app is served at root with no path prefix or rewrite. `/healthz` → 200 (JSON body, `on_vercel: true`); `/`, `/posts`, `/story/{story_id}/edit`, `/post/{post_id}/mark-posted` → 401 (auth required, FastAPI JSON `{"detail":"Unauthorized"}`); a nonexistent path → 404. All documented non-root paths resolve correctly.
 
 - **Vercel Hobby**: Free for personal projects
 - **Supabase Free**: 500 MB database, 1 GB bandwidth
