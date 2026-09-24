@@ -2,11 +2,9 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.schema.models import (
-    Story, RawArticle, ReportingUnit, SourceTier,
+    RawArticle, SourceTier,
     Snippet, MediaAsset, ArticleEmbedding, StoryEmbedding
 )
 

@@ -1,7 +1,5 @@
 """Embedding service for semantic enrichment using pgvector."""
 
-import os
-import json
 from typing import List, Dict, Any, Optional
 import numpy as np
 import logging

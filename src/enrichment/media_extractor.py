@@ -5,7 +5,6 @@ from typing import Optional, List, Dict, Any
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from src.utils.trafilatura_extract import extract_article
-from src.schema.models import MediaAsset, MediaAsset as MediaType
 import logging
 
 logger = logging.getLogger(__name__)

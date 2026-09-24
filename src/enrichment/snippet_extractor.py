@@ -2,8 +2,7 @@
 
 import json
 import re
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone
+from typing import List, Dict, Any
 import logging
 
 from src.shared.llm import get_llm_client
@@ -324,7 +323,7 @@ async def enrich_story_with_snippets(
         Number of snippets created
     """
     from sqlalchemy import select
-    from src.schema.models import Story, RawArticle, StoryUnitLink, ReportingUnit
+    from src.schema.models import RawArticle, StoryUnitLink, ReportingUnit
 
     # Get all articles in story
     stmt = (

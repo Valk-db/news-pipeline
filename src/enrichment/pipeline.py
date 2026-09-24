@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,8 +11,7 @@ from src.enrichment.media_extractor import extract_media_from_article
 from src.enrichment.video_finder import find_videos_for_story
 from src.enrichment.social_snippets import find_snippets_for_story
 from src.enrichment.snippet_extractor import enrich_story_with_snippets
-from src.enrichment.embedding_service import embed_story, embed_article
-from src.utils.ingest_stats import STATS
+from src.enrichment.embedding_service import embed_story
 
 logger = logging.getLogger(__name__)
 

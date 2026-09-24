@@ -3,7 +3,7 @@
 import os
 import asyncio
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from src.utils.ingest_stats import STATS
 import logging
 
