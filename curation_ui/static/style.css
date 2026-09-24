@@ -417,29 +417,6 @@ header h1 {
   text-overflow: ellipsis;
 }
 
-.story-entities {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 20px;
-}
-
-.entity-tag {
-  background: linear-gradient(135deg, rgba(88, 166, 255, 0.12), rgba(163, 113, 247, 0.12));
-  color: var(--accent-blue);
-  padding: 4px 12px;
-  border-radius: var(--radius-full);
-  font-size: 0.75rem;
-  font-weight: 500;
-  border: 1px solid rgba(88, 166, 255, 0.2);
-  transition: all var(--transition-fast);
-}
-
-.entity-tag:hover {
-  background: linear-gradient(135deg, rgba(88, 166, 255, 0.2), rgba(163, 113, 247, 0.2));
-  border-color: var(--accent-blue);
-}
-
 /* Story Sources */
 .story-sources {
   margin-bottom: 20px;
