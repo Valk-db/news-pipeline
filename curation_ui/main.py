@@ -23,7 +23,11 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.shared.database import get_session
-from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, SourceTier
+from src.schema.models import (
+    Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, SourceTier,
+    User, CuratedStory, StoryAnnotation, Collection, CollectionStoryLink, Comment,
+    User as UserTier,  # Alias to avoid conflict
+)
 from src.shared.llm import get_llm_client, validate_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
@@ -542,6 +546,760 @@ async def get_story_sources(story_id: uuid.UUID, request: Request, user: str = D
         "total_units": len(units),
     }
 
+
+# ============================================================
+# CURATION API ENDPOINTS
+# ============================================================
+
+# --- User Management ---
+
+@app.get("/api/user/profile")
+async def get_user_profile(request: Request, user: str = Depends(require_auth)):
+    """Get current user profile."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+        if not db_user:
+            # Create user if doesn't exist
+            db_user = User(email=user, name=user.split("@")[0])
+            session.add(db_user)
+            await session.commit()
+            await session.refresh(db_user)
+
+        return {
+            "id": str(db_user.id),
+            "email": db_user.email,
+            "name": db_user.name,
+            "avatar_url": db_user.avatar_url,
+            "tier": db_user.tier.value,
+            "preferences": db_user.preferences,
+        }
+
+
+@app.patch("/api/user/profile")
+async def update_user_profile(
+    request: Request,
+    name: str = Form(None),
+    preferences: str = Form(None),
+    user: str = Depends(require_auth),
+):
+    """Update user profile."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+        if not db_user:
+            raise HTTPException(404, "User not found")
+
+        if name is not None:
+            db_user.name = name
+        if preferences is not None:
+            import json
+            try:
+                db_user.preferences = json.loads(preferences)
+            except json.JSONDecodeError:
+                raise HTTPException(400, "Invalid preferences JSON")
+
+        db_user.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    return {"success": True}
+
+
+# --- Curated Stories ---
+
+@app.get("/api/curated-stories")
+async def list_curated_stories(
+    request: Request,
+    status: str = "draft",
+    user: str = Depends(require_auth),
+):
+    """List user's curated stories."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+        if not db_user:
+            return {"stories": []}
+
+        stmt = select(CuratedStory).where(CuratedStory.user_id == db_user.id)
+        if status != "all":
+            stmt = stmt.where(CuratedStory.status == CuratedStory.Status(status))
+        stmt = stmt.order_by(desc(CuratedStory.updated_at))
+        result = await session.execute(stmt)
+        stories = result.scalars().all()
+
+        return {
+            "stories": [
+                {
+                    "id": str(s.id),
+                    "title": s.title,
+                    "description": s.description,
+                    "story_ids": s.story_ids,
+                    "narrative": s.narrative,
+                    "is_public": s.is_public,
+                    "tags": s.tags,
+                    "status": s.status.value,
+                    "version": s.version,
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+                    "published_at": s.published_at.isoformat() if s.published_at else None,
+                }
+                for s in stories
+            ]
+        }
+
+
+@app.post("/api/curated-stories")
+async def create_curated_story(
+    request: Request,
+    title: str = Form(...),
+    description: str = Form(""),
+    story_ids: str = Form("[]"),  # JSON array of story IDs
+    narrative: str = Form(""),
+    is_public: bool = Form(False),
+    tags: str = Form("[]"),
+    user: str = Depends(require_auth),
+):
+    """Create a new curated story."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    import json
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+        if not db_user:
+            raise HTTPException(404, "User not found")
+
+        try:
+            story_id_list = json.loads(story_ids)
+            tag_list = json.loads(tags)
+        except json.JSONDecodeError:
+            raise HTTPException(400, "Invalid JSON for story_ids or tags")
+
+        curated = CuratedStory(
+            user_id=db_user.id,
+            title=title,
+            description=description,
+            story_ids=story_id_list,
+            narrative=narrative,
+            is_public=is_public,
+            tags=tag_list,
+            status=CuratedStory.Status.DRAFT,
+        )
+        session.add(curated)
+        await session.commit()
+        await session.refresh(curated)
+
+        return {"id": str(curated.id), "title": curated.title}
+
+
+@app.get("/api/curated-stories/{story_id}")
+async def get_curated_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+    """Get a curated story with all details."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+
+        stmt = select(CuratedStory).where(CuratedStory.id == story_id)
+        result = await session.execute(stmt)
+        curated = result.scalar_one_or_none()
+        if not curated:
+            raise HTTPException(404, "Curated story not found")
+
+        # Check ownership
+        if curated.user_id != db_user.id and not curated.is_public:
+            raise HTTPException(403, "Not authorized")
+
+        # Get source stories
+        source_stories = []
+        if curated.story_ids:
+            stmt = select(Story).where(Story.id.in_(curated.story_ids))
+            result = await session.execute(stmt)
+            source_stories = result.scalars().all()
+
+        # Get annotations
+        stmt = select(StoryAnnotation).where(StoryAnnotation.curated_story_id == story_id)
+        result = await session.execute(stmt)
+        annotations = result.scalars().all()
+
+        return {
+            "id": str(curated.id),
+            "title": curated.title,
+            "description": curated.description,
+            "story_ids": curated.story_ids,
+            "source_stories": [
+                {"id": str(s.id), "title": s.primary_entities, "day": s.day.isoformat() if s.day else None}
+                for s in source_stories
+            ],
+            "narrative": curated.narrative,
+            "is_public": curated.is_public,
+            "tags": curated.tags,
+            "status": curated.status.value,
+            "version": curated.version,
+            "annotations": [
+                {
+                    "id": str(a.id),
+                    "type": a.annotation_type.value,
+                    "content": a.content,
+                    "position": a.position,
+                    "selected_text": a.selected_text,
+                    "color": a.color,
+                    "is_private": a.is_private,
+                }
+                for a in annotations
+            ],
+            "created_at": curated.created_at.isoformat() if curated.created_at else None,
+            "updated_at": curated.updated_at.isoformat() if curated.updated_at else None,
+        }
+
+
+@app.patch("/api/curated-stories/{story_id}")
+async def update_curated_story(
+    story_id: uuid.UUID,
+    request: Request,
+    title: str = Form(None),
+    description: str = Form(None),
+    story_ids: str = Form(None),
+    narrative: str = Form(None),
+    is_public: bool = Form(None),
+    tags: str = Form(None),
+    status: str = Form(None),
+    user: str = Depends(require_auth),
+):
+    """Update a curated story."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    import json
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+        if not db_user:
+            raise HTTPException(404, "User not found")
+
+        stmt = select(CuratedStory).where(CuratedStory.id == story_id)
+        result = await session.execute(stmt)
+        curated = result.scalar_one_or_none()
+        if not curated:
+            raise HTTPException(404, "Curated story not found")
+
+        if curated.user_id != db_user.id:
+            raise HTTPException(403, "Not authorized")
+
+        if title is not None:
+            curated.title = title
+        if description is not None:
+            curated.description = description
+        if story_ids is not None:
+            try:
+                curated.story_ids = json.loads(story_ids)
+            except json.JSONDecodeError:
+                raise HTTPException(400, "Invalid story_ids JSON")
+        if narrative is not None:
+            curated.narrative = narrative
+        if is_public is not None:
+            curated.is_public = is_public
+        if tags is not None:
+            try:
+                curated.tags = json.loads(tags)
+            except json.JSONDecodeError:
+                raise HTTPException(400, "Invalid tags JSON")
+        if status is not None:
+            curated.status = CuratedStory.Status(status)
+            if status == "published" and not curated.published_at:
+                curated.published_at = datetime.now(timezone.utc)
+
+        curated.version += 1
+        curated.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+
+        return {"success": True, "version": curated.version}
+
+
+@app.delete("/api/curated-stories/{story_id}")
+async def delete_curated_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+    """Delete a curated story."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+
+        stmt = select(CuratedStory).where(CuratedStory.id == story_id)
+        result = await session.execute(stmt)
+        curated = result.scalar_one_or_none()
+        if not curated:
+            raise HTTPException(404, "Curated story not found")
+
+        if curated.user_id != db_user.id:
+            raise HTTPException(403, "Not authorized")
+
+        await session.delete(curated)
+        await session.commit()
+
+        return {"success": True}
+
+
+@app.post("/api/curated-stories/{story_id}/fork")
+async def fork_curated_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+    """Fork a curated story (create a copy owned by current user)."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+
+        stmt = select(CuratedStory).where(CuratedStory.id == story_id)
+        result = await session.execute(stmt)
+        original = result.scalar_one_or_none()
+        if not original:
+            raise HTTPException(404, "Curated story not found")
+
+        if not original.is_public and original.user_id != db_user.id:
+            raise HTTPException(403, "Not authorized to fork")
+
+        forked = CuratedStory(
+            user_id=db_user.id,
+            title=f"{original.title} (Fork)",
+            description=original.description,
+            story_ids=original.story_ids,
+            narrative=original.narrative,
+            is_public=False,
+            tags=original.tags,
+            status=CuratedStory.Status.DRAFT,
+            parent_id=original.id,
+        )
+        session.add(forked)
+        await session.commit()
+        await session.refresh(forked)
+
+        return {"id": str(forked.id), "title": forked.title}
+
+
+# --- Annotations ---
+
+@app.post("/api/curated-stories/{story_id}/annotations")
+async def create_annotation(
+    story_id: uuid.UUID,
+    request: Request,
+    annotation_type: str = Form(...),
+    content: str = Form(...),
+    position: int = Form(None),
+    selected_text: str = Form(""),
+    color: str = Form("#ffff00"),
+    is_private: bool = Form(True),
+    article_id: str = Form(None),
+    user: str = Depends(require_auth),
+):
+    """Add an annotation to a curated story."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+
+        stmt = select(CuratedStory).where(CuratedStory.id == story_id)
+        result = await session.execute(stmt)
+        curated = result.scalar_one_or_none()
+        if not curated:
+            raise HTTPException(404, "Curated story not found")
+
+        if curated.user_id != db_user.id:
+            raise HTTPException(403, "Not authorized")
+
+        annotation = StoryAnnotation(
+            user_id=db_user.id,
+            curated_story_id=story_id,
+            article_id=uuid.UUID(article_id) if article_id else None,
+            annotation_type=StoryAnnotation.Type(annotation_type),
+            content=content,
+            position=position,
+            selected_text=selected_text,
+            color=color,
+            is_private=is_private,
+        )
+        session.add(annotation)
+        await session.commit()
+        await session.refresh(annotation)
+
+        return {"id": str(annotation.id), "content": annotation.content}
+
+
+@app.delete("/api/annotations/{annotation_id}")
+async def delete_annotation(annotation_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+    """Delete an annotation."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+
+        stmt = select(StoryAnnotation).where(StoryAnnotation.id == annotation_id)
+        result = await session.execute(stmt)
+        annotation = result.scalar_one_or_none()
+        if not annotation:
+            raise HTTPException(404, "Annotation not found")
+
+        if annotation.user_id != db_user.id:
+            raise HTTPException(403, "Not authorized")
+
+        await session.delete(annotation)
+        await session.commit()
+
+        return {"success": True}
+
+
+# --- Collections ---
+
+@app.get("/api/collections")
+async def list_collections(request: Request, user: str = Depends(require_auth)):
+    """List user's collections."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+        if not db_user:
+            return {"collections": []}
+
+        stmt = select(Collection).where(Collection.user_id == db_user.id)
+        stmt = stmt.order_by(desc(Collection.updated_at))
+        result = await session.execute(stmt)
+        collections = result.scalars().all()
+
+        return {
+            "collections": [
+                {
+                    "id": str(c.id),
+                    "name": c.name,
+                    "description": c.description,
+                    "is_public": c.is_public,
+                    "share_token": c.share_token,
+                    "tags": c.tags,
+                    "cover_image_url": c.cover_image_url,
+                    "story_count": len(c.stories),
+                    "created_at": c.created_at.isoformat() if c.created_at else None,
+                    "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+                }
+                for c in collections
+            ]
+        }
+
+
+@app.post("/api/collections")
+async def create_collection(
+    request: Request,
+    name: str = Form(...),
+    description: str = Form(""),
+    is_public: bool = Form(False),
+    tags: str = Form("[]"),
+    user: str = Depends(require_auth),
+):
+    """Create a new collection."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    import json, secrets
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+        if not db_user:
+            raise HTTPException(404, "User not found")
+
+        try:
+            tag_list = json.loads(tags)
+        except json.JSONDecodeError:
+            raise HTTPException(400, "Invalid tags JSON")
+
+        share_token = secrets.token_urlsafe(16) if is_public else None
+
+        collection = Collection(
+            user_id=db_user.id,
+            name=name,
+            description=description,
+            is_public=is_public,
+            share_token=share_token,
+            tags=tag_list,
+        )
+        session.add(collection)
+        await session.commit()
+        await session.refresh(collection)
+
+        return {"id": str(collection.id), "name": collection.name, "share_token": collection.share_token}
+
+
+@app.post("/api/collections/{collection_id}/stories")
+async def add_story_to_collection(
+    collection_id: uuid.UUID,
+    request: Request,
+    curated_story_id: str = Form(...),
+    user: str = Depends(require_auth),
+):
+    """Add a curated story to a collection."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+
+        stmt = select(Collection).where(Collection.id == collection_id)
+        result = await session.execute(stmt)
+        collection = result.scalar_one_or_none()
+        if not collection:
+            raise HTTPException(404, "Collection not found")
+
+        if collection.user_id != db_user.id:
+            raise HTTPException(403, "Not authorized")
+
+        # Get next position
+        stmt = select(CollectionStoryLink).where(CollectionStoryLink.collection_id == collection_id)
+        result = await session.execute(stmt)
+        links = result.scalars().all()
+        next_position = max([l.position for l in links], default=-1) + 1
+
+        link = CollectionStoryLink(
+            collection_id=collection_id,
+            curated_story_id=uuid.UUID(curated_story_id),
+            position=next_position,
+        )
+        session.add(link)
+        await session.commit()
+
+        return {"success": True}
+
+
+@app.delete("/api/collections/{collection_id}/stories/{curated_story_id}")
+async def remove_story_from_collection(
+    collection_id: uuid.UUID,
+    curated_story_id: uuid.UUID,
+    request: Request,
+    user: str = Depends(require_auth),
+):
+    """Remove a curated story from a collection."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+
+        stmt = select(CollectionStoryLink).where(
+            CollectionStoryLink.collection_id == collection_id,
+            CollectionStoryLink.curated_story_id == curated_story_id,
+        )
+        result = await session.execute(stmt)
+        link = result.scalar_one_or_none()
+        if not link:
+            raise HTTPException(404, "Link not found")
+
+        # Verify ownership
+        stmt = select(Collection).where(Collection.id == collection_id)
+        result = await session.execute(stmt)
+        collection = result.scalar_one_or_none()
+        if collection.user_id != db_user.id:
+            raise HTTPException(403, "Not authorized")
+
+        await session.delete(link)
+        await session.commit()
+
+        return {"success": True}
+
+
+# --- Export Endpoints ---
+
+@app.get("/api/curated-stories/{story_id}/export")
+async def export_curated_story(
+    story_id: uuid.UUID,
+    format: str = "json",
+    request: Request = None,
+    user: str = Depends(require_auth),
+):
+    """Export a curated story in various formats."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+
+        stmt = select(CuratedStory).where(CuratedStory.id == story_id)
+        result = await session.execute(stmt)
+        curated = result.scalar_one_or_none()
+        if not curated:
+            raise HTTPException(404, "Curated story not found")
+
+        if curated.user_id != db_user.id and not curated.is_public:
+            raise HTTPException(403, "Not authorized")
+
+        # Get source stories
+        source_stories = []
+        if curated.story_ids:
+            stmt = select(Story).where(Story.id.in_(curated.story_ids))
+            result = await session.execute(stmt)
+            source_stories = result.scalars().all()
+
+        # Get annotations
+        stmt = select(StoryAnnotation).where(StoryAnnotation.curated_story_id == story_id)
+        result = await session.execute(stmt)
+        annotations = result.scalars().all()
+
+        export_data = {
+            "title": curated.title,
+            "description": curated.description,
+            "narrative": curated.narrative,
+            "tags": curated.tags,
+            "source_stories": [
+                {
+                    "id": str(s.id),
+                    "primary_entities": s.primary_entities,
+                    "day": s.day.isoformat() if s.day else None,
+                    "tier1_units": s.tier1_unit_count,
+                    "tier2_units": s.tier2_unit_count,
+                    "distinct_owners": s.distinct_owners,
+                }
+                for s in source_stories
+            ],
+            "annotations": [
+                {
+                    "type": a.annotation_type.value,
+                    "content": a.content,
+                    "selected_text": a.selected_text,
+                    "color": a.color,
+                }
+                for a in annotations
+            ],
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "version": curated.version,
+        }
+
+        if format == "json":
+            return export_data
+        elif format == "markdown":
+            md = f"# {curated.title}\n\n"
+            if curated.description:
+                md += f"{curated.description}\n\n"
+            if curated.narrative:
+                md += f"## Narrative\n\n{curated.narrative}\n\n"
+            md += "## Source Stories\n\n"
+            for s in source_stories:
+                md += f"- Story {s.id[:8]}: {', '.join(s.primary_entities[:3])} ({s.day.strftime('%Y-%m-%d') if s.day else 'Unknown date'})\n"
+            if annotations:
+                md += "\n## Annotations\n\n"
+                for a in annotations:
+                    md += f"> **{a.annotation_type.value}**: {a.content}\n\n"
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse(md, media_type="text/markdown")
+        else:
+            raise HTTPException(400, "Unsupported format")
+
+
+# --- Comments ---
+
+@app.get("/api/curated-stories/{story_id}/comments")
+async def get_comments(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+    """Get comments for a curated story."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(Comment).where(Comment.curated_story_id == story_id, Comment.parent_id.is_(None))
+        stmt = stmt.order_by(Comment.created_at)
+        result = await session.execute(stmt)
+        comments = result.scalars().all()
+
+        def comment_to_dict(c):
+            return {
+                "id": str(c.id),
+                "user_id": str(c.user_id),
+                "content": c.content,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "replies": [comment_to_dict(r) for r in c.replies],
+            }
+
+        return {"comments": [comment_to_dict(c) for c in comments]}
+
+
+@app.post("/api/curated-stories/{story_id}/comments")
+async def add_comment(
+    story_id: uuid.UUID,
+    request: Request,
+    content: str = Form(...),
+    parent_id: str = Form(None),
+    user: str = Depends(require_auth),
+):
+    """Add a comment to a curated story."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(User).where(User.email == user)
+        result = await session.execute(stmt)
+        db_user = result.scalar_one_or_none()
+
+        comment = Comment(
+            user_id=db_user.id,
+            curated_story_id=story_id,
+            parent_id=uuid.UUID(parent_id) if parent_id else None,
+            content=content,
+        )
+        session.add(comment)
+        await session.commit()
+        await session.refresh(comment)
+
+        return {"id": str(comment.id), "content": comment.content}
+
+
+# ============================================================
 
 if __name__ == "__main__":
     import uvicorn

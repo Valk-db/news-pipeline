@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, JSON
+    Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, JSON, Boolean
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -391,3 +391,179 @@ class CorrectionRecord(Base):
     detected_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     article = relationship("RawArticle")
+
+
+class User(Base):
+    """User account for curation and personalization."""
+    __tablename__ = "users"
+    __table_args__ = (
+        Index("ix_users_email", "email", unique=True),
+        Index("ix_users_supabase_id", "supabase_id", unique=True),
+        Index("ix_users_tier", "tier"),
+    )
+
+    class Tier(str, PyEnum):
+        FREE = "free"
+        PRO = "pro"
+        TEAM = "team"
+        ADMIN = "admin"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supabase_id = Column(String(255), nullable=True)  # Supabase Auth user ID
+    email = Column(String(255), nullable=False, unique=True)
+    name = Column(String(255), nullable=True)
+    avatar_url = Column(Text, nullable=True)
+    tier = Column(Enum(Tier), nullable=False, default=Tier.FREE)
+    preferences = Column(JSON, nullable=False, default={})  # UI preferences, notification settings
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    curated_stories = relationship("CuratedStory", back_populates="user")
+    annotations = relationship("StoryAnnotation", back_populates="user")
+    collections = relationship("Collection", back_populates="user")
+
+
+class CuratedStory(Base):
+    """User-created curated story from one or more algorithmic stories."""
+    __tablename__ = "curated_stories"
+    __table_args__ = (
+        Index("ix_curated_stories_user_id", "user_id"),
+        Index("ix_curated_stories_status", "status"),
+        Index("ix_curated_stories_is_public", "is_public"),
+    )
+
+    class Status(str, PyEnum):
+        DRAFT = "draft"
+        PUBLISHED = "published"
+        ARCHIVED = "archived"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    story_ids = Column(JSON, nullable=False, default=[])  # List of source Story IDs
+    narrative = Column(Text, nullable=True)  # User-written connective narrative
+    is_public = Column(Boolean, nullable=False, default=False)  # Publicly visible
+    tags = Column(JSON, nullable=False, default=[])  # User-defined tags
+    status = Column(Enum(Status), nullable=False, default=Status.DRAFT)
+    version = Column(Integer, nullable=False, default=1)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("curated_stories.id", ondelete="SET NULL"), nullable=True)  # For forks
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    published_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    user = relationship("User", back_populates="curated_stories")
+    annotations = relationship("StoryAnnotation", back_populates="curated_story")
+    collections = relationship("CollectionStoryLink", back_populates="curated_story")
+
+
+class StoryAnnotation(Base):
+    """User annotations on stories/articles."""
+    __tablename__ = "story_annotations"
+    __table_args__ = (
+        Index("ix_story_annotations_user_id", "user_id"),
+        Index("ix_story_annotations_story_id", "story_id"),
+        Index("ix_story_annotations_article_id", "article_id"),
+        Index("ix_story_annotations_curated_story_id", "curated_story_id"),
+    )
+
+    class Type(str, PyEnum):
+        HIGHLIGHT = "highlight"
+        NOTE = "note"
+        CORRECTION = "correction"
+        QUESTION = "question"
+        LINK = "link"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=True)
+    curated_story_id = Column(UUID(as_uuid=True), ForeignKey("curated_stories.id", ondelete="CASCADE"), nullable=True)
+    article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id", ondelete="CASCADE"), nullable=True)
+    annotation_type = Column(Enum(Type), nullable=False, default=Type.NOTE)
+    content = Column(Text, nullable=False)
+    position = Column(Integer, nullable=True)  # Character position in text
+    selected_text = Column(Text, nullable=True)  # Highlighted text
+    color = Column(String(20), nullable=True)  # Highlight color
+    is_private = Column(JSON, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    user = relationship("User", back_populates="annotations")
+    story = relationship("Story")
+    curated_story = relationship("CuratedStory", back_populates="annotations")
+    article = relationship("RawArticle")
+
+
+class Collection(Base):
+    """User-created collection of curated stories."""
+    __tablename__ = "collections"
+    __table_args__ = (
+        Index("ix_collections_user_id", "user_id"),
+        Index("ix_collections_share_token", "share_token", unique=True),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    is_public = Column(Boolean, nullable=False, default=False)
+    share_token = Column(String(64), nullable=True, unique=True)  # For public sharing
+    tags = Column(JSON, nullable=False, default=[])
+    cover_image_url = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    user = relationship("User", back_populates="collections")
+    stories = relationship("CollectionStoryLink", back_populates="collection")
+
+
+class CollectionStoryLink(Base):
+    """Many-to-many: collections ↔ curated_stories with ordering."""
+    __tablename__ = "collection_story_links"
+    __table_args__ = (
+        UniqueConstraint("collection_id", "curated_story_id", name="uq_collection_story"),
+        Index("ix_collection_story_links_collection_id", "collection_id"),
+        Index("ix_collection_story_links_curated_story_id", "curated_story_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    collection_id = Column(UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=False)
+    curated_story_id = Column(UUID(as_uuid=True), ForeignKey("curated_stories.id", ondelete="CASCADE"), nullable=False)
+    position = Column(Integer, nullable=False, default=0)  # For ordering
+    added_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    collection = relationship("Collection", back_populates="stories")
+    curated_story = relationship("CuratedStory", back_populates="collections")
+
+
+class Comment(Base):
+    """Threaded comments on curated stories and annotations."""
+    __tablename__ = "comments"
+    __table_args__ = (
+        Index("ix_comments_user_id", "user_id"),
+        Index("ix_comments_curated_story_id", "curated_story_id"),
+        Index("ix_comments_annotation_id", "annotation_id"),
+        Index("ix_comments_parent_id", "parent_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    curated_story_id = Column(UUID(as_uuid=True), ForeignKey("curated_stories.id", ondelete="CASCADE"), nullable=True)
+    annotation_id = Column(UUID(as_uuid=True), ForeignKey("story_annotations.id", ondelete="CASCADE"), nullable=True)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("comments.id", ondelete="CASCADE"), nullable=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    user = relationship("User")
+    curated_story = relationship("CuratedStory")
+    annotation = relationship("StoryAnnotation")
+    replies = relationship("Comment", backref="parent", remote_side=[id])
