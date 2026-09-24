@@ -18,7 +18,7 @@ GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → C
 | **Database** | Supabase/Neon | PostgreSQL + pgvector, free tier |
 | **LLM Primary** | Groq (`openai/gpt-oss-20b`) | Caption generation, classification |
 | **LLM Backup** | Cerebras (`gpt-oss-120b`) | 30-day trial fallback |
-| **Ingestion** | RSS (BBC, Guardian, DW, France24, NPR) + GDELT (disabled) + Reddit | Tier-1 news, social; AP/Reuters via GDELT only (currently disabled) |
+| **Ingestion** | RSS (BBC, Guardian, DW, France24, NPR, Al Jazeera, Euronews, PBS NewsHour) + GDELT (disabled) + Reddit | Tier-1 news, social; AP/Reuters via GDELT only (currently disabled) |
 | **Verification** | MinHash containment | Near-dup clustering → reporting units |
 | **Grouping** | Entity Jaccard (top-N, threshold 0.4) | Semantic story grouping |
 | **Gate** | Tier-1 distinct owners ≥2 | Defamation-safe threshold |
@@ -87,7 +87,7 @@ cloudflared tunnel --url http://localhost:8000
 ## Pipeline Flow
 
 ### Ingestion (Twice Daily)
-1. **RSS**: BBC, Guardian, NPR (AP/Reuters removed 2026-09-21: 403/401 from GitHub runners)
+1. **RSS**: BBC, Guardian, NPR, DW, France24, Al Jazeera, Euronews, PBS NewsHour (AP/Reuters removed 2026-09-21: 403/401 from GitHub runners)
 2. **GDELT DOC API**: Disabled in the daily-ingest workflow (`GDELT_ENABLED=false`); the code default in `src/shared/config.py` is enabled — redundant with RSS for BBC/Guardian/NPR, rate-limited
 3. **Reddit**: Top posts from r/worldnews, r/geopolitics, etc. (public `.rss` feeds, no credentials — anon-rate-limited, throttled to 1 subreddit/3s)
 

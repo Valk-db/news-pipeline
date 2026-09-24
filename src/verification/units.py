@@ -42,6 +42,9 @@ OWNERSHIP_GROUPS = {
     # International broadcasters (new tier-1 feeds)
     "dw.com": "DW",
     "france24.com": "France24",
+    "aljazeera.com": "Al Jazeera",
+    "euronews.com": "Euronews",
+    "pbs.org": "PBS",
 
     # Others
     "nytimes.com": "NYT",
