@@ -60,6 +60,32 @@ TIER1_FEEDS = {
             "https://feeds.npr.org/1014/rss.xml",  # Politics
         ],
     },
+    # 2026-09-24: added for tier-1 owner-group diversity (see units.py OWNERSHIP_GROUPS);
+    # all three confirmed live and returning valid RSS at addition time.
+    "aljazeera": {
+        "name": "Al Jazeera English",
+        "domain": "aljazeera.com",
+        "tier": SourceTier.TIER1,
+        "feeds": [
+            "https://www.aljazeera.com/xml/rss/all.xml",
+        ],
+    },
+    "euronews": {
+        "name": "Euronews",
+        "domain": "euronews.com",
+        "tier": SourceTier.TIER1,
+        "feeds": [
+            "https://www.euronews.com/rss",
+        ],
+    },
+    "pbs": {
+        "name": "PBS NewsHour",
+        "domain": "pbs.org",
+        "tier": SourceTier.TIER1,
+        "feeds": [
+            "https://www.pbs.org/newshour/feeds/rss/headlines",
+        ],
+    },
 }
 
 
