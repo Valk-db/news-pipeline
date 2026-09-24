@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 
 from src.schema.models import Base, SourceTier
 from src.shared.config import Settings
+from src.shared.config import get_settings
+from src.shared import database as database_module
 
 
 @pytest.fixture(scope="session")
@@ -92,3 +94,26 @@ def sample_articles() -> list[dict]:
             "entities": {"PERSON": ["Player One"], "ORG": ["FIFA"], "GPE": ["England"]},
         },
     ]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_global_state():
+    """Isolate settings cache and DB engine between tests.
+
+    Records the module-level _engine and _async_session_maker from
+    src.shared.database before each test, yields, then restores both
+    and calls get_settings.cache_clear(). This prevents test_curation_ui.py
+    from poisoning the global state that test_verification.py depends on.
+    """
+
+    # Save original globals
+    orig_engine = database_module._engine
+    orig_session_maker = database_module._async_session_maker
+
+    try:
+        yield
+    finally:
+        # Restore globals
+        database_module._engine = orig_engine
+        database_module._async_session_maker = orig_session_maker
+        get_settings.cache_clear()

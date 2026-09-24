@@ -119,14 +119,17 @@ _TRUNCATE_ALL = (
 async def db_session():
     """Create a test database session and clean up after."""
     from src.shared.config import get_settings
+    import os
     settings = get_settings()
 
     # SAFETY GUARD: Only run TRUNCATE on localhost databases
     if not _is_localhost_db(settings.database_url):
-        # Extract just the hostname for the skip message, never the full connection string
+        # Extract just the hostname for the message, never the full connection string
         from urllib.parse import urlparse
         parsed = urlparse(settings.database_url)
         host_info = parsed.hostname or "unknown"
+        if os.environ.get("CI") == "true":
+            pytest.fail(f"Refusing to run integration tests against non-localhost DB (host: {host_info})")
         pytest.skip(f"Refusing to run integration tests against non-localhost DB (host: {host_info})")
 
     await init_db()
