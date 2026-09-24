@@ -7,6 +7,14 @@
         <span class="story-gate">{{ item.story.gate_reason or 'Pending review' }}</span>
     </div>
 
+    <div class="story-tier-badges">
+        <span class="tier-badge tier1" title="Tier-1 units (verified editorial)">{{ item.story.tier1_unit_count }}</span>
+        <span class="tier-badge tier2" title="Tier-2 units (reputable outlets)">{{ item.story.tier2_unit_count }}</span>
+        <span class="tier-badge tier3" title="Tier-3 units (social/forums)">{{ item.story.tier3_unit_count }}</span>
+        <span class="tier-badge tier4" title="Tier-4 units (niche/newsletters)">{{ item.story.tier4_unit_count }}</span>
+        <span class="owner-badge" title="Distinct tier-1 owners">{{ item.story.distinct_owners }}</span>
+    </div>
+
     <div class="story-sources">
         {% for article in item.articles %}
         <div class="source-item">
@@ -16,7 +24,7 @@
             <span class="source-meta">
                 {{ article.source_domain }} •
                 {% if article.published_at %}{{ article.published_at.strftime('%H:%M UTC') }}{% endif %}
-                • Tier: {{ article.source_tier.value }}
+                • <span class="tier-{{ article.source_tier.value }}">Tier: {{ article.source_tier.value }}</span>
             </span>
         </div>
         {% endfor %}
@@ -25,10 +33,18 @@
     <div class="story-units">
         <small>
             {{ item.units|length }} reporting unit{% if item.units|length != 1 %}s{% endif %} •
-            {{ item.story.tier1_unit_count }} tier-1 •
             {{ item.story.distinct_owners }} owner{% if item.story.distinct_owners != 1 %}s{% endif %}
         </small>
     </div>
+
+    {% if item.story.viewpoint_cluster_id %}
+    <div class="story-viewpoints">
+        <small class="viewpoint-badge">Has {{ item.story.viewpoint_count or '? '}} viewpoint sub-clusters</small>
+        <a href="/api/stories/{{ item.story.id }}/viewpoints" class="btn btn-ghost btn-sm" target="_blank">
+            View Perspectives
+        </a>
+    </div>
+    {% endif %}
 
     <div class="story-actions">
         <button class="btn btn-success" hx-post="/story/{{ item.story.id }}/approve" hx-target="#stories" hx-swap="outerHTML">

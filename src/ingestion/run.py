@@ -7,14 +7,17 @@ from datetime import datetime, timezone
 from src.ingestion.rss import ingest_rss_feeds
 from src.ingestion.gdelt import ingest_gdelt, GDELT_TIER1_CRITICAL_DOMAINS
 from src.ingestion.reddit import ingest_reddit
+from src.ingestion.source_registry import get_enabled_sources_by_tier, SourceTier
+from src.ingestion.tiered_scheduler import get_scheduler
 from src.verification.units import build_reporting_units
-from src.verification.stories import build_stories
-from src.verification.tiers import apply_tier1_gate
+from src.verification.stories import build_stories, cluster_viewpoints
+from src.verification.tiers import apply_tier1_gate, recompute_story_counters
 from src.shared.database import get_session, init_db
-from src.schema.models import RawArticle, StatusLog
+from src.schema.models import RawArticle, StatusLog, Story
 from src.shared.config import get_settings
 from src.utils.ingest_stats import STATS
 import json
+from sqlalchemy import select
 
 
 def dedupe_articles(all_articles, existing_url_hashes, existing_content_hashes):
@@ -71,8 +74,13 @@ async def log_status(session, phase: str, status: str, details: dict = None):
     await session.commit()
 
 
-async def run_ingestion(dry_run: bool = False) -> dict:
-    """Run the full ingestion → verification → grouping pipeline."""
+async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = None) -> dict:
+    """Run the full ingestion → verification → grouping pipeline.
+
+    Args:
+        dry_run: If True, don't persist to database
+        tiers: If specified, only ingest these tiers. Default: all tiers.
+    """
     settings = get_settings()
     STATS.reset()
     results = {
@@ -80,18 +88,45 @@ async def run_ingestion(dry_run: bool = False) -> dict:
         "phases": {},
     }
 
+    # Default to all tiers if not specified
+    if tiers is None:
+        tiers = [SourceTier.TIER1, SourceTier.TIER2, SourceTier.TIER3, SourceTier.TIER4]
+
     async with get_session() as session:
         # Phase 1: Ingestion
         print("Phase 1: Ingesting articles...")
-        rss_articles = await ingest_rss_feeds(settings.max_articles_per_feed)
-        if settings.gdelt_enabled:
+        all_articles = []
+
+        # Ingest tier-1 sources (RSS)
+        if SourceTier.TIER1 in tiers:
+            from src.ingestion.source_registry import get_enabled_sources_by_tier
+            tier1_sources = get_enabled_sources_by_tier(SourceTier.TIER1)
+            rss_articles = await ingest_rss_feeds(settings.max_articles_per_feed, tier1_sources)
+            all_articles.extend(rss_articles)
+            print(f"  Tier-1 RSS: {len(rss_articles)}")
+
+        # Ingest tier-2 sources (RSS)
+        if SourceTier.TIER2 in tiers:
+            from src.ingestion.source_registry import get_enabled_sources_by_tier
+            tier2_sources = get_enabled_sources_by_tier(SourceTier.TIER2)
+            tier2_articles = await ingest_rss_feeds(settings.max_articles_per_feed, tier2_sources)
+            all_articles.extend(tier2_articles)
+            print(f"  Tier-2 RSS: {len(tier2_articles)}")
+
+        # GDELT (tier-1 domains only, currently disabled)
+        if settings.gdelt_enabled and SourceTier.TIER1 in tiers:
             gdelt_articles, gdelt_health = await ingest_gdelt(hours_back=24, max_per_domain=50)
         else:
             gdelt_articles, gdelt_health = [], {"succeeded": [], "failed": [], "skipped": [], "disabled": True}
-        reddit_articles = await ingest_reddit(limit_per_sub=25)
+        all_articles.extend(gdelt_articles)
+        print(f"  GDELT: {len(gdelt_articles)}")
 
-        all_articles = rss_articles + gdelt_articles + reddit_articles
-        print(f"  RSS: {len(rss_articles)}, GDELT: {len(gdelt_articles)}, Reddit: {len(reddit_articles)}")
+        # Reddit (tier-3)
+        if SourceTier.TIER3 in tiers:
+            reddit_articles = await ingest_reddit(limit_per_sub=25)
+            all_articles.extend(reddit_articles)
+            print(f"  Tier-3 Reddit: {len(reddit_articles)}")
+
         print(f"  Total fetched articles: {len(all_articles)}")
 
         # Filter out articles that already exist in DB (by URL hash)

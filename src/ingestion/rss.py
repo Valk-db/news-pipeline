@@ -198,22 +198,48 @@ async def process_feed_entry(
     return article
 
 
-async def ingest_rss_feeds(max_per_feed: int = 50) -> List[RawArticle]:
-    """Ingest all configured RSS feeds."""
+async def ingest_rss_feeds(max_per_feed: int = 50, sources: dict | None = None) -> List[RawArticle]:
+    """Ingest all configured RSS feeds.
+
+    Args:
+        max_per_feed: Maximum articles per feed
+        sources: Optional dict of SourceConfig objects from source_registry.
+                 If None, uses TIER1_FEEDS (backward compatibility).
+    """
     settings = get_settings()
     timeout = settings.rss_fetch_timeout
     seen_urls = set()
     articles = []
 
+    # Use provided sources or default to TIER1_FEEDS
+    if sources is None:
+        sources = TIER1_FEEDS
+
     async with httpx.AsyncClient(timeout=timeout) as client:
-        for source_key, source_info in TIER1_FEEDS.items():
-            for feed_url in source_info["feeds"]:
+        for source_key, source_info in sources.items():
+            # Handle both TIER1_FEEDS format and SourceConfig format
+            if hasattr(source_info, 'rss_urls'):
+                # SourceConfig from source_registry
+                feed_urls = source_info.rss_urls
+                domain = source_info.domain
+                tier = source_info.tier
+                source_name = source_info.name
+            else:
+                # Legacy TIER1_FEEDS format
+                feed_urls = source_info["feeds"]
+                domain = source_info["domain"]
+                tier = source_info["tier"]
+                source_name = source_info["name"]
+
+            for feed_url in feed_urls:
                 feed = await fetch_feed(client, feed_url, timeout=timeout, source_key=source_key)
                 if not feed or not feed.entries:
                     continue
 
                 for entry in feed.entries[:max_per_feed]:
-                    article = await process_feed_entry(entry, source_info, seen_urls, source_key)
+                    # Build source_info dict for process_feed_entry
+                    si = {"domain": domain, "tier": tier, "name": source_name}
+                    article = await process_feed_entry(entry, si, seen_urls, source_key)
                     if article:
                         articles.append(article)
                         seen_urls.add(article.url_hash)
