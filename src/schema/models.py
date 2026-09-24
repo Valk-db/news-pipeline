@@ -12,8 +12,9 @@ Base = declarative_base()
 
 class SourceTier(str, PyEnum):
     TIER1 = "tier1"      # BBC, Guardian, NPR, AP, Reuters (verified editorial)
-    TIER2 = "tier2"      # Other outlets, aggregators
+    TIER2 = "tier2"      # National/regional outlets, reputable aggregators
     TIER3 = "tier3"      # Social, forums, unverified
+    TIER4 = "tier4"      # Niche, hyperlocal, experimental sources
 
 
 class RawArticle(Base):
@@ -66,6 +67,7 @@ class Story(Base):
     __table_args__ = (
         Index("ix_stories_day", "day"),
         Index("ix_stories_status", "status"),
+        Index("ix_stories_viewpoint_cluster", "viewpoint_cluster_id"),
     )
 
     class Status(str, PyEnum):
@@ -81,7 +83,10 @@ class Story(Base):
     primary_entities = Column(JSON, nullable=False)  # Top-N entity sets that defined this story
     tier1_unit_count = Column(Integer, nullable=False, default=0)
     tier2_unit_count = Column(Integer, nullable=False, default=0)
+    tier3_unit_count = Column(Integer, nullable=False, default=0)
+    tier4_unit_count = Column(Integer, nullable=False, default=0)
     distinct_owners = Column(Integer, nullable=False, default=0)
+    viewpoint_cluster_id = Column(UUID(as_uuid=True), nullable=True)  # Groups stories by perspective
     status = Column(Enum(Status), nullable=False, default=Status.PENDING)
     gate_reason = Column(Text, nullable=True)  # Why blocked/queued
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

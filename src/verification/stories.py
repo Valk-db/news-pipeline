@@ -11,6 +11,9 @@ from src.utils.ner import (
 from src.verification.tiers import recompute_story_counters
 from datetime import datetime, timezone, timedelta
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
@@ -107,7 +110,155 @@ async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
     if modified_story_ids:
         await recompute_story_counters(session, list(modified_story_ids))
 
+    # Phase 2: Viewpoint sub-clustering within stories
+    await cluster_viewpoints(session, list(modified_story_ids))
+
     return list(modified_story_ids)
+
+
+async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[uuid.UUID]]:
+    """
+    Sub-cluster stories by viewpoint/stance using embedding similarity.
+
+    For stories with sufficient units, use pgvector embeddings to identify
+    distinct perspectives (pro/con/neutral, geographic, ideological).
+
+    Args:
+        session: Database session
+        story_ids: List of story IDs to cluster
+
+    Returns:
+        Dictionary mapping viewpoint_cluster_id -> list of story_ids in that cluster
+    """
+    if not story_ids:
+        return {}
+
+    from src.schema.models import Story
+    from sqlalchemy import select
+
+    # Get stories with their linked units and source tiers
+    stmt = (
+        select(Story)
+        .where(Story.id.in_(story_ids))
+    )
+    result = await session.execute(stmt)
+    stories = result.scalars().all()
+
+    viewpoint_clusters = {}
+
+    for story in stories:
+        # Get linked units with their source tier info
+        from src.verification.tiers import recompute_story_counters
+        await recompute_story_counters(session, [story.id])
+        await session.refresh(story)
+
+        # Only cluster viewpoints for stories with multiple tier sources
+        total_units = (story.tier1_unit_count or 0) + (story.tier2_unit_count or 0) + \
+                      (story.tier3_unit_count or 0) + (story.tier4_unit_count or 0)
+
+        if total_units < 3:
+            # Not enough units for viewpoint clustering
+            continue
+
+        # Get all units for this story
+        from sqlalchemy.orm import selectinload
+        stmt = (
+            select(Story)
+            .options(selectinload(Story.units))
+            .where(Story.id == story.id)
+        )
+        result = await session.execute(stmt)
+        story_with_units = result.scalar_one()
+
+        # Extract article texts for embedding
+        unit_texts = []
+        for unit in story_with_units.units:
+            # Get representative article
+            stmt = select(RawArticle).where(RawArticle.id == unit.representative_article_id)
+            result = await session.execute(stmt)
+            article = result.scalar_one_or_none()
+            if article and article.body_text:
+                unit_texts.append({
+                    "unit_id": unit.id,
+                    "text": article.body_text[:2000],  # Truncate for embedding
+                    "source_tier": list((unit.source_tiers or {}).keys())[0] if unit.source_tiers else "unknown",
+                })
+
+        if len(unit_texts) < 3:
+            continue
+
+        # Use LLM to classify stance/viewpoint
+        from src.shared.llm import get_llm_client
+        llm = get_llm_client()
+
+        # Create a prompt to classify viewpoints
+        texts_for_prompt = "\n\n---\n\n".join([f"Source: {u['source_tier']}\n{u['text']}" for u in unit_texts[:10]])
+
+        prompt = f"""Analyze these news article excerpts about the same event and identify distinct viewpoints/stances.
+Group them into perspectives (e.g., pro-government, opposition, neutral/international, local, skeptical).
+
+Articles:
+{texts_for_prompt}
+
+Return a JSON object mapping unit_id to viewpoint_label. Use concise labels like:
+"pro_govt", "opposition", "neutral", "international", "local", "skeptical", "pro_business", "pro_labor", etc.
+
+Only return the JSON object, no explanation."""
+
+        try:
+            response = await llm.chat.completions.create(
+                model=llm.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=500,
+            )
+            import json
+            viewpoint_labels = json.loads(response.choices[0].message.content)
+
+            # Group units by viewpoint
+            viewpoint_to_units = {}
+            for unit_data in unit_texts:
+                unit_id = unit_data["unit_id"]
+                label = viewpoint_labels.get(str(unit_id), "neutral")
+                if label not in viewpoint_to_units:
+                    viewpoint_to_units[label] = []
+                viewpoint_to_units[label].append(unit_id)
+
+            # Create viewpoint clusters
+            for label, unit_ids in viewpoint_to_units.items():
+                if len(unit_ids) >= 1:  # At least 1 unit per viewpoint
+                    # Create a new story for this viewpoint (sub-cluster)
+                    # Find the day from the first unit
+                    stmt = select(ReportingUnit).where(ReportingUnit.id.in_(unit_ids))
+                    result = await session.execute(stmt)
+                    units = result.scalars().all()
+                    day = units[0].day if units else story.day
+
+                    viewpoint_story = Story(
+                        day=day,
+                        primary_entities=story.primary_entities,
+                        status=Story.Status.PENDING,
+                        viewpoint_cluster_id=story.id,  # Link to parent story
+                    )
+                    session.add(viewpoint_story)
+                    await session.flush()
+
+                    # Link units to viewpoint story
+                    from src.schema.models import StoryUnitLink
+                    for unit_id in unit_ids:
+                        link = StoryUnitLink(story_id=viewpoint_story.id, unit_id=unit_id)
+                        session.add(link)
+
+                    # Also keep original story as "master" cluster
+                    if story.id not in viewpoint_clusters:
+                        viewpoint_clusters[story.id] = []
+                    viewpoint_clusters[story.id].append(viewpoint_story.id)
+
+        except Exception as e:
+            logger.warning(f"Viewpoint clustering failed for story {story.id}: {e}")
+
+    await session.commit()
+    return viewpoint_clusters
 
 
 async def _get_recent_stories_with_entities(

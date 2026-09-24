@@ -23,7 +23,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.shared.database import get_session
-from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost
+from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, SourceTier
 from src.shared.llm import get_llm_client, validate_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
@@ -404,6 +404,143 @@ async def mark_posted(post_id: uuid.UUID, request: Request, user: str = Depends(
         await session.commit()
 
     return RedirectResponse(url="/posts", status_code=303)
+
+
+@app.get("/api/stories/{story_id}/viewpoints")
+async def get_story_viewpoints(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+    """Get all viewpoint sub-clusters for a story."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        # Get the main story
+        stmt = select(Story).where(Story.id == story_id)
+        result = await session.execute(stmt)
+        story = result.scalar_one_or_none()
+        if not story:
+            raise HTTPException(404, "Story not found")
+
+        # Get viewpoint sub-clusters (stories with viewpoint_cluster_id = story.id)
+        stmt = select(Story).where(Story.viewpoint_cluster_id == story_id)
+        result = await session.execute(stmt)
+        viewpoint_stories = result.scalars().all()
+
+        # Also include the main story if it has no viewpoint_cluster_id
+        # (it's the "master" story)
+        all_viewpoints = []
+
+        # Add main story as "overview" viewpoint
+        main_units = story.units
+        main_articles = [unit.representative for unit in main_units if unit.representative]
+        all_viewpoints.append({
+            "type": "overview",
+            "label": "All Perspectives",
+            "story_id": str(story.id),
+            "unit_count": len(main_units),
+            "articles": [
+                {
+                    "title": a.title,
+                    "url": a.url,
+                    "source_domain": a.source_domain,
+                    "source_tier": a.source_tier.value,
+                    "published_at": a.published_at.isoformat() if a.published_at else None,
+                }
+                for a in main_articles
+            ],
+            "tier1_count": story.tier1_unit_count,
+            "tier2_count": story.tier2_unit_count,
+            "tier3_count": story.tier3_unit_count,
+            "tier4_count": story.tier4_unit_count,
+            "distinct_owners": story.distinct_owners,
+        })
+
+        # Add each viewpoint sub-cluster
+        for vs in viewpoint_stories:
+            units = vs.units
+            articles = [unit.representative for unit in units if unit.representative]
+            all_viewpoints.append({
+                "type": "viewpoint",
+                "label": "Perspective",  # Could be enhanced with LLM-generated labels
+                "story_id": str(vs.id),
+                "unit_count": len(units),
+                "articles": [
+                    {
+                        "title": a.title,
+                        "url": a.url,
+                        "source_domain": a.source_domain,
+                        "source_tier": a.source_tier.value,
+                        "published_at": a.published_at.isoformat() if a.published_at else None,
+                    }
+                    for a in articles
+                ],
+                "tier1_count": vs.tier1_unit_count,
+                "tier2_count": vs.tier2_unit_count,
+                "tier3_count": vs.tier3_unit_count,
+                "tier4_count": vs.tier4_unit_count,
+                "distinct_owners": vs.distinct_owners,
+            })
+
+    return {
+        "story_id": str(story_id),
+        "viewpoints": all_viewpoints,
+        "total_viewpoints": len(all_viewpoints),
+    }
+
+
+@app.get("/api/stories/{story_id}/sources")
+async def get_story_sources(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+    """Get source breakdown for a story (tiers, owners, geographic)."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stmt = select(Story).where(Story.id == story_id)
+        result = await session.execute(stmt)
+        story = result.scalar_one_or_none()
+        if not story:
+            raise HTTPException(404, "Story not found")
+
+        # Get all linked units with their source info
+        stmt = (
+            select(ReportingUnit)
+            .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
+            .where(StoryUnitLink.story_id == story_id)
+        )
+        result = await session.execute(stmt)
+        units = result.scalars().all()
+
+        tier_counts = {"tier1": 0, "tier2": 0, "tier3": 0, "tier4": 0}
+        owner_counts = {}
+        geographic_counts = {}
+
+        for unit in units:
+            source_tiers = unit.source_tiers or {}
+            owner_groups = unit.owner_groups or {}
+
+            for tier, count in source_tiers.items():
+                tier_counts[tier] = tier_counts.get(tier, 0) + count
+
+            for owner, count in owner_groups.items():
+                owner_counts[owner] = owner_counts.get(owner, 0) + count
+
+            # Get geographic from representative article
+            stmt = select(RawArticle).where(RawArticle.id == unit.representative_article_id)
+            result = await session.execute(stmt)
+            article = result.scalar_one_or_none()
+            if article:
+                # Could add geographic focus from source registry
+                geo = article.source_domain  # placeholder
+                geographic_counts[geo] = geographic_counts.get(geo, 0) + 1
+
+    return {
+        "story_id": str(story_id),
+        "tier_distribution": tier_counts,
+        "owner_distribution": owner_counts,
+        "geographic_distribution": geographic_counts,
+        "total_units": len(units),
+    }
 
 
 if __name__ == "__main__":

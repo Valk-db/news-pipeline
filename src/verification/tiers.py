@@ -12,7 +12,7 @@ from typing import List, Optional, Tuple
 
 async def recompute_story_counters(session: AsyncSession, story_ids: List[uuid.UUID]) -> None:
     """
-    Recompute story tier1_unit_count, tier2_unit_count, and distinct_owners
+    Recompute story tier1_unit_count, tier2_unit_count, tier3_unit_count, tier4_unit_count, and distinct_owners
     from current StoryUnitLinks.
 
     This should be called whenever StoryUnitLinks change (attach/detach/merge).
@@ -49,7 +49,7 @@ async def recompute_story_counters(session: AsyncSession, story_ids: List[uuid.U
         for owner, _ in (tier1_owner_groups or {}).items():
             story_tier1_owners[story_id].add(owner)
 
-    # Now compute tier1_unit_count, tier2_unit_count, and distinct_owners for each story
+    # Now compute tier1_unit_count, tier2_unit_count, tier3_unit_count, tier4_unit_count, and distinct_owners for each story
     # Batch fetch all stories in one query
     stmt_stories = select(Story).where(Story.id.in_(story_ids))
     result_stories = await session.execute(stmt_stories)
@@ -61,12 +61,16 @@ async def recompute_story_counters(session: AsyncSession, story_ids: List[uuid.U
 
         tier1_count = tiers.get("tier1", 0)
         tier2_count = tiers.get("tier2", 0)
+        tier3_count = tiers.get("tier3", 0)
+        tier4_count = tiers.get("tier4", 0)
         distinct_owners = len(tier1_owners)  # distinct tier-1 owners
 
         story = stories.get(story_id)
         if story:
             story.tier1_unit_count = tier1_count
             story.tier2_unit_count = tier2_count
+            story.tier3_unit_count = tier3_count
+            story.tier4_unit_count = tier4_count
             story.distinct_owners = distinct_owners
 
     await session.flush()
@@ -91,7 +95,7 @@ TIER1_DOMAINS = {
     "reuters.com",
 }
 
-# Tier-2 sources (reputable but not wire-service level)
+# Tier-2 sources (national/regional reputable outlets)
 TIER2_DOMAINS = {
     "nytimes.com",
     "washingtonpost.com",
@@ -105,6 +109,208 @@ TIER2_DOMAINS = {
     "chathamhouse.org",
     "un.org",
     "who.int",
+    "latimes.com",
+    "chicagotribune.com",
+    "bostonglobe.com",
+    "sfgate.com",
+    "seattletimes.com",
+    "denverpost.com",
+    "miamiherald.com",
+    "ajc.com",
+    "houstonchronicle.com",
+    "dallasnews.com",
+    "phillyinquirer.com",
+    "startribune.com",
+    "oregonlive.com",
+    "dispatch.com",
+    "tennessean.com",
+    "courier-journal.com",
+    "cincinnati.com",
+    "indystar.com",
+    "jsonline.com",
+    "freep.com",
+    "azcentral.com",
+    "reviewjournal.com",
+    "rgj.com",
+    "cjonline.com",
+    "statesman.com",
+    "pressherald.com",
+    "burlingtonfreepress.com",
+    "dailycamera.com",
+    "coloradoan.com",
+    "journalnow.com",
+    "greensboro.com",
+    "fayobserver.com",
+    "citizen-times.com",
+    "postandcourier.com",
+    "thestate.com",
+    "tallahassee.com",
+    "news-press.com",
+    "naplesnews.com",
+    "pnj.com",
+    "tcpalm.com",
+    "floridatoday.com",
+    "tampabay.com",
+    "orlandosentinel.com",
+    "sun-sentinel.com",
+    "palmbeachpost.com",
+    "tcpanews.com",
+    "kansascity.com",
+    "stltoday.com",
+    "columbiatribune.com",
+    "springfieldnewssun.com",
+    "daytondailynews.com",
+    "cjonline.com",
+    "wichitaeagle.com",
+    "kansas.com",
+    "omaha.com",
+    "journalstar.com",
+    "rapidcityjournal.com",
+    "argusleader.com",
+    "siouxcityjournal.com",
+    "thegazette.com",
+    "qctimes.com",
+    "desmoinesregister.com",
+    "thegazette.com",
+    "waterloocedarfallscourier.com",
+    "globegazette.com",
+    "messengernews.net",
+    "carrollspaper.com",
+    "dailyjournal.net",
+    "timesdaily.com",
+    "decaturdaily.com",
+    "annistonstar.com",
+    "gadsdentimes.com",
+    "dothaneagle.com",
+    "opelikaauburnnews.com",
+    "tuscaloosanews.com",
+    "montgomeryadvertiser.com",
+    "dothaneagle.com",
+    "timesrecordnews.com",
+    "wacotrib.com",
+    "tylerpaper.com",
+    "longviewnewsjournal.com",
+    "ketv.com",
+    "ketv.com",
+    "kansascity.com",
+    "kshb.com",
+    "wdaftv.com",
+    "kdvr.com",
+    "kwgn.com",
+    "kdvr.com",
+    "denverpost.com",
+    "9news.com",
+    "kdvr.com",
+    "kusa.com",
+    "kprc2.com",
+    "khou.com",
+    "khon2.com",
+    "kitv.com",
+    "kake.com",
+    "kwch.com",
+    "ksn.com",
+    "kttc.com",
+    "kcrg.com",
+    "kwqc.com",
+    "whotv.com",
+    "kccitv.com",
+    "klkntv.com",
+    "koltv.com",
+    "kneb.com",
+    "klop.com",
+    "kplr.com",
+    "kptv.com",
+    "katu.com",
+    "kval.com",
+    "kmtr.com",
+    "koin.com",
+    "kptv.com",
+    "kptv.com",
+    "kgw.com",
+    "kptv.com",
+    "katu.com",
+    "kptv.com",
+    "kptv.com",
+    "kptv.com",
+    "kptv.com",
+    "kptv.com",
+}
+
+# Tier-3 sources (social, forums, unverified)
+TIER3_DOMAINS = {
+    "reddit.com",
+    "twitter.com",
+    "x.com",
+    "bsky.social",
+    "threads.net",
+    "mastodon.social",
+    "facebook.com",
+    "linkedin.com",
+    "youtube.com",
+    "tiktok.com",
+    "instagram.com",
+}
+
+# Tier-4 sources (niche, hyperlocal, experimental)
+TIER4_DOMAINS = {
+    "substack.com",
+    "medium.com",
+    "ghost.io",
+    "letterboxd.com",
+    "patreon.com",
+    "buymeacoffee.com",
+    "ko-fi.com",
+    "gumroad.com",
+    "itch.io",
+    "hackernoon.com",
+    "dev.to",
+    "hashnode.com",
+    "towardsdatascience.com",
+    "betterprogramming.pub",
+    "levelup.gitconnected.com",
+    "javascript.plainenglish.io",
+    "python.plainenglish.io",
+    "uxplanet.org",
+    "uxdesign.cc",
+    "uxcollective.com",
+    "blog.prototypr.io",
+    "uxmatters.com",
+    "smashingmagazine.com",
+    "alistapart.com",
+    "css-tricks.com",
+    "web.dev",
+    "developers.google.com",
+    "webplatform.news",
+    "frontendfoc.us",
+    "javascriptweekly.com",
+    "react.statuscode.com",
+    "nodeweekly.com",
+    "golangweekly.com",
+    "rustweekly.com",
+    "pythonweekly.com",
+    "djangoweekly.com",
+    "railsweekly.com",
+    "elixirweekly.com",
+    "postgresweekly.com",
+    "dbweekly.com",
+    "dataengineeringweekly.com",
+    "mlops.community",
+    "kdnuggets.com",
+    "towardsdatascience.com",
+    "machinelearningmastery.com",
+    "distill.pub",
+    "paperswithcode.com",
+    "huggingface.co",
+    "wandb.ai",
+    "comet.ml",
+    "neptune.ai",
+    "mlflow.org",
+    "dagshub.com",
+    "clear.ml",
+    "zenml.io",
+    "pytorchlightning.ai",
+    "lightning.ai",
+    "weights-biases.com",
 }
 
 
@@ -114,6 +320,10 @@ def classify_source_tier(domain: str) -> SourceTier:
         return SourceTier.TIER1
     if domain in TIER2_DOMAINS:
         return SourceTier.TIER2
+    if domain in TIER3_DOMAINS:
+        return SourceTier.TIER3
+    if domain in TIER4_DOMAINS:
+        return SourceTier.TIER4
     return SourceTier.TIER3
 
 

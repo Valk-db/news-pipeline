@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     gdelt_max_retries: int = 7
     gdelt_base_delay: float = 10.0
 
+    # Tiered ingestion schedules (cron expressions)
+    tier1_schedule: str = "0 * * * *"      # Hourly
+    tier2_schedule: str = "0 */4 * * *"    # Every 4 hours
+    tier3_schedule: str = "0 6 * * *"      # Daily at 6 AM
+    tier4_schedule: str = "0 */6 * * *"    # Every 6 hours
+
     # Curation UI auth
     curation_user: str = ""
     curation_password: str = ""
