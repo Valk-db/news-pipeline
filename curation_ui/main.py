@@ -86,8 +86,15 @@ def check_database_available() -> tuple[bool, str]:
 
 
 def check_llm_available() -> tuple[bool, str]:
-    """Check if LLM is available, return (available, error_message)."""
-    if not settings.has_llm:
+    """Check if LLM is available, return (available, error_message).
+
+    Availability is either a configured provider API key, or an already
+    -initialized/injected client (e.g. the mock LLMClient tests set on
+    src.shared.llm._llm_client). Gating on settings.has_llm alone made this
+    return False even when a working client was already in place.
+    """
+    import src.shared.llm as llm_module
+    if not settings.has_llm and llm_module._llm_client is None:
         return False, "No LLM configured. Set GROQ_API_KEY or CEREBRAS_API_KEY environment variable."
     return True, ""
 
@@ -137,7 +144,10 @@ async def _render_stories_grid(session: AsyncSession) -> list:
         return []
 
     story_data = []
-    story_ids = [str(s.id) for s in stories]
+    # Keep as UUID objects for the IN-clause bind params (the UUID column type
+    # expects actual uuid.UUID instances, not strings); str() versions are used
+    # below only as dict keys for grouping.
+    story_ids = [s.id for s in stories]
 
     # Batch fetch MediaAssets for all stories
     media_stmt = (
