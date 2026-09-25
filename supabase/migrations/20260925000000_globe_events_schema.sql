@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Ensure columns exist if table already existed (idempotent)
+ALTER TABLE events
+    ADD COLUMN IF NOT EXISTS layer_id UUID REFERENCES event_layers(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS geometry_id UUID REFERENCES event_geometries(id) ON DELETE SET NULL;
+
 -- Add FK columns to canonical_entities if they don't exist
 ALTER TABLE canonical_entities
     ADD COLUMN IF NOT EXISTS geometry_id UUID REFERENCES event_geometries(id) ON DELETE SET NULL,
