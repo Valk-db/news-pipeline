@@ -464,6 +464,18 @@ function showEventDetail(entity) {
 }
 
 
+// Hide the event detail panel (mirrors showEventDetail above; this module
+// owns #event-detail-panel, so it must not depend on globe-interaction.js's
+// same-named function, which runs in a separate scope and loads after this
+// script — referencing it here threw a ReferenceError while building the
+// window.GlobeCore export object, which in turn left window.GlobeCore
+// undefined and broke globe-init.js's window.GlobeCore.initGlobe() call).
+function hideEventDetail() {
+    const panel = document.getElementById('event-detail-panel');
+    if (panel) panel.classList.remove('open');
+}
+
+
 // Clustering support
 let clusteringEnabled = false;
 

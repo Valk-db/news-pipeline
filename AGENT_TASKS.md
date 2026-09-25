@@ -1,14 +1,12 @@
-# AGENT_TASKS.md v14
+# AGENT_TASKS.md v15
 
-Supersedes v13 (all three P0/P0-A/P0-B items from v13 are merged in `553dfac`). Two new
-bugs reported after that merge — a CI test regression and a recurrence of the "Internal
-Server Error" on the curation main page, this time from a different root cause than v13's
-P0-B (which was about missing tables; the tables exist now). Both are root-caused and fixed
-below, with a runnable repro for each.
+Supersedes v14. v14's P0-C and P0-D are applied and verified (11/11 curation UI tests pass,
+full suite 316 passed / 5 skipped). This revision adds P0-E: the `/globe` page failing to
+initialize.
 
-Status: **both fixes are implemented in this checkout** (see diffs below) and verified
-locally. This doc is the record of what was wrong and why, for the PR description / commit
-message, and as a template if either class of bug recurs.
+Status: **all three fixes (P0-C, P0-D, P0-E) are implemented in this checkout** (see diffs
+below) and verified. This doc is the record of what was wrong and why, for the PR
+description / commit message, and as a template if any of these classes of bug recur.
 
 ---
 
@@ -172,6 +170,95 @@ Follow-up below).
 
 ---
 
+## P0-E — `/globe` page fails to initialize
+
+### Symptom
+
+Browser console, in order:
+
+```
+Uncaught ReferenceError: hideEventDetail is not defined
+    at globe-core.js:520:5
+globe-init.js:13 Initializing Globe...
+globe-init.js:43 Globe initialization failed: TypeError: Cannot read properties of undefined (reading 'initGlobe')
+    at HTMLDocument.<anonymous> (globe-init.js:17:32)
+```
+
+### Diagnosis
+
+`curation_ui/static/globe/globe-core.js` ends with:
+
+```js
+window.GlobeCore = {
+    ...
+    showEventDetail,
+    hideEventDetail,   // <- line 520
+    ...
+};
+```
+
+`hideEventDetail` was never defined in `globe-core.js`. A function with that exact name
+exists, but only in `globe-interaction.js` (loaded via a separate `<script>` tag, after
+`globe-core.js`, per `curation_ui/templates/globe.html`) — it's local to that file and only
+exposed as `window.GlobeInteractions.hideEventDetail`, not anything `globe-core.js` can see.
+
+Because these are classic (non-module) scripts, evaluating the `window.GlobeCore = {...}`
+object literal throws a `ReferenceError` on the undefined shorthand property the instant
+`globe-core.js` runs — before the assignment completes. So `window.GlobeCore` is never set
+at all. That's the first console line. It cascades directly into the second and third:
+`globe-init.js` calls `window.GlobeCore.initGlobe()` a few lines into its own
+`DOMContentLoaded` handler, and since `window.GlobeCore` is `undefined`, that throws
+"Cannot read properties of undefined (reading 'initGlobe')" and the whole globe never
+initializes.
+
+`globe-core.js` already fully owns open/close of `#event-detail-panel` — its own
+`showEventDetail()` (used by its own `onLeftClick` handler) ends with
+`panel.classList.add('open')`. It was just missing the matching close half; it was never
+meant to depend on `globe-interaction.js`'s same-named function.
+
+Verified: rebuilt `window.GlobeCore` in a minimal Node/Cesium-stub harness — it threw the
+exact same `ReferenceError` on `hideEventDetail` before the fix, and after the fix built
+cleanly with a working `initGlobe` function on it.
+
+### Fix
+
+`curation_ui/static/globe/globe-core.js` — add a local `hideEventDetail`, right after
+`showEventDetail` (which already sets the panel's `open` class, so this mirrors it exactly):
+
+```js
+// Hide the event detail panel (mirrors showEventDetail above; this module
+// owns #event-detail-panel, so it must not depend on globe-interaction.js's
+// same-named function, which runs in a separate scope and loads after this
+// script — referencing it here threw a ReferenceError while building the
+// window.GlobeCore export object, which in turn left window.GlobeCore
+// undefined and broke globe-init.js's window.GlobeCore.initGlobe() call).
+function hideEventDetail() {
+    const panel = document.getElementById('event-detail-panel');
+    if (panel) panel.classList.remove('open');
+}
+```
+
+Nothing else changes — the existing `hideEventDetail,` line in the `window.GlobeCore = {...}`
+export object at the bottom of the file now resolves correctly, and
+`globe-interaction.js`'s own separate `hideEventDetail` (exposed as
+`window.GlobeInteractions.hideEventDetail`, bound to its own `#panel-close` click listener)
+is untouched and still works exactly as before — the two are independent, same-named
+functions in different scopes, and both doing the same harmless thing (removing the `open`
+class) is not itself a bug.
+
+### Verification
+
+```
+node --check curation_ui/static/globe/globe-core.js   # syntax OK
+```
+
+Plus a minimal Node harness stubbing `document`/`Cesium` and `require()`-ing the file directly:
+before the fix, building `window.GlobeCore` throws `ReferenceError: hideEventDetail is not
+defined`; after the fix, `window.GlobeCore` builds with all expected keys including a
+function-typed `initGlobe` and `hideEventDetail`.
+
+---
+
 ## Follow-up (not blocking, worth doing next)
 
 1. **Add a regression test** for P0-D: a `test_index_with_media_and_snippets` in
@@ -186,3 +273,11 @@ Follow-up below).
    `python -m spacy download en_core_web_sm` hasn't been run — this is expected/pre-existing
    (CI's `test` job has a dedicated step for it) and unrelated to P0-C/P0-D; not fixed here,
    just noting it so it isn't mistaken for a regression from this change.
+4. P0-E has no automated coverage — there's no JS test harness in this repo at all yet. If
+   one gets added later, a smoke test that `require()`s `globe-core.js` against a stubbed
+   `document`/`Cesium` and asserts `window.GlobeCore.initGlobe` is a function (the same check
+   used to verify this fix) would have caught this before it shipped. Also worth a quick scan
+   of `globe-layers.js` / `globe-timeline.js` / `globe-interaction.js` for the same
+   pattern — a name referenced in one file's public export object but only ever defined in
+   another — since this was the second time (after P0-D) that a bug shipped from two files
+   silently assuming they shared more than they did.
