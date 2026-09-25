@@ -8,7 +8,7 @@ from src.utils.ner import (
     resolve_entities_to_canonical,
     canonical_jaccard,
 )
-from src.verification.tiers import recompute_story_counters
+from src.verification.tiers import recompute_story_counters, apply_tier1_gate
 from datetime import datetime, timezone, timedelta
 import uuid
 import logging
@@ -189,7 +189,7 @@ async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) 
 
         # Use LLM to classify stance/viewpoint
         from src.shared.llm import get_llm_client
-        llm = get_llm_client()
+        llm = await get_llm_client()
 
         # Create a prompt to classify viewpoints
         texts_for_prompt = "\n\n---\n\n".join([f"Source: {u['source_tier']}\n{u['text']}" for u in unit_texts[:10]])
@@ -206,14 +206,13 @@ Return a JSON object mapping unit_id to viewpoint_label. Use concise labels like
 Only return the JSON object, no explanation."""
 
         try:
-            response = await llm.chat.completions.create(
-                model=llm.model,
+            result = await llm.chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=500,
             )
             import json
-            viewpoint_labels = json.loads(response.choices[0].message.content)
+            viewpoint_labels = json.loads(result["choices"][0]["message"]["content"])
 
             # Group units by viewpoint
             viewpoint_to_units = {}
@@ -254,8 +253,13 @@ Only return the JSON object, no explanation."""
                         viewpoint_clusters[story.id] = []
                     viewpoint_clusters[story.id].append(viewpoint_story.id)
 
+            # Apply tier-1 gate to viewpoint sub-stories to prevent gate bypass
+            if viewpoint_clusters.get(story.id):
+                viewpoint_story_ids = [sid for sid in viewpoint_clusters[story.id]]
+                await apply_tier1_gate(session, story_ids=viewpoint_story_ids)
+
         except Exception as e:
-            logger.warning(f"Viewpoint clustering failed for story {story.id}: {e}")
+            logger.warning(f"Viewpoint clustering failed for story {story.id}: {e}", exc_info=True)
 
     await session.commit()
     return viewpoint_clusters

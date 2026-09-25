@@ -2,19 +2,17 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.schema.models import (
-    Event, EventGeometry, EventLayer, Story, RawArticle, ReportingUnit,
-    StoryUnitLink, SourceTier
+    Event, EventGeometry, EventLayer
 )
 from src.enrichment.geocoder import Geocoder, GeoResult
 from src.enrichment.event_locator import (
     classify_event_type,
     extract_location_candidates,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def test_event_model_fields():
@@ -60,7 +58,6 @@ def test_event_type_enum():
 
 def test_event_geometry_model():
     """Test EventGeometry model."""
-    from src.schema.models import EventGeometry
 
     geom = EventGeometry(
         id=uuid.uuid4(),
@@ -137,7 +134,6 @@ def test_extract_location_candidates():
 
 def test_geocoder_result():
     """Test GeoResult dataclass."""
-    from src.enrichment.geocoder import GeoResult
 
     result = GeoResult(
         name="New York City",
@@ -156,7 +152,6 @@ def test_geocoder_result():
 @pytest.mark.asyncio
 async def test_geocoder_nominatim():
     """Test Nominatim geocoding (mocked)."""
-    from src.enrichment.geocoder import Geocoder
 
     geocoder = Geocoder()
 
@@ -226,7 +221,6 @@ def test_event_layer_style():
 
 def test_event_geometry_types():
     """Test EventGeometry geometry types."""
-    from src.schema.models import EventGeometry
 
     for geom_type in ["point", "polygon", "linestring", "multipolygon", "multilinestring"]:
         geom = EventGeometry(

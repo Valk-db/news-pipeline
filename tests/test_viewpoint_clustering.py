@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.verification.stories import cluster_viewpoints
-from src.schema.models import Story, ReportingUnit, RawArticle, SourceTier, StoryUnitLink
+from src.schema.models import Story, ReportingUnit, RawArticle, SourceTier
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -86,54 +86,108 @@ async def test_cluster_viewpoints_basic(mock_session, sample_story, sample_units
     """Test basic viewpoint clustering."""
     story_ids = [sample_story.id]
 
-    # Mock the database queries
+    # Mock the database queries - need to handle multiple execute calls
     mock_session.execute = AsyncMock()
 
-    # First call: get story
+    # Mock results for various queries:
+    # 1. Initial story query (line 140-145)
     story_result = MagicMock()
-    story_result.scalar_one.return_value = sample_story
+    story_result.scalars.return_value.all.return_value = [sample_story]
 
-    # Second call: get story with units
+    # 2. recompute_story_counters queries - return rows with tier info for the sample story
+    # The function queries: StoryUnitLink.story_id, ReportingUnit.source_tiers, ReportingUnit.tier1_owner_groups
+    # We need to return rows that match the sample story's tier counts (tier1=2, tier2=1, etc.)
+    recompute_result = MagicMock()
+    # Return 4 rows (one per unit), each with the source_tiers and tier1_owner_groups
+    recompute_rows = []
+    for i, unit in enumerate(sample_units):
+        recompute_rows.append((
+            sample_story.id,
+            unit.source_tiers,
+            unit.tier1_owner_groups,
+        ))
+    recompute_result.all.return_value = recompute_rows
+
+    # 3. Story with units via selectinload (line 165-171)
     story_with_units_result = MagicMock()
     story_with_units = MagicMock()
     story_with_units.units = sample_units
     story_with_units_result.scalar_one.return_value = story_with_units
 
-    # Third call: get articles for units
+    # 4. Article queries for each unit (line 177-179)
     article_results = []
     for article in sample_articles:
         article_result = MagicMock()
         article_result.scalar_one_or_none.return_value = article
         article_results.append(article_result)
 
+    # 5. Unit queries for viewpoint story creation (line 231-234) - one per viewpoint
+    # There will be 4 viewpoints, each needs a query for ReportingUnit
+    unit_query_results = []
+    for unit in sample_units:
+        unit_result = MagicMock()
+        unit_result.scalars.return_value.all.return_value = [unit]
+        unit_query_results.append(unit_result)
+
+    # The call sequence:
+    # 1. Initial story query (line 140-145)
+    # 2. recompute_story_counters first query (StoryUnitLink join)
+    # 3. recompute_story_counters second query (select Story)
+    # 4. Story with units selectinload query (line 165-171)
+    # 5. Article queries for each unit (4 units, line 177-179)
+    # 6. Unit queries for viewpoint story day lookup (line 231-234, 4 queries)
     mock_session.execute.side_effect = [
         story_result,
+        recompute_result,  # recompute_story_counters first query (StoryUnitLink join)
+        story_result,      # recompute_story_counters second query (select Story)
         story_with_units_result,
-    ] + article_results
+    ] + article_results + unit_query_results
 
     mock_session.commit = AsyncMock()
     mock_session.flush = AsyncMock()
     mock_session.add = MagicMock()
+    mock_session.refresh = AsyncMock()
 
-    # Mock LLM client
-    with patch('src.shared.llm.get_llm_client') as mock_get_llm:
+    # Mock LLM client - use the real interface
+    with patch('src.shared.llm.get_llm_client') as mock_get_llm, \
+         patch('src.verification.stories.apply_tier1_gate') as mock_apply_gate:
         mock_llm = AsyncMock()
         mock_get_llm.return_value = mock_llm
+        mock_apply_gate.return_value = {"queued": 0, "blocked": 0}
 
-        # Mock LLM response with viewpoint classifications
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = '{"unit1": "pro_govt", "unit2": "opposition", "unit3": "international", "unit4": "local"}'
-        mock_llm.chat.completions.create.return_value = mock_response
-        mock_llm.model = "test-model"
+        # Mock LLM response with viewpoint classifications (new chat_completion interface)
+        # Use actual unit IDs as keys (converted to strings)
+        unit_id_strs = [str(u.id) for u in sample_units]
+        viewpoint_labels = {
+            unit_id_strs[0]: "pro_govt",
+            unit_id_strs[1]: "opposition",
+            unit_id_strs[2]: "international",
+            unit_id_strs[3]: "local",
+        }
+        import json
+        mock_llm.chat_completion.return_value = {
+            "choices": [{"message": {"content": json.dumps(viewpoint_labels)}}]
+        }
 
         # Call the function
-        result = await cluster_viewpoints(mock_session, story_ids)
+        try:
+            result = await cluster_viewpoints(mock_session, story_ids)
+        except Exception as e:
+            print(f"Exception during cluster_viewpoints: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
         # Verify results
         assert isinstance(result, dict)
-        # Should create viewpoint clusters
-        assert len(result) >= 0  # May be 0 if LLM parsing fails in test
+        # Should create at least one viewpoint cluster (we have 4 units with distinct viewpoints)
+        assert len(result) >= 1
+        # Verify the parent story has viewpoint sub-stories
+        parent_id = sample_story.id
+        assert parent_id in result
+        assert len(result[parent_id]) >= 1  # At least one viewpoint sub-story created
+        # Verify the LLM was called with the correct interface
+        mock_llm.chat_completion.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -163,6 +217,135 @@ async def test_cluster_viewpoints_insufficient_units(mock_session):
 
     # Should return empty dict for insufficient units
     assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_viewpoint_substories_blocked_by_tier1_gate(mock_session, sample_units, sample_articles):
+    """Test that viewpoint sub-stories without 2+ distinct tier-1 owners are BLOCKED, not curator-visible.
+
+    This is a regression test for P0.2: viewpoint clustering creates sub-stories that
+    must pass the tier-1 gate. A story built only from tier-3 units (e.g., Reddit posts)
+    should have its viewpoint sub-stories BLOCKED, not PENDING/curator-visible.
+    """
+    # Create a parent story with ONLY tier-3 units (no tier-1 units)
+    story = Story(
+        id=uuid.uuid4(),
+        day=datetime.now(timezone.utc),
+        primary_entities=["entity1"],
+        tier1_unit_count=0,
+        tier2_unit_count=0,
+        tier3_unit_count=4,
+        tier4_unit_count=0,
+        distinct_owners=0,
+        status=Story.Status.PENDING,
+        viewpoint_cluster_id=None,
+    )
+
+    # Create tier-3 units (like Reddit posts)
+    tier3_units = []
+    for i in range(4):
+        unit = ReportingUnit(
+            id=uuid.uuid4(),
+            day=datetime.now(timezone.utc),
+            representative_article_id=uuid.uuid4(),
+            article_count=1,
+            source_tiers={"tier3": 1},
+            owner_groups={"Reddit": 1},
+            tier1_owner_groups={},  # No tier-1 owners
+        )
+        tier3_units.append(unit)
+
+    # Mock the database queries
+    mock_session.execute = AsyncMock()
+
+    # 1. Initial story query
+    story_result = MagicMock()
+    story_result.scalars.return_value.all.return_value = [story]
+
+    # 2. recompute_story_counters queries - return tier-3 only
+    recompute_result = MagicMock()
+    recompute_rows = []
+    for unit in tier3_units:
+        recompute_rows.append((
+            story.id,
+            unit.source_tiers,
+            unit.tier1_owner_groups,
+        ))
+    recompute_result.all.return_value = recompute_rows
+
+    # 3. Story with units selectinload
+    story_with_units_result = MagicMock()
+    story_with_units = MagicMock()
+    story_with_units.units = tier3_units
+    story_with_units_result.scalar_one.return_value = story_with_units
+
+    # 4. Article queries for each unit
+    article_results = []
+    for article in sample_articles:
+        article_result = MagicMock()
+        article_result.scalar_one_or_none.return_value = article
+        article_results.append(article_result)
+
+    # 5. Unit queries for viewpoint story day lookup
+    unit_query_results = []
+    for unit in tier3_units:
+        unit_result = MagicMock()
+        unit_result.scalars.return_value.all.return_value = [unit]
+        unit_query_results.append(unit_result)
+
+    mock_session.execute.side_effect = [
+        story_result,
+        recompute_result,
+        story_result,
+        story_with_units_result,
+    ] + article_results + unit_query_results
+
+    mock_session.commit = AsyncMock()
+    mock_session.flush = AsyncMock()
+    mock_session.add = MagicMock()
+    mock_session.refresh = AsyncMock()
+
+    # Mock LLM client and apply_tier1_gate
+    with patch('src.shared.llm.get_llm_client') as mock_get_llm, \
+         patch('src.verification.stories.apply_tier1_gate') as mock_apply_gate:
+        mock_llm = AsyncMock()
+        mock_get_llm.return_value = mock_llm
+
+        # Track what stories apply_tier1_gate was called with
+        called_story_ids = []
+        async def mock_gate(session, story_ids=None):
+            called_story_ids.extend(story_ids or [])
+            return {"queued": 0, "blocked": len(story_ids) if story_ids else 0}
+        mock_apply_gate.side_effect = mock_gate
+
+        # Mock LLM response with viewpoint classifications
+        unit_id_strs = [str(u.id) for u in tier3_units]
+        viewpoint_labels = {
+            unit_id_strs[0]: "opinion_a",
+            unit_id_strs[1]: "opinion_b",
+            unit_id_strs[2]: "opinion_c",
+            unit_id_strs[3]: "opinion_d",
+        }
+        import json
+        mock_llm.chat_completion.return_value = {
+            "choices": [{"message": {"content": json.dumps(viewpoint_labels)}}]
+        }
+
+        # Call the function
+        result = await cluster_viewpoints(mock_session, [story.id])
+
+        # Verify viewpoint sub-stories were created
+        assert len(result) >= 1
+        assert story.id in result
+        viewpoint_story_ids = result[story.id]
+        assert len(viewpoint_story_ids) >= 1
+
+        # Verify apply_tier1_gate was called with the viewpoint sub-story IDs
+        assert len(called_story_ids) >= 1
+        assert set(called_story_ids) == set(viewpoint_story_ids)
+
+        # The gate should have blocked them (no tier-1 units, no distinct tier-1 owners)
+        # This ensures the sub-stories don't end up as PENDING in the curation queue
 
 
 def test_viewpoint_cluster_model_fields():
@@ -211,7 +394,6 @@ def test_source_registry():
         get_enabled_sources_by_tier,
         get_source_config,
         ALL_SOURCES,
-        SourceConfig,
         SourceTier,
     )
 
@@ -253,7 +435,7 @@ def test_source_registry():
 def test_tiered_scheduler():
     """Test tiered scheduler."""
     from src.ingestion.tiered_scheduler import TieredScheduler, SourceTier
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timezone
 
     scheduler = TieredScheduler()
 
@@ -290,7 +472,6 @@ def test_tiered_scheduler():
 def test_recompute_story_counters_extended():
     """Test that recompute_story_counters handles all four tiers."""
     from src.verification.tiers import recompute_story_counters
-    import asyncio
 
     # This is a basic check that the function signature accepts the right parameters
     import inspect

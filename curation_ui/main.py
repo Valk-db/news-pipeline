@@ -103,7 +103,13 @@ def render_error_page(request: Request, message: str, status_code: int = 503) ->
 
 
 async def _render_stories_grid(session: AsyncSession) -> list:
-    """Render the stories grid fragment for HTMX swap."""
+    """Render the stories grid fragment for HTMX swap.
+
+    Defense-in-depth: Filter out viewpoint sub-stories that don't have
+    ≥2 distinct tier-1 owners. This ensures that even if a viewpoint
+    sub-story somehow bypasses apply_tier1_gate, it won't appear in
+    the curation queue.
+    """
     from sqlalchemy import select, desc
     from sqlalchemy.orm import selectinload
     from src.schema.models import Story, ReportingUnit
@@ -111,6 +117,11 @@ async def _render_stories_grid(session: AsyncSession) -> list:
     stmt = (
         select(Story)
         .where(Story.status == Story.Status.PENDING)
+        # Exclude viewpoint sub-stories that lack tier-1 gate compliance
+        .where(
+            (Story.viewpoint_cluster_id.is_(None)) |  # Not a viewpoint sub-story
+            ((Story.tier1_unit_count >= 2) & (Story.distinct_owners >= 2))  # Passes tier-1 gate
+        )
         .order_by(desc(Story.day), desc(Story.created_at))
         .limit(50)
         .options(

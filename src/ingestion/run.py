@@ -7,17 +7,15 @@ from datetime import datetime, timezone
 from src.ingestion.rss import ingest_rss_feeds
 from src.ingestion.gdelt import ingest_gdelt, GDELT_TIER1_CRITICAL_DOMAINS
 from src.ingestion.reddit import ingest_reddit
-from src.ingestion.source_registry import get_enabled_sources_by_tier, SourceTier
-from src.ingestion.tiered_scheduler import get_scheduler
+from src.ingestion.source_registry import SourceTier
 from src.verification.units import build_reporting_units
-from src.verification.stories import build_stories, cluster_viewpoints
-from src.verification.tiers import apply_tier1_gate, recompute_story_counters
+from src.verification.stories import build_stories
+from src.verification.tiers import apply_tier1_gate
 from src.shared.database import get_session, init_db
-from src.schema.models import RawArticle, StatusLog, Story
+from src.schema.models import RawArticle, StatusLog
 from src.shared.config import get_settings
 from src.utils.ingest_stats import STATS
 import json
-from sqlalchemy import select
 
 
 def dedupe_articles(all_articles, existing_url_hashes, existing_content_hashes):
