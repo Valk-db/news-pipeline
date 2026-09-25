@@ -8,21 +8,29 @@ Daily news ingestion, verification, and curation pipeline for geopolitics and ce
 GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → Curation UI
                               ↓
                         Supabase/Neon (PostgreSQL + pgvector)
+
+Weekly (Sun 02:00 UTC):
+  • Enrichment pipeline (media, video, snippets, embeddings)
+  • Reliability snapshots (fact-check + consensus alignment)
+  • Globe events backfill (geospatial from canonical entities)
 ```
 
 ## Components
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| **Compute** | GitHub Actions | Scheduled runs (6 AM / 6 PM UTC), zero cost |
+| **Compute** | GitHub Actions | Scheduled runs (6 AM / 6 PM UTC daily; Sun 02:00 UTC weekly), zero cost |
 | **Database** | Supabase/Neon | PostgreSQL + pgvector, free tier |
-| **LLM Primary** | Groq (`openai/gpt-oss-20b`) | Caption generation, classification |
+| **LLM Primary** | Groq (`openai/gpt-oss-20b`) | Caption generation, classification, fact-checking, viewpoint clustering |
 | **LLM Backup** | Cerebras (`gpt-oss-120b`) | 30-day trial fallback |
 | **Ingestion** | RSS (BBC, Guardian, DW, France24, NPR, Al Jazeera, Euronews, PBS NewsHour) + GDELT (disabled) + Reddit | Tier-1 news, social; AP/Reuters via GDELT only (currently disabled) |
 | **Verification** | MinHash containment | Near-dup clustering → reporting units |
 | **Grouping** | Entity Jaccard (top-N, threshold 0.4) | Semantic story grouping |
 | **Gate** | Tier-1 distinct owners ≥2 | Defamation-safe threshold |
 | **Curation UI** | FastAPI + HTMX | Keyboard-driven triage (A/R/E) |
+| **Enrichment** | Media, YouTube/Vimeo, Reddit/Twitter, LLM snippets, embeddings | Multimedia & semantic story enrichment |
+| **Reliability** | Fact-checking (LLM + ClaimBuster) + Consensus alignment | Source trust scoring over time |
+| **Globe/Events** | Canonical entities with lat/lon → EventGeometry | Geospatial event visualization |
 
 ## Quick Start
 
@@ -87,9 +95,12 @@ cloudflared tunnel --url http://localhost:8000
 ## Pipeline Flow
 
 ### Ingestion (Twice Daily)
-1. **RSS**: BBC, Guardian, NPR, DW, France24, Al Jazeera, Euronews, PBS NewsHour (AP/Reuters removed 2026-09-21: 403/401 from GitHub runners)
-2. **GDELT DOC API**: Disabled in the daily-ingest workflow (`GDELT_ENABLED=false`); the code default in `src/shared/config.py` is enabled — redundant with RSS for BBC/Guardian/NPR, rate-limited
-3. **Reddit**: Top posts from r/worldnews, r/geopolitics, etc. (public `.rss` feeds, no credentials — anon-rate-limited, throttled to 1 subreddit/3s)
+1. **Tier-1 RSS** (8 sources): BBC, Guardian, NPR, DW, France24, Al Jazeera, Euronews, PBS NewsHour
+   - AP/Reuters removed 2026-09-21: 403/401 from GitHub runners
+2. **Tier-2 RSS** (11 enabled): NYT, FT, Economist, Foreign Policy, Foreign Affairs, CSIS, WHO, LA Times, Chicago Tribune, Boston Globe, SFGate
+   - 3 sources disabled (no working RSS): Brookings, Chatham House, UN
+3. **GDELT DOC API**: Disabled (`GDELT_ENABLED=false`); code default enabled but redundant with RSS
+4. **Reddit** (Tier-3): Top posts from r/worldnews, r/geopolitics, etc. (public `.rss` feeds, no credentials — anon-rate-limited, throttled to 1 subreddit/3s)
 
 ### Verification
 1. **Extract**: trafilatura → body text
@@ -138,15 +149,20 @@ cloudflared tunnel --url http://localhost:8000
 ## File Structure
 
 ```
-.github/workflows/daily-ingest.yml   # Cron pipeline
+.github/workflows/
+  daily-ingest.yml          # Twice-daily ingestion pipeline
+  weekly-enrichment.yml     # Weekly enrichment, reliability, globe backfill
+  cleanup.yml               # DB cleanup (retention)
 src/
-  ingestion/                         # RSS, GDELT, Reddit
-  verification/                      # Units, stories, tiers
-  schema/models.py                   # SQLAlchemy models
-  shared/                            # Config, DB, LLM
-  utils/                             # MinHash, NER, trafilatura
-curation_ui/                         # FastAPI + HTMX
-scripts/                             # Init, seed, verify
+  ingestion/                # RSS, GDELT, Reddit
+  verification/             # Units, stories, tiers, viewpoint clustering
+  reliability/              # Fact-checking, consensus analyzer, snapshots
+  enrichment/               # Media, video, social snippets, LLM snippets, embeddings
+  schema/models.py          # SQLAlchemy models
+  shared/                   # Config, DB, LLM
+  utils/                    # MinHash, NER, trafilatura
+curation_ui/                # FastAPI + HTMX
+scripts/                    # Init, seed, verify, backfill_globe_events
 ```
 
 ## Database Schema Changes
@@ -157,12 +173,15 @@ scripts/                             # Init, seed, verify
 
 | Need | Where to Add |
 |------|--------------|
-| New RSS feed | `src/ingestion/rss.py` → `TIER1_FEEDS` |
+| New RSS feed (any tier) | `src/ingestion/source_registry.py` → `TIER1_SOURCES` / `TIER2_SOURCES` / `TIER3_SOURCES` / `TIER4_SOURCES` |
 | New GDELT domain | `src/ingestion/gdelt.py` → `DOMAIN_FILTERS` |
 | New ownership group | `src/verification/units.py` → `OWNERSHIP_GROUPS` |
 | New tier-1 source | `src/verification/tiers.py` → `TIER1_DOMAINS` |
 | New LLM model | `.env` → `GROQ_MODEL` (no code change) |
 | Celebrity vertical | Week 3: add `tier2_gate` in `tiers.py` |
+| Enrichment provider | `src/enrichment/` (media_extractor, video_finder, social_snippets, snippet_extractor) |
+| Reliability fact-checker | `src/reliability/fact_checker.py` (ClaimBuster, custom APIs) |
+| Globe event layer | `supabase/migrations/` + `scripts/backfill_globe_events.py` |
 
 ## Cost
 

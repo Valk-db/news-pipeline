@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Awaitable, Tuple
 from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,10 @@ from src.enrichment.snippet_extractor import enrich_story_with_snippets
 from src.enrichment.embedding_service import embed_story
 
 logger = logging.getLogger(__name__)
+
+
+# Type alias for enrichment tasks
+EnrichmentTask = Tuple[str, Awaitable[Any]]
 
 
 async def enrich_story(
@@ -36,7 +40,7 @@ async def enrich_story(
     Returns:
         Dict with enrichment results
     """
-    results = {
+    results: Dict[str, Any] = {
         "story_id": story_id,
         "media_assets": 0,
         "videos_found": 0,
@@ -62,14 +66,14 @@ async def enrich_story(
         .where(StoryUnitLink.story_id == story_id)
     )
     result = await session.execute(stmt)
-    articles = result.scalars().all()
+    articles: List[RawArticle] = result.scalars().all()
 
     if not articles:
         results["errors"].append("No articles in story")
         return results
 
     # Prepare article data for enrichment
-    article_data = []
+    article_data: List[Dict[str, Any]] = []
     for article in articles:
         article_data.append({
             "article_id": article.id,
@@ -84,7 +88,7 @@ async def enrich_story(
     key_entities = extract_key_entities(articles)
 
     # Run enrichment tasks in parallel
-    tasks = []
+    tasks: List[EnrichmentTask] = []
 
     # 1. Media extraction from articles
     for article in article_data:
@@ -107,25 +111,26 @@ async def enrich_story(
         tasks.append(("embeddings", embed_story(story_id, texts)))
 
     # Execute all tasks
-    enrichment_results = await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
+    if tasks:
+        enrichment_results = await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
 
-    # Process results
-    task_names = [t[0] for t in tasks]
-    for name, result in zip(task_names, enrichment_results):
-        if isinstance(result, Exception):
-            logger.error(f"Enrichment task {name} failed: {result}")
-            results["errors"].append(f"{name}: {result}")
-        elif name == "media":
-            # Media results are per-article, need to store
-            pass  # Handled separately
-        elif name == "videos":
-            results["videos_found"] = len(result) if isinstance(result, list) else 0
-        elif name == "social_snippets":
-            results["social_snippets_found"] = len(result) if isinstance(result, list) else 0
-        elif name == "snippets":
-            results["snippets_extracted"] = result if isinstance(result, int) else 0
-        elif name == "embeddings":
-            results["embeddings_generated"] = 1 if result else 0
+        # Process results
+        task_names = [t[0] for t in tasks]
+        for name, result in zip(task_names, enrichment_results):
+            if isinstance(result, Exception):
+                logger.error(f"Enrichment task {name} failed: {result}")
+                results["errors"].append(f"{name}: {result}")
+            elif name == "media":
+                # Media results are per-article, need to store
+                pass  # Handled separately
+            elif name == "videos":
+                results["videos_found"] = len(result) if isinstance(result, list) else 0
+            elif name == "social_snippets":
+                results["social_snippets_found"] = len(result) if isinstance(result, list) else 0
+            elif name == "snippets":
+                results["snippets_extracted"] = result if isinstance(result, int) else 0
+            elif name == "embeddings":
+                results["embeddings_generated"] = 1 if result else 0
 
     return results
 
