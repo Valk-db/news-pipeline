@@ -1,283 +1,306 @@
-# AGENT_TASKS.md v15
+# AGENT_TASKS.md v16
 
-Supersedes v14. v14's P0-C and P0-D are applied and verified (11/11 curation UI tests pass,
-full suite 316 passed / 5 skipped). This revision adds P0-E: the `/globe` page failing to
-initialize.
+Supersedes v15. v15's P0-C/P0-D/P0-E are merged into `main` (commit `c078281`) and confirmed
+live. This revision adds two more bugs in the same `/globe` init path that P0-E's fix
+uncovered: `TypeError: y.isDestroyed is not a function` thrown by `initGlobe()` itself
+(P0-F), plus a picking bug in the same file that would have surfaced the moment P0-F stopped
+throwing (P0-G).
 
-Status: **all three fixes (P0-C, P0-D, P0-E) are implemented in this checkout** (see diffs
-below) and verified. This doc is the record of what was wrong and why, for the PR
-description / commit message, and as a template if any of these classes of bug recur.
-
----
-
-## P0-C — CI `test` job failing: 4 tests in `test_curation_ui_p2.py` assert 503 == 200
-
-### Symptom
-
-```
-FAILED tests/test_curation_ui_p2.py::test_approve_story_populates_media_urls - assert 503 == 200
-FAILED tests/test_curation_ui_p2.py::test_approve_story_feeds_snippets_into_caption - assert 503 == 200
-FAILED tests/test_curation_ui_p2.py::test_approve_story_no_media_when_none_exists - assert 503 == 200
-FAILED tests/test_curation_ui_p2.py::test_approve_story_caps_media_urls_at_three - assert 503 == 200
-```
-
-### Diagnosis
-
-All four tests hit `POST /story/{id}/approve`. That route (`curation_ui/main.py`) starts
-with:
-
-```python
-llm_ok, llm_msg = check_llm_available()
-if not llm_ok:
-    return render_error_page(request, llm_msg)   # 503
-```
-
-and `check_llm_available()` was:
-
-```python
-def check_llm_available() -> tuple[bool, str]:
-    if not settings.has_llm:
-        return False, "No LLM configured. ..."
-    return True, ""
-```
-
-`settings.has_llm` is `bool(groq_api_key) or bool(cerebras_api_key)` — purely env-var
-based. Every one of the four tests' fixtures does:
-
-```python
-monkeypatch.delenv("GROQ_API_KEY", raising=False)
-monkeypatch.delenv("CEREBRAS_API_KEY", raising=False)
-...
-llm_module._llm_client = mock_llm_client   # inject the mock directly
-```
-
-i.e. they deliberately unset both provider keys and instead inject an already-built mock
-`LLMClient` straight into the `src.shared.llm._llm_client` singleton, which is what
-`get_llm_client()` returns once set. That's the correct way to mock this dependency without
-hitting a real provider — but `check_llm_available()` never looks at `_llm_client`, only at
-the env vars, so it returns `False` regardless of the injected mock, and every request gets
-short-circuited into `render_error_page(..., 503)` before the handler body (the code the
-tests actually exist to test — media_urls population, snippet-to-caption wiring) ever runs.
-
-Confirmed by running the suite locally: reverting the fix below reproduces exactly this
-503/200 mismatch; nothing else in the diff between `92aec20` (P2 commit, which added this
-LLM-availability gate) and HEAD touches this path.
-
-### Fix
-
-`curation_ui/main.py`, `check_llm_available()`:
-
-```python
-def check_llm_available() -> tuple[bool, str]:
-    """Check if LLM is available, return (available, error_message).
-
-    Availability is either a configured provider API key, or an already
-    -initialized/injected client (e.g. the mock LLMClient tests set on
-    src.shared.llm._llm_client). Gating on settings.has_llm alone made this
-    return False even when a working client was already in place.
-    """
-    import src.shared.llm as llm_module
-    if not settings.has_llm and llm_module._llm_client is None:
-        return False, "No LLM configured. Set GROQ_API_KEY or CEREBRAS_API_KEY environment variable."
-    return True, ""
-```
-
-This keeps the real-deployment behavior identical (no keys configured → still 503, friendly
-message) while recognizing a client that's already present — whether that's a test's mock or
-a real singleton some other code path already initialized.
-
-### Verification
-
-```
-uv sync --extra dev --extra pipeline
-uv run pytest tests/test_curation_ui_p2.py tests/test_curation_ui.py tests/test_curation_ui_templates.py -q
-# 11 passed
-```
+Status: **both fixes (P0-F, P0-G) are implemented in this checkout** (see diff below) and
+verified against a stubbed-Cesium Node harness (real Cesium can't run headless here, so this
+is the same style of verification used for P0-E in v15 — see Verification). This doc is the
+record of what was wrong and why, for the PR description / commit message.
 
 ---
 
-## P0-D — Internal Server Error (500) on the curation main page (`GET /`)
+## P0-F — `/globe` page crashes: `TypeError: y.isDestroyed is not a function`
 
 ### Symptom
 
-Browser console: `Failed to load resource: the server responded with a status of 500 ()` on
-load of the curation UI's main page.
-
-### Diagnosis
-
-This is **not** a recurrence of v13's P0-B (that was missing `media_assets` /
-`snippets` / `source_reliability_snapshots` tables — those are created now by the
-`20260924000300_phase2_phase3_missing_tables.sql` migration landed in `553dfac`). The tables
-exist; the bug is a type mismatch in the query that reads them.
-
-`_render_stories_grid()` in `curation_ui/main.py`, called unconditionally by `GET /`, does:
-
-```python
-story_ids = [str(s.id) for s in stories]
-...
-media_stmt = select(MediaAsset).where(MediaAsset.story_id.in_(story_ids))
-...
-snippet_stmt = select(Snippet).where(Snippet.story_id.in_(story_ids))
-```
-
-`Story.id`, `MediaAsset.story_id`, and `Snippet.story_id` are all
-`UUID(as_uuid=True)` columns (`sqlalchemy.dialects.postgresql.UUID`). That column type's bind
-processor expects real `uuid.UUID` instances — it calls `.hex` on each value it's given.
-`story_ids` here is a list of **strings** (`str(s.id)`), so as soon as any story has
-media or snippets, building the `IN (...)` clause blows up:
+Once P0-E's `hideEventDetail` fix let `window.GlobeCore` build successfully, the console
+error changed from a `ReferenceError` to this (`y.isDestroyed` is the minified name inside
+Cesium's own `PrimitiveCollection.add`):
 
 ```
-AttributeError: 'str' object has no attribute 'hex'
-```
-
-which SQLAlchemy wraps as a `StatementError`, uncaught by the route, turning into FastAPI's
-500. This reproduces with any real story that has ≥1 `MediaAsset` or `Snippet` row — which
-is exactly the data the P2 commit (`a763bc0`) started populating — and reproduces
-identically against SQLite and Postgres, since both use the same `UUID(as_uuid=True)` bind
-processor path. It only ever "worked" in CI/local runs before because the DB was seeded
-without any stories that had media or snippets attached yet.
-
-The `str(...)` conversion was only ever needed for using the ids as **dict keys** later in
-the same function (`media_by_story`, `snippets_by_story`, keyed by `str(media.story_id)`) —
-it was never meant for the query itself.
-
-### Fix
-
-`curation_ui/main.py`, `_render_stories_grid()`:
-
-```python
-story_data = []
-# Keep as UUID objects for the IN-clause bind params (the UUID column type
-# expects actual uuid.UUID instances, not strings); str() versions are used
-# below only as dict keys for grouping.
-story_ids = [s.id for s in stories]
-```
-
-(the rest of the function is unchanged — the `str(media.story_id)` / `str(snippet.story_id)`
-dict-keying further down already worked fine and stays as-is).
-
-### Verification
-
-Reproduced and confirmed fixed with a standalone script seeding one `Story` with one
-`MediaAsset` and one `Snippet`, then hitting `GET /` through `TestClient`:
-
-- Before fix: `AttributeError: 'str' object has no attribute 'hex'` → 500.
-- After fix: `200`.
-
-The existing test suite doesn't catch this because none of its `GET /` tests seed a story
-that also has `MediaAsset`/`Snippet` rows attached — worth adding as a regression test (see
-Follow-up below).
-
----
-
-## P0-E — `/globe` page fails to initialize
-
-### Symptom
-
-Browser console, in order:
-
-```
-Uncaught ReferenceError: hideEventDetail is not defined
-    at globe-core.js:520:5
 globe-init.js:13 Initializing Globe...
-globe-init.js:43 Globe initialization failed: TypeError: Cannot read properties of undefined (reading 'initGlobe')
+globe-init.js:43 Globe initialization failed: TypeError: y.isDestroyed is not a function
+    at d (Cesium.js:14612:35596)
+    at ML.raiseEvent (Cesium.js:95:1311)
+    at ca.add (Cesium.js:8798:109871)
+    at Object.initGlobe (globe-core.js:103:22)
     at HTMLDocument.<anonymous> (globe-init.js:17:32)
 ```
 
 ### Diagnosis
 
-`curation_ui/static/globe/globe-core.js` ends with:
+`curation_ui/static/globe/globe-core.js` declares:
 
 ```js
-window.GlobeCore = {
-    ...
-    showEventDetail,
-    hideEventDetail,   // <- line 520
-    ...
-};
+const eventEntities = new Cesium.EntityCollection();
+const clusterEntities = new Cesium.EntityCollection();
 ```
 
-`hideEventDetail` was never defined in `globe-core.js`. A function with that exact name
-exists, but only in `globe-interaction.js` (loaded via a separate `<script>` tag, after
-`globe-core.js`, per `curation_ui/templates/globe.html`) — it's local to that file and only
-exposed as `window.GlobeInteractions.hideEventDetail`, not anything `globe-core.js` can see.
+and `initGlobe()` then does:
 
-Because these are classic (non-module) scripts, evaluating the `window.GlobeCore = {...}`
-object literal throws a `ReferenceError` on the undefined shorthand property the instant
-`globe-core.js` runs — before the assignment completes. So `window.GlobeCore` is never set
-at all. That's the first console line. It cascades directly into the second and third:
-`globe-init.js` calls `window.GlobeCore.initGlobe()` a few lines into its own
-`DOMContentLoaded` handler, and since `window.GlobeCore` is `undefined`, that throws
-"Cannot read properties of undefined (reading 'initGlobe')" and the whole globe never
-initializes.
+```js
+scene.primitives.add(eventEntities);
+scene.primitives.add(clusterEntities);
+```
 
-`globe-core.js` already fully owns open/close of `#event-detail-panel` — its own
-`showEventDetail()` (used by its own `onLeftClick` handler) ends with
-`panel.classList.add('open')`. It was just missing the matching close half; it was never
-meant to depend on `globe-interaction.js`'s same-named function.
+`scene.primitives` is a `PrimitiveCollection` — it's the API for things that implement
+Cesium's `Primitive` interface (billboards, polylines, point primitives, custom primitives:
+objects with their own `update()`/`isDestroyed()`/`destroy()`). A `Cesium.EntityCollection`
+is a completely different kind of object — it's the backing store for `Entity` instances, and
+the correct way to get it rendered is to hand it (via a `DataSource`) to `viewer.dataSources`,
+never to `scene.primitives`.
 
-Verified: rebuilt `window.GlobeCore` in a minimal Node/Cesium-stub harness — it threw the
-exact same `ReferenceError` on `hideEventDetail` before the fix, and after the fix built
-cleanly with a working `initGlobe` function on it.
+`PrimitiveCollection.add()` immediately calls `.isDestroyed()` on whatever it's given, to
+raise its `primitiveAdded` event correctly. `EntityCollection` doesn't implement that method,
+so the very first call — `scene.primitives.add(eventEntities)` at line 103 — throws
+`TypeError: ... .isDestroyed is not a function` and aborts `initGlobe()` before it reaches
+the `ScreenSpaceEventHandler` setup a few lines later, which is why the globe never
+initializes at all.
+
+This was unreachable before P0-E's fix: `window.GlobeCore` didn't exist yet, so
+`globe-init.js` was throwing on `window.GlobeCore.initGlobe()` itself and never got far enough
+to run `initGlobe()`'s body and hit this line. It's a second, independent bug in the same
+function, not a regression from the P0-E fix.
+
+Confirmed the mechanism (real Cesium can't run outside a browser in this container) with a
+minimal Node harness stubbing just enough of the `Cesium`/`document` surface for `initGlobe()`
+to execute: against the original file, `scene.primitives.add` gets called twice with
+`EntityCollection` instances and `.entities.add()` (the delegation the fix below relies on)
+throws immediately because there's no `.entities` on a raw `EntityCollection` — see
+Verification.
 
 ### Fix
 
-`curation_ui/static/globe/globe-core.js` — add a local `hideEventDetail`, right after
-`showEventDetail` (which already sets the panel's `open` class, so this mirrors it exactly):
+`curation_ui/static/globe/globe-core.js`:
 
 ```js
-// Hide the event detail panel (mirrors showEventDetail above; this module
-// owns #event-detail-panel, so it must not depend on globe-interaction.js's
-// same-named function, which runs in a separate scope and loads after this
-// script — referencing it here threw a ReferenceError while building the
-// window.GlobeCore export object, which in turn left window.GlobeCore
-// undefined and broke globe-init.js's window.GlobeCore.initGlobe() call).
-function hideEventDetail() {
-    const panel = document.getElementById('event-detail-panel');
-    if (panel) panel.classList.remove('open');
-}
+// Entity collections. Wrapped in a CustomDataSource so they can be
+// registered with viewer.dataSources (see initGlobe) -- but eventEntities/
+// clusterEntities themselves still point at the underlying EntityCollection
+// (CustomDataSource#entities), so every existing .removeAll()/.add()/.values
+// call in this file, and in globe-interaction.js's window.GlobeCore.eventEntities
+// reads, keeps working exactly as before -- only how the collection reaches the
+// screen (dataSources vs. primitives) changes.
+const eventEntitiesDataSource = new Cesium.CustomDataSource('events');
+const clusterEntitiesDataSource = new Cesium.CustomDataSource('clusters');
+const eventEntities = eventEntitiesDataSource.entities;
+const clusterEntities = clusterEntitiesDataSource.entities;
 ```
 
-Nothing else changes — the existing `hideEventDetail,` line in the `window.GlobeCore = {...}`
-export object at the bottom of the file now resolves correctly, and
-`globe-interaction.js`'s own separate `hideEventDetail` (exposed as
-`window.GlobeInteractions.hideEventDetail`, bound to its own `#panel-close` click listener)
-is untouched and still works exactly as before — the two are independent, same-named
-functions in different scopes, and both doing the same harmless thing (removing the `open`
-class) is not itself a bug.
+and in `initGlobe()`:
+
+```js
+// Register the data sources with the viewer (NOT scene.primitives --
+// EntityCollection/CustomDataSource are not Primitives; scene.primitives.add()
+// calls .isDestroyed() on whatever it's given the way it expects a Primitive
+// to implement it, which throws "isDestroyed is not a function" here and
+// aborted initGlobe() before the click handlers below were ever set up).
+viewer.dataSources.add(eventEntitiesDataSource);
+viewer.dataSources.add(clusterEntitiesDataSource);
+```
+
+**Why the wrapper split (`eventEntitiesDataSource` vs. `eventEntities`), instead of just
+swapping in `CustomDataSource` directly:** `globe-interaction.js` reads
+`window.GlobeCore.eventEntities.values` and `.find(...)` directly (in `flyToEvent()` and
+`clusterEvents()`) — it expects `eventEntities` itself to be the `EntityCollection`, not a
+`DataSource` wrapping one (a `CustomDataSource` has no top-level `.values`; you'd need
+`.entities.values`). Keeping `eventEntities`/`clusterEntities` pointed at
+`...DataSource.entities` means every other read/write of them — inside `globe-core.js`
+(`removeAll()`, `add()`, `.values` in `fitEvents()`) and in `globe-interaction.js` — needed
+zero changes. Only `initGlobe()`'s registration call and the two declaration lines change.
 
 ### Verification
+
+Real Cesium needs a browser (WebGL/DOM), which isn't available in this container, so this was
+verified the same way P0-E was in v15 — a minimal Node harness stubbing the handful of
+`Cesium`/`document` APIs `initGlobe()` actually touches (`Viewer`, `CustomDataSource`,
+`EntityCollection`, `ScreenSpaceEventHandler`, etc.), with `scene.primitives.add` and
+`viewer.dataSources.add` both instrumented to record what they're called with:
+
+- **Before the fix:** `scene.primitives.add` is called twice, both times with an
+  `EntityCollection`-shaped stub; `viewer.dataSources.add` is never called. Exercising
+  `eventEntities.entities.add(...)` (what the fixed code's contract requires) throws
+  `TypeError: Cannot read properties of undefined (reading 'add')`, confirming a bare
+  `EntityCollection` has no `.entities`.
+- **After the fix:** `scene.primitives.add` is called zero times; `viewer.dataSources.add` is
+  called exactly twice, both times with `CustomDataSource`-shaped stubs;
+  `window.GlobeCore.eventEntities` is confirmed to still be the raw `EntityCollection`
+  (`instanceof` check) with working `.add()` / `.removeAll()` / `.values`, matching what
+  `globe-interaction.js` expects.
 
 ```
 node --check curation_ui/static/globe/globe-core.js   # syntax OK
 ```
 
-Plus a minimal Node harness stubbing `document`/`Cesium` and `require()`-ing the file directly:
-before the fix, building `window.GlobeCore` throws `ReferenceError: hideEventDetail is not
-defined`; after the fix, `window.GlobeCore` builds with all expected keys including a
-function-typed `initGlobe` and `hideEventDetail`.
+---
+
+## P0-G — Globe clicks never open the event detail panel (latent, in the same functions)
+
+### Symptom
+
+No console error — this is a silent functional bug. Once P0-F stops `initGlobe()` from
+throwing, clicking an event marker on the globe does nothing (no detail panel), and hovering
+never shows the location label.
+
+### Diagnosis
+
+`onLeftClick()` and `onMouseMove()` in the same file do:
+
+```js
+const picked = viewer.scene.pick(movement.position);
+if (Cesium.defined(picked) && picked.entity) {
+    showEventDetail(picked.entity);
+} else {
+    hideEventDetail();
+}
+```
+
+Cesium's picking API sets the picked object's owning `Entity` on `.id`, not `.entity` — this
+is the standard, documented pattern (every Cesium Sandcastle picking example and the Cesium
+community docs use `Cesium.defined(pickedObject) && pickedObject.id`). `.entity` is never set
+by Cesium on a pick result, so `picked.entity` is always `undefined`: the `if` branch never
+runs, every click falls into the `else` (`hideEventDetail()`), and `onMouseMove`'s equivalent
+check for hover labels never fires either.
+
+This bug has presumably been here since the picking code was written, but P0-F's crash meant
+`initGlobe()` never got far enough to attach the `ScreenSpaceEventHandler` at all, so it was
+never exercised or visibly broken until now.
+
+### Fix
+
+`onLeftClick()`:
+
+```js
+const picked = viewer.scene.pick(movement.position);
+// scene.pick() sets .id to the owning Entity (Cesium's standard picking
+// API), not .entity -- picked.entity is always undefined, so clicks never
+// opened the detail panel even once initGlobe() stopped throwing.
+if (Cesium.defined(picked) && picked.id) {
+    showEventDetail(picked.id);
+} else {
+    hideEventDetail();
+}
+```
+
+`onMouseMove()` — both branches:
+
+```js
+if (Cesium.defined(picked) && picked.id && picked.id !== hoveredEntity) {
+    hoveredEntity = picked.id;
+    ...
+} else if (hoveredEntity && (!Cesium.defined(picked) || !picked.id)) {
+    ...
+}
+```
+
+### Verification
+
+No live browser/WebGL available in this container to click-test end to end. This is a
+one-line-per-branch identifier rename (`.entity` → `.id`) against Cesium's documented pick
+result shape, checked by `node --check` for syntax and by manual trace through both functions
+confirming every remaining reference to the picked object (`showEventDetail(picked.id)`,
+`hoveredEntity = picked.id`, the label-show/hide toggles) is internally consistent post-rename.
+**Flagging for the IDE agent to click-test in an actual browser against the deployed
+`/globe` page once P0-F is live** — this is the one piece of this revision not verified
+against real Cesium/WebGL.
+
+---
+
+## Full diff (P0-F + P0-G), `curation_ui/static/globe/globe-core.js`
+
+```diff
+--- a/curation_ui/static/globe/globe-core.js
++++ b/curation_ui/static/globe/globe-core.js
+@@ -8,9 +8,17 @@
+ let scene = null;
+ let camera = null;
+
+-// Entity collections
+-const eventEntities = new Cesium.EntityCollection();
+-const clusterEntities = new Cesium.EntityCollection();
++// Entity collections. Wrapped in a CustomDataSource so they can be
++// registered with viewer.dataSources (see initGlobe) -- but eventEntities/
++// clusterEntities themselves still point at the underlying EntityCollection
++// (CustomDataSource#entities), so every existing .removeAll()/.add()/.values
++// call in this file, and in globe-interaction.js's window.GlobeCore.eventEntities
++// reads, keeps working exactly as before -- only how the collection reaches the
++// screen (dataSources vs. primitives) changes.
++const eventEntitiesDataSource = new Cesium.CustomDataSource('events');
++const clusterEntitiesDataSource = new Cesium.CustomDataSource('clusters');
++const eventEntities = eventEntitiesDataSource.entities;
++const clusterEntities = clusterEntitiesDataSource.entities;
+
+ // Event data store
+ let eventData = [];
+@@ -99,9 +107,13 @@
+         }
+     });
+
+-    // Add event entities to scene
+-    scene.primitives.add(eventEntities);
+-    scene.primitives.add(clusterEntities);
++    // Register the data sources with the viewer (NOT scene.primitives --
++    // EntityCollection/CustomDataSource are not Primitives; scene.primitives.add()
++    // calls .isDestroyed() on whatever it's given the way it expects a Primitive
++    // to implement it, which throws "isDestroyed is not a function" here and
++    // aborted initGlobe() before the click handlers below were ever set up).
++    viewer.dataSources.add(eventEntitiesDataSource);
++    viewer.dataSources.add(clusterEntitiesDataSource);
+
+     // Setup clock for timeline
+     viewer.clock.shouldAnimate = false;
+@@ -358,8 +370,11 @@
+ function onLeftClick(movement) {
+     if (!viewer || viewer.isDestroyed()) return;
+     const picked = viewer.scene.pick(movement.position);
+-    if (Cesium.defined(picked) && picked.entity) {
+-        showEventDetail(picked.entity);
++    // scene.pick() sets .id to the owning Entity (Cesium's standard picking
++    // API), not .entity -- picked.entity is always undefined, so clicks never
++    // opened the detail panel even once initGlobe() stopped throwing.
++    if (Cesium.defined(picked) && picked.id) {
++        showEventDetail(picked.id);
+     } else {
+         hideEventDetail();
+     }
+@@ -368,13 +383,13 @@
+ function onMouseMove(movement) {
+     if (!viewer || viewer.isDestroyed()) return;
+     const picked = viewer.scene.pick(movement.endPosition);
+-    if (Cesium.defined(picked) && picked.entity && picked.entity !== hoveredEntity) {
+-        hoveredEntity = picked.entity;
++    if (Cesium.defined(picked) && picked.id && picked.id !== hoveredEntity) {
++        hoveredEntity = picked.id;
+         // Show label on hover
+         if (hoveredEntity.label) {
+             hoveredEntity.label.show = true;
+         }
+-    } else if (hoveredEntity && (!Cesium.defined(picked) || !picked.entity)) {
++    } else if (hoveredEntity && (!Cesium.defined(picked) || !picked.id)) {
+         if (hoveredEntity.label) {
+             hoveredEntity.label.show = false;
+         }
+```
 
 ---
 
 ## Follow-up (not blocking, worth doing next)
 
-1. **Add a regression test** for P0-D: a `test_index_with_media_and_snippets` in
-   `tests/test_curation_ui.py` (or `_p2.py`) that seeds a story with a `MediaAsset` and a
-   `Snippet` and asserts `GET /` returns 200. This is the exact gap that let P0-D ship
-   without CI catching it.
-2. Audit for the same `str(uuid_obj)` → `.in_()` pattern elsewhere in the codebase
-   (`grep -rn '\.in_(' src/ curation_ui/ scripts/` and check each list's element type against
-   the column type) — this was the only occurrence found in `curation_ui/main.py`, but the
-   pipeline/scripts side wasn't audited as part of this pass.
-3. `tests/test_ner.py` (6 tests) fails in any environment where
-   `python -m spacy download en_core_web_sm` hasn't been run — this is expected/pre-existing
-   (CI's `test` job has a dedicated step for it) and unrelated to P0-C/P0-D; not fixed here,
-   just noting it so it isn't mistaken for a regression from this change.
-4. P0-E has no automated coverage — there's no JS test harness in this repo at all yet. If
-   one gets added later, a smoke test that `require()`s `globe-core.js` against a stubbed
-   `document`/`Cesium` and asserts `window.GlobeCore.initGlobe` is a function (the same check
-   used to verify this fix) would have caught this before it shipped. Also worth a quick scan
-   of `globe-layers.js` / `globe-timeline.js` / `globe-interaction.js` for the same
-   pattern — a name referenced in one file's public export object but only ever defined in
-   another — since this was the second time (after P0-D) that a bug shipped from two files
-   silently assuming they shared more than they did.
+1. **Click-test P0-G for real** once deployed: open `/globe`, click a marker, confirm the
+   detail panel opens with the right event's data; hover a marker, confirm its label appears.
+   This is the one thing in this revision not verified against live Cesium.
+2. Actually implement clustering. `clusterEntitiesDataSource`/`clusterEntities` is created and
+   now correctly registered with `viewer.dataSources`, but nothing ever populates it —
+   `enableClustering()` (line ~502) is still a bare `TODO` stub that only flips a boolean.
+   Low urgency (it's a no-op today, not broken), but worth a follow-up ticket since the
+   plumbing is now actually wired up correctly for the first time.
+3. From v15's follow-up list, still open: a JS test harness for this repo. This revision's
+   Node-stub-Cesium approach (see Verification above) could be generalized into one — it would
+   have caught both P0-F and P0-E before they shipped, and P0-G once real click simulation is
+   in scope.
+4. From v15's follow-up list, still open: the regression test for P0-D
+   (`test_index_with_media_and_snippets`), and the `.in_()` audit outside `curation_ui/main.py`.

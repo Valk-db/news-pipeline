@@ -8,9 +8,17 @@ let viewer = null;
 let scene = null;
 let camera = null;
 
-// Entity collections
-const eventEntities = new Cesium.EntityCollection();
-const clusterEntities = new Cesium.EntityCollection();
+// Entity collections. Wrapped in a CustomDataSource so they can be
+// registered with viewer.dataSources (see initGlobe) -- but eventEntities/
+// clusterEntities themselves still point at the underlying EntityCollection
+// (CustomDataSource#entities), so every existing .removeAll()/.add()/.values
+// call in this file, and in globe-interaction.js's window.GlobeCore.eventEntities
+// reads, keeps working exactly as before -- only how the collection reaches the
+// screen (dataSources vs. primitives) changes.
+const eventEntitiesDataSource = new Cesium.CustomDataSource('events');
+const clusterEntitiesDataSource = new Cesium.CustomDataSource('clusters');
+const eventEntities = eventEntitiesDataSource.entities;
+const clusterEntities = clusterEntitiesDataSource.entities;
 
 // Event data store
 let eventData = [];
@@ -99,9 +107,13 @@ async function initGlobe() {
         }
     });
 
-    // Add event entities to scene
-    scene.primitives.add(eventEntities);
-    scene.primitives.add(clusterEntities);
+    // Register the data sources with the viewer (NOT scene.primitives --
+    // EntityCollection/CustomDataSource are not Primitives; scene.primitives.add()
+    // calls .isDestroyed() on whatever it's given the way it expects a Primitive
+    // to implement it, which throws "isDestroyed is not a function" here and
+    // aborted initGlobe() before the click handlers below were ever set up).
+    viewer.dataSources.add(eventEntitiesDataSource);
+    viewer.dataSources.add(clusterEntitiesDataSource);
 
     // Setup clock for timeline
     viewer.clock.shouldAnimate = false;
@@ -358,8 +370,11 @@ let hoveredEntity = null;
 function onLeftClick(movement) {
     if (!viewer || viewer.isDestroyed()) return;
     const picked = viewer.scene.pick(movement.position);
-    if (Cesium.defined(picked) && picked.entity) {
-        showEventDetail(picked.entity);
+    // scene.pick() sets .id to the owning Entity (Cesium's standard picking
+    // API), not .entity -- picked.entity is always undefined, so clicks never
+    // opened the detail panel even once initGlobe() stopped throwing.
+    if (Cesium.defined(picked) && picked.id) {
+        showEventDetail(picked.id);
     } else {
         hideEventDetail();
     }
@@ -368,13 +383,13 @@ function onLeftClick(movement) {
 function onMouseMove(movement) {
     if (!viewer || viewer.isDestroyed()) return;
     const picked = viewer.scene.pick(movement.endPosition);
-    if (Cesium.defined(picked) && picked.entity && picked.entity !== hoveredEntity) {
-        hoveredEntity = picked.entity;
+    if (Cesium.defined(picked) && picked.id && picked.id !== hoveredEntity) {
+        hoveredEntity = picked.id;
         // Show label on hover
         if (hoveredEntity.label) {
             hoveredEntity.label.show = true;
         }
-    } else if (hoveredEntity && (!Cesium.defined(picked) || !picked.entity)) {
+    } else if (hoveredEntity && (!Cesium.defined(picked) || !picked.id)) {
         if (hoveredEntity.label) {
             hoveredEntity.label.show = false;
         }
