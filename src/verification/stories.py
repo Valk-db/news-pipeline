@@ -168,7 +168,7 @@ async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) 
             .where(Story.id == story.id)
         )
         result = await session.execute(stmt)
-        story_with_units = result.scalar_one()
+        story_with_units = result.scalar_one_or_none()
 
         # Extract article texts for embedding
         unit_texts = []

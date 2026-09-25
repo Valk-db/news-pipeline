@@ -112,13 +112,13 @@ async def test_cluster_viewpoints_basic(mock_session, sample_story, sample_units
     story_with_units_result = MagicMock()
     story_with_units = MagicMock()
     story_with_units.units = sample_units
-    story_with_units_result.scalar_one.return_value = story_with_units
+    story_with_units_result.scalar_one_or_none.return_value = story_with_units
 
     # 4. Article queries for each unit (line 177-179)
     article_results = []
     for article in sample_articles:
         article_result = MagicMock()
-        article_result.scalar_one_or_none.return_value = article
+        article_result.scalar_one_or_none_or_none.return_value = article
         article_results.append(article_result)
 
     # 5. Unit queries for viewpoint story creation (line 231-234) - one per viewpoint
@@ -209,7 +209,7 @@ async def test_cluster_viewpoints_insufficient_units(mock_session):
 
     mock_session.execute = AsyncMock()
     story_result = MagicMock()
-    story_result.scalar_one.return_value = story
+    story_result.scalar_one_or_none.return_value = story
     mock_session.execute.return_value = story_result
     mock_session.commit = AsyncMock()
 
@@ -277,13 +277,13 @@ async def test_viewpoint_substories_blocked_by_tier1_gate(mock_session, sample_u
     story_with_units_result = MagicMock()
     story_with_units = MagicMock()
     story_with_units.units = tier3_units
-    story_with_units_result.scalar_one.return_value = story_with_units
+    story_with_units_result.scalar_one_or_none.return_value = story_with_units
 
     # 4. Article queries for each unit
     article_results = []
     for article in sample_articles:
         article_result = MagicMock()
-        article_result.scalar_one_or_none.return_value = article
+        article_result.scalar_one_or_none_or_none.return_value = article
         article_results.append(article_result)
 
     # 5. Unit queries for viewpoint story day lookup
