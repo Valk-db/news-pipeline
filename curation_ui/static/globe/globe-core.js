@@ -60,7 +60,8 @@ async function initGlobe() {
         navigationInstructionsInitiallyVisible: false,
         scene3DOnly: true,
         shadows: true,
-        terrain: Cesium.createWorldTerrain({
+        terrainProvider: new Cesium.CesiumTerrainProvider({
+            url: 'https://assets.cesium.com/terrain',
             requestWaterMask: true,
             requestVertexNormals: true
         }),
