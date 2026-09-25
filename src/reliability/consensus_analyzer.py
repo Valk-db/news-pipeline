@@ -211,7 +211,7 @@ class ConsensusAnalyzer:
             .where(ReportingUnit.representative_article_id == article_id)
         )
         result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
 
 async def compute_daily_reliability_snapshots(
