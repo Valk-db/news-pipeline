@@ -172,7 +172,7 @@ class ConsensusAnalyzer:
                 .where(ReportingUnit.representative_article_id == article.id)
             )
             result = await session.execute(stmt)
-            story_id = result.scalar_one_or_none()
+            story_id = result.scalars().first()
             if story_id:
                 story_articles[story_id].append(article)
 
