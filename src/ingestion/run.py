@@ -95,6 +95,11 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
         print("Phase 1: Ingesting articles...")
         all_articles = []
 
+        # Initialize to avoid NameError if tier is not in tiers
+        rss_articles: list = []
+        tier2_articles: list = []
+        reddit_articles: list = []
+
         # Ingest tier-1 sources (RSS)
         if SourceTier.TIER1 in tiers:
             from src.ingestion.source_registry import get_enabled_sources_by_tier
