@@ -125,16 +125,15 @@ class LLMClient:
         messages: List[Dict[str, str]],
         max_tokens: int = 500,
         temperature: float = 0.3,
+        response_format: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Make a chat completion request to Groq."""
         if not self.groq_client:
             raise LLMError("Groq client not initialized")
-        response = await self.groq_client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        kwargs = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
+        if response_format:
+            kwargs["response_format"] = response_format
+        response = await self.groq_client.chat.completions.create(**kwargs)
         return {
             "choices": [{"message": {"content": response.choices[0].message.content}}]
         }
@@ -150,16 +149,15 @@ class LLMClient:
         messages: List[Dict[str, str]],
         max_tokens: int = 500,
         temperature: float = 0.3,
+        response_format: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Make a chat completion request to Cerebras."""
         if not self.cerebras_client:
             raise LLMError("Cerebras client not initialized")
-        response = await self.cerebras_client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        kwargs = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
+        if response_format:
+            kwargs["response_format"] = response_format
+        response = await self.cerebras_client.chat.completions.create(**kwargs)
         return {
             "choices": [{"message": {"content": response.choices[0].message.content}}]
         }
@@ -225,9 +223,9 @@ OUTPUT: Just the post text, nothing else."""
                 is_valid, error = validate_caption(caption, platform, source_texts)
                 if is_valid:
                     return caption
-                print(f"Groq caption validation failed: {error}")
+                logger.warning("Groq caption validation failed: %s", error)
             except Exception as e:
-                print(f"Groq failed: {e}")
+                logger.warning("Groq failed: %s", e)
 
         # Fallback to Cerebras
         if self.cerebras_client:
@@ -242,9 +240,9 @@ OUTPUT: Just the post text, nothing else."""
                 is_valid, error = validate_caption(caption, platform, source_texts)
                 if is_valid:
                     return caption
-                print(f"Cerebras caption validation failed: {error}")
+                logger.warning("Cerebras caption validation failed: %s", error)
             except Exception as e:
-                print(f"Cerebras failed: {e}")
+                logger.warning("Cerebras failed: %s", e)
 
         return None
 
@@ -269,6 +267,8 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
             {"role": "user", "content": prompt},
         ]
 
+        response_format = {"type": "json_object"}
+
         if self.groq_client:
             try:
                 result = await self._chat_completion_groq(
@@ -276,12 +276,13 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     messages,
                     max_tokens=100,
                     temperature=0.1,
+                    response_format=response_format,
                 )
                 content = result["choices"][0]["message"]["content"]
-                data = json.loads(content)
+                data = self._parse_json_response(content)
                 return float(data.get("score", 0))
-            except Exception:
-                pass
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                logger.warning("classify_relevance Groq parse failed: %s", e)
 
         if self.cerebras_client:
             try:
@@ -290,14 +291,23 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     messages,
                     max_tokens=100,
                     temperature=0.1,
+                    response_format=response_format,
                 )
                 content = result["choices"][0]["message"]["content"]
-                data = json.loads(content)
+                data = self._parse_json_response(content)
                 return float(data.get("score", 0))
-            except Exception:
-                pass
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                logger.warning("classify_relevance Cerebras parse failed: %s", e)
 
         return 0.5  # Default neutral
+
+    def _parse_json_response(self, content: str) -> Dict[str, Any]:
+        """Parse JSON response, handling fenced code blocks if present."""
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            content = content.removeprefix("json").strip()
+        return json.loads(content)
 
     async def close(self):
         """Close HTTP clients."""
