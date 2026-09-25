@@ -310,3 +310,104 @@ class Event(Base):
     story = relationship("Story", backref="events")
     geometry = relationship("EventGeometry", back_populates="event", uselist=False, foreign_keys=[geometry_id])
     layer = relationship("EventLayer", back_populates="events", foreign_keys=[layer_id])
+
+
+class ArticleEmbedding(Base):
+    """Vector embedding for an article (for semantic search/similarity)."""
+    __tablename__ = "article_embeddings"
+    __table_args__ = (
+        Index("ix_article_embeddings_article_id", "article_id"),
+        Index("ix_article_embeddings_model", "model"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id", ondelete="CASCADE"), nullable=False)
+    model = Column(String(100), nullable=False)  # e.g., "sentence-transformers/all-MiniLM-L6-v2"
+    embedding = Column(JSON, nullable=False)  # Vector as JSON array (pgvector handles this)
+    dimensions = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    article = relationship("RawArticle")
+
+
+class StoryEmbedding(Base):
+    """Vector embedding for a story (aggregated from articles)."""
+    __tablename__ = "story_embeddings"
+    __table_args__ = (
+        Index("ix_story_embeddings_story_id", "story_id"),
+        Index("ix_story_embeddings_model", "model"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
+    model = Column(String(100), nullable=False)
+    embedding = Column(JSON, nullable=False)
+    dimensions = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    story = relationship("Story")
+
+
+class Snippet(Base):
+    """Key quote/snippet extracted from an article with attribution."""
+    __tablename__ = "snippets"
+    __table_args__ = (
+        Index("ix_snippets_story_id", "story_id"),
+        Index("ix_snippets_article_id", "article_id"),
+        Index("ix_snippets_type", "snippet_type"),
+    )
+
+    class SnippetType(str, PyEnum):
+        QUOTE = "quote"          # Direct quote from article
+        STAT = "stat"            # Statistical claim
+        FACT = "fact"            # Factual claim
+        SUMMARY = "summary"      # Summary sentence
+        CLAIM = "claim"          # Assertion/claim
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
+    article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id", ondelete="CASCADE"), nullable=False)
+    snippet_type = Column(Enum(SnippetType), nullable=False, default=SnippetType.QUOTE)
+    text = Column(Text, nullable=False)
+    position = Column(Integer, nullable=True)  # Character position in article
+    entities = Column(JSON, nullable=True)  # Entities mentioned in snippet
+    minhash_signature = Column(JSON, nullable=True)  # For dedup
+    confidence = Column(Integer, nullable=False, default=100)  # 0-100 confidence
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    story = relationship("Story")
+    article = relationship("RawArticle")
+
+
+class MediaAsset(Base):
+    """Media (image, video, audio) associated with an article or story."""
+    __tablename__ = "media_assets"
+    __table_args__ = (
+        Index("ix_media_assets_article_id", "article_id"),
+        Index("ix_media_assets_story_id", "story_id"),
+        Index("ix_media_assets_type", "media_type"),
+    )
+
+    class MediaType(str, PyEnum):
+        IMAGE = "image"
+        VIDEO = "video"
+        AUDIO = "audio"
+        EMBED = "embed"  # Social media embed, iframe, etc.
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id", ondelete="CASCADE"), nullable=True)
+    story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=True)
+    media_type = Column(Enum(MediaType), nullable=False)
+    url = Column(Text, nullable=False)
+    thumbnail_url = Column(Text, nullable=True)
+    alt_text = Column(Text, nullable=True)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    duration_seconds = Column(Integer, nullable=True)  # For video/audio
+    source = Column(String(100), nullable=True)  # youtube, vimeo, article, etc.
+    source_id = Column(String(100), nullable=True)  # Platform-specific ID
+    meta_data = Column(JSON, nullable=True)  # Additional platform-specific metadata
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    article = relationship("RawArticle")
+    story = relationship("Story")
