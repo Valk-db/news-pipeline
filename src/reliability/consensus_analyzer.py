@@ -1,8 +1,7 @@
 """Consensus analysis for source reliability - compare source claims against tier-1 baseline."""
 
-import json
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from collections import defaultdict
 import numpy as np
 import logging
@@ -11,10 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import (
     RawArticle, Story, StoryUnitLink, ReportingUnit, SourceTier,
-    FactCheckRecord, SourceReliabilitySnapshot,
+    FactCheckRecord, SourceReliabilitySnapshot, CorrectionRecord,
 )
 from src.enrichment import get_embedding_service, cosine_similarity
-from src.utils.ingest_stats import STATS
 
 logger = logging.getLogger(__name__)
 

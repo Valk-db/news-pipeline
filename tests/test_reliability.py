@@ -2,15 +2,13 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 from src.schema.models import (
     SourceReliabilitySnapshot,
     FactCheckRecord,
     CorrectionRecord,
-    RawArticle,
-    SourceTier,
 )
 from src.shared.llm import LLMClient
 
@@ -196,16 +194,16 @@ async def test_texts_differ_significantly():
     from src.reliability.consensus_analyzer import _texts_differ_significantly
 
     # Same text
-    assert _texts_differ_significantly("Hello world", "Hello world") == False
+    assert not _texts_differ_significantly("Hello world", "Hello world")
 
     # Minor whitespace
-    assert _texts_differ_significantly("Hello  world", "Hello world") == False
+    assert not _texts_differ_significantly("Hello  world", "Hello world")
 
     # Significant change
-    assert _texts_differ_significantly("The economy grew by 5%", "The economy grew by 3%") == True
+    assert _texts_differ_significantly("The economy grew by 5%", "The economy grew by 3%")
 
     # Small change
-    assert _texts_differ_significantly("The economy grew by 5%", "The economy grew by 5.1%") == False
+    assert not _texts_differ_significantly("The economy grew by 5%", "The economy grew by 5.1%")
 
 
 @pytest.mark.asyncio
