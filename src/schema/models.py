@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, JSON, Boolean
+    Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, JSON, Boolean, Float
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -128,7 +128,7 @@ class CuratedPost(Base):
     caption = Column(Text, nullable=False)
     media_urls = Column(JSON, nullable=True)  # [{"type": "image", "url": "...", "alt": "..."}]
     source_urls = Column(JSON, nullable=False)  # Canonical source URLs for attribution
-    status = Column(Enum(Status, name="curated_post_status"), nullable=False, default=Status.DRAFT)
+    status = Column(Enum(Status, name="curatedpoststatus"), nullable=False, default=Status.DRAFT)
     scheduled_at = Column(DateTime(timezone=True), nullable=True)
     posted_at = Column(DateTime(timezone=True), nullable=True)
     error = Column(Text, nullable=True)
@@ -164,8 +164,8 @@ class CanonicalEntity(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Geolocation fields for globe visualization
-    latitude = Column(String(50), nullable=True)
-    longitude = Column(String(50), nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     location_type = Column(String(50), nullable=True)
     geonames_id = Column(String(50), nullable=True)
     geojson = Column(JSON, nullable=True)
@@ -230,7 +230,7 @@ class EventGeometry(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     event_id = Column(UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
-    geometry_type = Column(Enum(EventGeometryType, name="event_geometry_type"), nullable=False)
+    geometry_type = Column(Enum(EventGeometryType, name="geometrytype"), nullable=False)
     geojson = Column(JSON, nullable=False)  # Full GeoJSON geometry object
     properties = Column(JSON, nullable=True)  # Additional properties
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -291,14 +291,14 @@ class Event(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
-    latitude = Column(String(50), nullable=False)  # Stored as string for precision
-    longitude = Column(String(50), nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
     location_name = Column(String(255), nullable=True)
     location_type = Column(String(50), nullable=True)  # city, country, region, etc.
-    radius_km = Column(String(50), nullable=True)  # Stored as string
+    radius_km = Column(Float, nullable=True)
     start_time = Column(DateTime(timezone=True), nullable=False)
-    event_type = Column(Enum(EventType, name="event_type"), nullable=False, default=EventType.OTHER)
-    confidence = Column(String(50), nullable=False, default="0.5")
+    event_type = Column(Enum(EventType, name="eventtype"), nullable=False, default=EventType.OTHER)
+    confidence = Column(Float, nullable=False, default=0.5)
     source_count = Column(Integer, nullable=False, default=0)
     tier1_source_count = Column(Integer, nullable=False, default=0)
     entities = Column(JSON, nullable=True)  # Aggregated entities from articles
