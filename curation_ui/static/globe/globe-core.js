@@ -46,6 +46,14 @@ async function initGlobe() {
     // Configure Cesium
     Cesium.Ion.defaultAccessToken = ''; // Using OpenStreetMap, no token needed
 
+    // Use OpenStreetMap imagery to avoid Cesium Ion token requirement
+    const osmImagery = new Cesium.UrlTemplateImageryProvider({
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        credit: '© OpenStreetMap contributors',
+        subdomains: 'abc',
+        maximumLevel: 19
+    });
+
     viewer = new Cesium.Viewer('cesium-container', {
         animation: false,
         baseLayerPicker: false,
@@ -65,6 +73,7 @@ async function initGlobe() {
             requestWaterMask: true,
             requestVertexNormals: true
         }),
+        imageryProvider: osmImagery,
         skyBox: new Cesium.SkyBox({
             sources: {
                 positiveX: 'https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Assets/Textures/SkyBox/tycho2t3_80_px.jpg',

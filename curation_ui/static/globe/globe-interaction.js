@@ -371,7 +371,7 @@ function showClusterMarker(entities, key) {
     // This is simplified - in production would reuse entities
 }
 
-export {
+window.GlobeInteractions = {
     initInteractions,
     loadRecentEvents,
     loadGlobeStats,
