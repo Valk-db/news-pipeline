@@ -328,7 +328,7 @@ def extract_key_entities(articles: List[RawArticle]) -> List[str]:
 
 
 async def enrich_stories_batch(
-    session: AsyncSession,
+    session_factory,
     story_ids: List[str],
     max_videos: int = 5,
     max_snippets: int = 10,
@@ -338,8 +338,10 @@ async def enrich_stories_batch(
     """
     Enrich multiple stories with concurrency control.
 
+    Each story gets its own session to prevent transaction rollback cascading.
+
     Args:
-        session: Database session
+        session_factory: Async session factory (e.g., async_session_maker)
         story_ids: List of story UUIDs
         max_videos: Max videos per story
         max_snippets: Max social snippets per story
@@ -353,19 +355,26 @@ async def enrich_stories_batch(
 
     async def enrich_with_semaphore(story_id):
         async with semaphore:
-            return await enrich_story(session, story_id, max_videos, max_snippets, enable_embeddings)
+            # Create a new session for each story to isolate transactions
+            async with session_factory() as session:
+                return await enrich_story(session, story_id, max_videos, max_snippets, enable_embeddings)
 
     tasks = [enrich_with_semaphore(sid) for sid in story_ids]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Handle exceptions
+    # Handle exceptions - ensure same structure as success results
     processed_results = []
     for story_id, result in zip(story_ids, results):
         if isinstance(result, Exception):
             logger.error(f"Enrichment failed for story {story_id}: {result}")
             processed_results.append({
                 "story_id": story_id,
-                "error": str(result),
+                "media_assets": 0,
+                "videos_found": 0,
+                "social_snippets_found": 0,
+                "snippets_extracted": 0,
+                "embeddings_generated": 0,
+                "errors": [str(result)],
             })
         else:
             processed_results.append(result)
@@ -374,7 +383,7 @@ async def enrich_stories_batch(
 
 
 async def enrich_recent_stories(
-    session: AsyncSession,
+    session_factory,
     hours_back: int = 24,
     max_stories: int = 50,
     **kwargs,
@@ -382,8 +391,10 @@ async def enrich_recent_stories(
     """
     Enrich recent stories that don't have enrichment yet.
 
+    Uses a session factory to create isolated sessions per story.
+
     Args:
-        session: Database session
+        session_factory: Async session factory (e.g., async_session_maker)
         hours_back: Look back this many hours
         max_stories: Maximum stories to enrich
         **kwargs: Passed to enrich_stories_batch
@@ -395,16 +406,17 @@ async def enrich_recent_stories(
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
 
-    # Get recent PENDING/QUEUED stories
-    stmt = (
-        select(Story)
-        .where(Story.status.in_([Story.Status.PENDING, Story.Status.QUEUED]))
-        .where(Story.created_at >= cutoff)
-        .order_by(Story.created_at.desc())
-        .limit(max_stories)
-    )
-    result = await session.execute(stmt)
-    stories = result.scalars().all()
+    # Get recent PENDING/QUEUED stories - use a temporary session for this query
+    async with session_factory() as session:
+        stmt = (
+            select(Story)
+            .where(Story.status.in_([Story.Status.PENDING, Story.Status.QUEUED]))
+            .where(Story.created_at >= cutoff)
+            .order_by(Story.created_at.desc())
+            .limit(max_stories)
+        )
+        result = await session.execute(stmt)
+        stories = result.scalars().all()
 
     story_ids = [str(s.id) for s in stories]
 
@@ -413,4 +425,4 @@ async def enrich_recent_stories(
         return []
 
     logger.info(f"Enriching {len(story_ids)} recent stories")
-    return await enrich_stories_batch(session, story_ids, **kwargs)
+    return await enrich_stories_batch(session_factory, story_ids, **kwargs)

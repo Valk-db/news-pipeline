@@ -96,6 +96,14 @@ def _get_session_maker():
     return _async_session_maker
 
 
+def get_session_maker():
+    """Get the async session maker for creating isolated sessions per task."""
+    session_maker = _get_session_maker()
+    if session_maker is None:
+        raise RuntimeError("Database not configured. Set DATABASE_URL environment variable.")
+    return session_maker
+
+
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     session_maker = _get_session_maker()
