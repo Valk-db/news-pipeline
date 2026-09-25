@@ -141,11 +141,14 @@ function applyGlobeTheme() {
     const landColor = rootStyles.getPropertyValue('--g-globe-land').trim() || '#1a2a3a';
     const atmosphereColor = rootStyles.getPropertyValue('--g-globe-atmosphere').trim() || '#0d1a2e';
 
-    // Apply ocean color (base layer)
+    // Apply ocean color (base layer for water)
     scene.globe.baseColor = Cesium.Color.fromCssColorString(oceanColor);
 
-    // Apply land color via material
-    scene.globe.material = new Cesium.ColorMaterialProperty(Cesium.Color.fromCssColorString(landColor));
+    // Apply land color via Material (not MaterialProperty)
+    const landColorObj = Cesium.Color.fromCssColorString(landColor);
+    scene.globe.material = Cesium.Material.fromType('Color', {
+        color: landColorObj
+    });
 
     // Apply atmosphere color
     if (scene.skyAtmosphere) {
