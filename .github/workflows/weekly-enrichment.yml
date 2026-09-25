@@ -48,7 +48,7 @@ jobs:
           GDELT_THROTTLE_SECONDS: "30"
           PYTHONUNBUFFERED: "1"
         run: |
-          uv run python -c "
+          cat > run_enrichment.py <<'EOF'
 import asyncio
 import json
 from src.shared.database import init_db, get_session
@@ -65,9 +65,9 @@ async def main():
         total_embeddings = 0
         for r in results:
             if r.get('errors'):
-                print(f'  Story {r[\"story_id\"]}: {len(r[\"errors\"])} errors')
+                print(f'  Story {r["story_id"]}: {len(r["errors"])} errors')
             else:
-                print(f'  Story {r[\"story_id\"]}: media={r[\"media_assets\"]} videos={r[\"videos_found\"]} snippets={r[\"social_snippets_found\"]} embeddings={r[\"embeddings_generated\"]}')
+                print(f'  Story {r["story_id"]}: media={r["media_assets"]} videos={r["videos_found"]} snippets={r["social_snippets_found"]} embeddings={r["embeddings_generated"]}')
                 total_media += r.get('media_assets', 0)
                 total_videos += r.get('videos_found', 0)
                 total_social += r.get('social_snippets_found', 0)
@@ -83,7 +83,8 @@ async def main():
         print(f'ENRICHMENT_SUMMARY={json.dumps(summary)}')
 
 asyncio.run(main())
-"
+EOF
+          uv run python run_enrichment.py
 
       - name: Check for zero enrichment results
         if: always()
@@ -140,7 +141,7 @@ asyncio.run(main())
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           PYTHONUNBUFFERED: "1"
         run: |
-          uv run python -c "
+          cat > run_reliability.py <<'EOF'
 import asyncio
 from datetime import datetime, timezone
 from src.shared.database import init_db, get_session
@@ -155,7 +156,8 @@ async def main():
         print(f'Created {count} reliability snapshots')
 
 asyncio.run(main())
-"
+EOF
+          uv run python run_reliability.py
 
   globe-backfill:
     runs-on: ubuntu-latest
