@@ -31,22 +31,22 @@ let currentFilters = {
     maxEvents: 500
 };
 
-// Color mapping for event types
+// Color mapping for event types (matches CSS --g-accent-* tokens)
 const EVENT_TYPE_COLORS = {
-    'conflict': '#e74c3c',
-    'protest': '#f39c12',
-    'election': '#3498db',
-    'disaster': '#e67e22',
-    'accident': '#95a5a6',
-    'political': '#9b59b6',
-    'economic': '#27ae60',
-    'health': '#e91e63',
-    'environmental': '#2ecc71',
-    'crime': '#c0392b',
-    'sports': '#f1c40f',
-    'cultural': '#8e44ad',
-    'scientific': '#1abc9c',
-    'other': '#7f8c8d'
+    'conflict': '#ff4757',      // crimson
+    'protest': '#ffb800',       // amber
+    'election': '#00d4aa',      // teal
+    'disaster': '#ff6b35',      // orange
+    'accident': '#8899aa',      // muted
+    'political': '#9b59ff',     // violet
+    'economic': '#00d4aa',      // teal
+    'health': '#e91e63',        // pink
+    'environmental': '#2ecc71', // green
+    'crime': '#c0392b',         // dark red
+    'sports': '#f1c40f',        // yellow
+    'cultural': '#8e44ad',      // purple
+    'scientific': '#1abc9c',    // cyan
+    'other': '#7f8c8d'          // gray
 };
 
 // Initialize Cesium viewer
@@ -94,6 +94,9 @@ async function initGlobe() {
     scene = viewer.scene;
     camera = viewer.camera;
 
+    // Apply Mission Control globe styling (ocean, land, atmosphere colors)
+    applyGlobeTheme();
+
     // Enable depth testing for better rendering
     scene.globe.depthTestAgainstTerrain = true;
 
@@ -126,6 +129,34 @@ async function initGlobe() {
 
     console.log('Globe initialized');
     return viewer;
+}
+
+// Apply Mission Control globe theme from CSS custom properties
+function applyGlobeTheme() {
+    if (!scene || !scene.globe) return;
+
+    // Read CSS custom properties
+    const rootStyles = getComputedStyle(document.documentElement);
+    const oceanColor = rootStyles.getPropertyValue('--g-globe-ocean').trim() || '#081426';
+    const landColor = rootStyles.getPropertyValue('--g-globe-land').trim() || '#1a2a3a';
+    const atmosphereColor = rootStyles.getPropertyValue('--g-globe-atmosphere').trim() || '#0d1a2e';
+
+    // Apply ocean color (base layer)
+    scene.globe.baseColor = Cesium.Color.fromCssColorString(oceanColor);
+
+    // Apply land color via material
+    scene.globe.material = new Cesium.ColorMaterialProperty(Cesium.Color.fromCssColorString(landColor));
+
+    // Apply atmosphere color
+    if (scene.skyAtmosphere) {
+        scene.skyAtmosphere.hueShift = 0;
+        scene.skyAtmosphere.saturationShift = 0;
+        scene.skyAtmosphere.brightnessShift = -0.3;
+    }
+
+    // Disable default water/ground lighting for cleaner look
+    scene.globe.enableLighting = false;
+    scene.globe.showWaterEffect = false;
 }
 
 // Convert GeoJSON to Cesium entities
