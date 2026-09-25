@@ -257,11 +257,12 @@ async def main():
 
             # Warn per tier-1 source that produced zero ok articles
             stats_snapshot = results["phases"].get("ingestion", {}).get("extraction_stats", {})
-            from src.ingestion.rss import TIER1_FEEDS
-            for source_key in TIER1_FEEDS:
-                ok_count = stats_snapshot.get(f"{source_key}.ok", 0)
+            from src.ingestion.source_registry import get_enabled_sources_by_tier
+            tier1_sources = get_enabled_sources_by_tier(SourceTier.TIER1)
+            for source_key, source_config in tier1_sources.items():
+                ok_count = stats_snapshot.get(f"{source_config.domain}.ok", 0)
                 if ok_count == 0:
-                    print(f"::warning title=Source produced no articles::{source_key}")
+                    print(f"::warning title=Source produced no articles::{source_config.domain}")
 
     except Exception as e:
         print(f"\nPipeline failed: {e}")

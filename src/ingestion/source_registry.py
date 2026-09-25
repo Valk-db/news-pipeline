@@ -334,51 +334,54 @@ TIER2_SOURCES = {
         owner_group="CSIS",
         fetch_priority=1,
     ),
-    "brookings.edu": SourceConfig(
-        domain="brookings.edu",
-        name="Brookings Institution",
-        tier=SourceTier.TIER2,
-        category=SourceCategory.THINK_TANK,
-        rss_urls=[
-            "https://www.brookings.edu/feed/",
-        ],
-        geographic_focus="US",
-        language="en",
-        reliability_score=0.89,
-        bias_rating="center-left",
-        owner_group="Brookings",
-        fetch_priority=1,
-    ),
-    "chathamhouse.org": SourceConfig(
-        domain="chathamhouse.org",
-        name="Chatham House",
-        tier=SourceTier.TIER2,
-        category=SourceCategory.THINK_TANK,
-        rss_urls=[
-            "https://www.chathamhouse.org/rss.xml",
-        ],
-        geographic_focus="Global",
-        language="en",
-        reliability_score=0.88,
-        bias_rating="center",
-        owner_group="Chatham House",
-        fetch_priority=1,
-    ),
-    "un.org": SourceConfig(
-        domain="un.org",
-        name="United Nations News",
-        tier=SourceTier.TIER2,
-        category=SourceCategory.GOVERNMENT,
-        rss_urls=[
-            "https://news.un.org/feed/subscribe/en/news/all/rss.xml",
-        ],
-        geographic_focus="Global",
-        language="en",
-        reliability_score=0.92,
-        bias_rating="center",
-        owner_group="United Nations",
-        fetch_priority=1,
-    ),
+    # "brookings.edu": SourceConfig(
+#         domain="brookings.edu",
+#         name="Brookings Institution",
+#         tier=SourceTier.TIER2,
+#         category=SourceCategory.THINK_TANK,
+#         rss_urls=[
+#             "https://www.brookings.edu/feed/",  # Returns HTML, not RSS (verified 2026-09-24)
+#         ],
+#         geographic_focus="US",
+#         language="en",
+#         reliability_score=0.89,
+#         bias_rating="center-left",
+#         owner_group="Brookings",
+#         fetch_priority=1,
+#         enabled=False,  # Disabled: no working RSS feed
+#     ),
+    # "chathamhouse.org": SourceConfig(
+#         domain="chathamhouse.org",
+#         name="Chatham House",
+#         tier=SourceTier.TIER2,
+#         category=SourceCategory.THINK_TANK,
+#         rss_urls=[
+#             "https://www.chathamhouse.org/rss.xml",  # Cloudflare 403 (verified 2026-09-24)
+#         ],
+#         geographic_focus="Global",
+#         language="en",
+#         reliability_score=0.88,
+#         bias_rating="center",
+#         owner_group="Chatham House",
+#         fetch_priority=1,
+#         enabled=False,  # Disabled: Cloudflare blocks RSS
+#     ),
+    # "un.org": SourceConfig(
+#         domain="un.org",
+#         name="United Nations News",
+#         tier=SourceTier.TIER2,
+#         category=SourceCategory.GOVERNMENT,
+#         rss_urls=[
+#             "https://news.un.org/feed/subscribe/en/news/all/rss.xml",  # CloudFront 403 (verified 2026-09-24)
+#         ],
+#         geographic_focus="Global",
+#         language="en",
+#         reliability_score=0.92,
+#         bias_rating="center",
+#         owner_group="United Nations",
+#         fetch_priority=1,
+#         enabled=False,  # Disabled: CloudFront blocks RSS
+#     ),
     "who.int": SourceConfig(
         domain="who.int",
         name="World Health Organization",

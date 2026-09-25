@@ -1,4 +1,12 @@
-"""RSS feed ingestion for tier-1 news sources."""
+"""RSS feed ingestion for tier-1 news sources.
+
+NOTE: TIER1_FEEDS below is DEPRECATED and kept only as a documented fallback.
+The single source of truth for all sources (all tiers) is now
+`src.ingestion.source_registry` — see `get_enabled_sources_by_tier()`.
+
+Production ingestion always uses source_registry; this dict is only used
+if `ingest_rss_feeds(sources=None)` is called explicitly (legacy path).
+"""
 
 import feedparser
 import httpx
@@ -12,6 +20,10 @@ from src.shared.config import get_settings
 import asyncio
 
 
+# DEPRECATED: This dict is NOT used in production (run.py uses source_registry).
+# Kept only as a fallback for direct calls to ingest_rss_feeds(sources=None).
+# If you update this, ALSO update source_registry.py to keep them in sync.
+# See AGENT_TASKS.md P1 for details.
 TIER1_FEEDS = {
     # 2026-09-21: publisher returns 403 (AP) / 401 (Reuters) to GitHub runners; no official RSS
     "bbc": {
@@ -19,9 +31,9 @@ TIER1_FEEDS = {
         "domain": "bbc.com",
         "tier": SourceTier.TIER1,
         "feeds": [
-            "http://feeds.bbci.co.uk/news/world/rss.xml",
-            "http://feeds.bbci.co.uk/news/uk/rss.xml",
-            "http://feeds.bbci.co.uk/news/politics/rss.xml",
+            "https://feeds.bbci.co.uk/news/world/rss.xml",
+            "https://feeds.bbci.co.uk/news/uk/rss.xml",
+            "https://feeds.bbci.co.uk/news/politics/rss.xml",
         ],
     },
     "guardian": {
@@ -57,7 +69,7 @@ TIER1_FEEDS = {
         "feeds": [
             "https://feeds.npr.org/1001/rss.xml",  # News
             "https://feeds.npr.org/1003/rss.xml",  # World
-            "https://feeds.npr.org/1014/rss.xml",  # Politics
+            "https://feeds.npr.org/1014/rss.xml",  # Politics (verified working 2026-09-24)
         ],
     },
     # 2026-09-24: added for tier-1 owner-group diversity (see units.py OWNERSHIP_GROUPS);
