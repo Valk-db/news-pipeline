@@ -112,7 +112,9 @@ async def _render_stories_grid(session: AsyncSession) -> list:
     """
     from sqlalchemy import select, desc
     from sqlalchemy.orm import selectinload
-    from src.schema.models import Story, ReportingUnit
+    from src.schema.models import (
+        Story, ReportingUnit, MediaAsset, Snippet, SourceReliabilitySnapshot
+    )
 
     stmt = (
         select(Story)
@@ -131,15 +133,106 @@ async def _render_stories_grid(session: AsyncSession) -> list:
     result = await session.execute(stmt)
     stories = result.scalars().all()
 
+    if not stories:
+        return []
+
     story_data = []
+    story_ids = [str(s.id) for s in stories]
+
+    # Batch fetch MediaAssets for all stories
+    media_stmt = (
+        select(MediaAsset)
+        .where(MediaAsset.story_id.in_(story_ids))
+        .order_by(MediaAsset.media_type, desc(MediaAsset.created_at))
+    )
+    media_result = await session.execute(media_stmt)
+    media_assets = media_result.scalars().all()
+
+    # Group media by story_id
+    media_by_story = {}
+    for media in media_assets:
+        story_id = str(media.story_id)
+        if story_id not in media_by_story:
+            media_by_story[story_id] = []
+        media_by_story[story_id].append(media)
+
+    # Batch fetch Snippets for all stories
+    snippet_stmt = (
+        select(Snippet)
+        .where(Snippet.story_id.in_(story_ids))
+        .order_by(desc(Snippet.confidence))
+    )
+    snippet_result = await session.execute(snippet_stmt)
+    snippets = snippet_result.scalars().all()
+
+    # Group snippets by story_id
+    snippets_by_story = {}
+    for snippet in snippets:
+        story_id = str(snippet.story_id)
+        if story_id not in snippets_by_story:
+            snippets_by_story[story_id] = []
+        snippets_by_story[story_id].append(snippet)
+
+    # Batch fetch reliability scores for all source domains across stories
+    # First, collect all unique source domains
+    all_domains = set()
     for story in stories:
         units = story.units
         articles = [unit.representative for unit in units if unit.representative]
+        for article in articles:
+            if article.source_domain:
+                all_domains.add(article.source_domain)
+
+    if all_domains:
+        # Get latest reliability snapshot per domain
+        reliability_stmt = (
+            select(SourceReliabilitySnapshot)
+            .where(SourceReliabilitySnapshot.source_domain.in_(all_domains))
+            .order_by(SourceReliabilitySnapshot.source_domain, desc(SourceReliabilitySnapshot.snapshot_date))
+        )
+        reliability_result = await session.execute(reliability_stmt)
+        reliability_snapshots = reliability_result.scalars().all()
+
+        # Keep only the most recent per domain
+        reliability_by_domain = {}
+        for snap in reliability_snapshots:
+            if snap.source_domain not in reliability_by_domain:
+                reliability_by_domain[snap.source_domain] = snap.reliability_score
+    else:
+        reliability_by_domain = {}
+
+    for story in stories:
+        units = story.units
+        articles = [unit.representative for unit in units if unit.representative]
+
+        # Get media for this story (cap at ~6, prefer one per type)
+        story_media = media_by_story.get(str(story.id), [])
+        # Deduplicate by media_type, preferring latest
+        seen_types = set()
+        filtered_media = []
+        for m in story_media:
+            if m.media_type not in seen_types:
+                filtered_media.append(m)
+                seen_types.add(m.media_type)
+            if len(filtered_media) >= 6:
+                break
+
+        # Get snippets for this story (cap at 3)
+        story_snippets = snippets_by_story.get(str(story.id), [])[:3]
+
+        # Build reliability map for this story's sources
+        story_reliability = {}
+        for article in articles:
+            if article.source_domain and article.source_domain in reliability_by_domain:
+                story_reliability[article.source_domain] = reliability_by_domain[article.source_domain]
 
         story_data.append({
             "story": story,
             "units": units,
             "articles": articles,
+            "media": filtered_media,
+            "snippets": story_snippets,
+            "reliability_by_domain": story_reliability,
         })
 
     return story_data
@@ -178,6 +271,9 @@ async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depen
     if not llm_ok:
         return render_error_page(request, llm_msg)
 
+    from src.schema.models import MediaAsset, Snippet
+    from sqlalchemy import select, desc
+
     async with get_session() as session:
         stmt = select(Story).where(Story.id == story_id)
         result = await session.execute(stmt)
@@ -197,6 +293,58 @@ async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depen
         source_urls = [a.url for a in articles]
         key_facts = [a.title for a in articles[:3]]
 
+        # Fetch media for this story
+        media_stmt = (
+            select(MediaAsset)
+            .where(MediaAsset.story_id == story_id)
+            .order_by(MediaAsset.media_type, desc(MediaAsset.created_at))
+        )
+        media_result = await session.execute(media_stmt)
+        media_assets = media_result.scalars().all()
+
+        # Build media_urls for CuratedPost (cap at 3, prefer lead image + video)
+        media_urls = []
+        image_count = 0
+        video_count = 0
+        for asset in media_assets:
+            if asset.media_type.value == "image" and image_count == 0:
+                media_urls.append({
+                    "type": "image",
+                    "url": asset.url,
+                    "alt": asset.alt_text or ""
+                })
+                image_count += 1
+            elif asset.media_type.value == "video" and video_count == 0:
+                media_urls.append({
+                    "type": "video",
+                    "url": asset.url,
+                    "alt": asset.alt_text or asset.source or "Video"
+                })
+                video_count += 1
+            elif len(media_urls) < 3 and asset.media_type.value in ("image", "video", "embed"):
+                media_urls.append({
+                    "type": asset.media_type.value,
+                    "url": asset.url,
+                    "alt": asset.alt_text or asset.source or asset.media_type.value
+                })
+            if len(media_urls) >= 3:
+                break
+
+        # Fetch top snippets for this story (cap at 3)
+        snippet_stmt = (
+            select(Snippet)
+            .where(Snippet.story_id == story_id)
+            .order_by(desc(Snippet.confidence))
+            .limit(3)
+        )
+        snippet_result = await session.execute(snippet_stmt)
+        snippets = snippet_result.scalars().all()
+
+        # Add snippet texts to key_facts for richer caption generation
+        for snippet in snippets:
+            if snippet.text:
+                key_facts.append(snippet.text[:300])
+
         # Generate caption via LLM
         llm = await get_llm_client()
         caption = await llm.generate_caption(
@@ -209,11 +357,12 @@ async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depen
         if not caption:
             raise HTTPException(500, "Failed to generate caption")
 
-        # Create curated post
+        # Create curated post with media_urls
         post = CuratedPost(
             story_id=story_id,
             platform="twitter",
             caption=caption,
+            media_urls=media_urls if media_urls else None,
             source_urls=source_urls,
             status=CuratedPost.Status.APPROVED,
         )
@@ -269,6 +418,9 @@ async def edit_story(story_id: uuid.UUID, request: Request, user: str = Depends(
     if not llm_ok:
         return render_error_page(request, llm_msg)
 
+    from src.schema.models import MediaAsset, Snippet, SourceReliabilitySnapshot
+    from sqlalchemy import select, desc
+
     async with get_session() as session:
         stmt = select(Story).where(Story.id == story_id)
         result = await session.execute(stmt)
@@ -298,6 +450,50 @@ async def edit_story(story_id: uuid.UUID, request: Request, user: str = Depends(
             platform="twitter",
         )
 
+        # Fetch media for this story
+        media_stmt = (
+            select(MediaAsset)
+            .where(MediaAsset.story_id == story_id)
+            .order_by(MediaAsset.media_type, desc(MediaAsset.created_at))
+        )
+        media_result = await session.execute(media_stmt)
+        media = media_result.scalars().all()
+
+        # Deduplicate by media_type, preferring latest
+        seen_types = set()
+        filtered_media = []
+        for m in media:
+            if m.media_type not in seen_types:
+                filtered_media.append(m)
+                seen_types.add(m.media_type)
+            if len(filtered_media) >= 6:
+                break
+
+        # Fetch snippets for this story
+        snippet_stmt = (
+            select(Snippet)
+            .where(Snippet.story_id == story_id)
+            .order_by(desc(Snippet.confidence))
+            .limit(3)
+        )
+        snippet_result = await session.execute(snippet_stmt)
+        snippets = snippet_result.scalars().all()
+
+        # Fetch reliability scores for this story's sources
+        reliability_by_domain = {}
+        for article in articles:
+            if article.source_domain:
+                rel_stmt = (
+                    select(SourceReliabilitySnapshot)
+                    .where(SourceReliabilitySnapshot.source_domain == article.source_domain)
+                    .order_by(desc(SourceReliabilitySnapshot.snapshot_date))
+                    .limit(1)
+                )
+                rel_result = await session.execute(rel_stmt)
+                snap = rel_result.scalar_one_or_none()
+                if snap:
+                    reliability_by_domain[article.source_domain] = snap.reliability_score
+
     return templates.TemplateResponse(request, "edit.html", {
         "request": request,
         "story": story,
@@ -305,6 +501,9 @@ async def edit_story(story_id: uuid.UUID, request: Request, user: str = Depends(
         "source_urls": source_urls,
         "key_facts": key_facts,
         "draft_caption": caption or "",
+        "media": filtered_media,
+        "snippets": snippets,
+        "reliability_by_domain": reliability_by_domain,
     })
 
 

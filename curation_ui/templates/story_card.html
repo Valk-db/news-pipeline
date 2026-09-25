@@ -15,6 +15,44 @@
         <span class="owner-badge" title="Distinct tier-1 owners">{{ item.story.distinct_owners }}</span>
     </div>
 
+    {% if item.media %}
+    <div class="story-media">
+        {% for asset in item.media %}
+        {% if asset.media_type.value == 'image' %}
+            <img src="{{ asset.thumbnail_url or asset.url }}" alt="{{ asset.alt_text or 'Article image' }}" class="media-thumbnail" loading="lazy">
+        {% elif asset.media_type.value == 'video' %}
+            <a href="{{ asset.url }}" target="_blank" class="media-video-link" title="{{ asset.alt_text or 'Video' }}">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <span>{{ asset.source|title }}</span>
+                {% if asset.duration_seconds %}
+                <span class="video-duration">{{ (asset.duration_seconds // 60)|int }}:{{ "%02d"|format(asset.duration_seconds % 60) }}</span>
+                {% endif %}
+            </a>
+        {% elif asset.media_type.value == 'embed' %}
+            <a href="{{ asset.url }}" target="_blank" class="media-embed-link" title="{{ asset.alt_text or 'Embed' }}">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                    <polyline points="17 2 17 7 22 7"></polyline>
+                </svg>
+                <span>{{ asset.source|title }}</span>
+            </a>
+        {% elif asset.media_type.value == 'audio' %}
+            <a href="{{ asset.url }}" target="_blank" class="media-audio-link" title="{{ asset.alt_text or 'Audio' }}">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 5v14"></path>
+                    <path d="M19 9v6"></path>
+                    <path d="M3 17v-6"></path>
+                    <path d="M9 5v14"></path>
+                </svg>
+                <span>Audio</span>
+            </a>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
     <div class="story-sources">
         {% for article in item.articles %}
         <div class="source-item">
@@ -25,10 +63,32 @@
                 {{ article.source_domain }} •
                 {% if article.published_at %}{{ article.published_at.strftime('%H:%M UTC') }}{% endif %}
                 • <span class="tier-{{ article.source_tier.value }}">Tier: {{ article.source_tier.value }}</span>
+                {% if item.reliability_by_domain.get(article.source_domain) is not none %}
+                {% set score = item.reliability_by_domain[article.source_domain] %}
+                <span class="reliability-badge
+                    {% if score >= 70 %}reliability-green
+                    {% elif score >= 40 %}reliability-yellow
+                    {% else %}reliability-red{% endif %}"
+                    title="Reliability score: {{ score }}/100">
+                    {{ score }}
+                </span>
+                {% endif %}
             </span>
         </div>
         {% endfor %}
     </div>
+
+    {% if item.snippets %}
+    <div class="story-snippets">
+        {% for snippet in item.snippets %}
+        <blockquote class="snippet-item snippet-{{ snippet.snippet_type.value }}">
+            <span class="snippet-type-badge">{{ snippet.snippet_type.value|title }}</span>
+            <p>{{ snippet.text }}</p>
+            <footer>Confidence: {{ snippet.confidence }}%</footer>
+        </blockquote>
+        {% endfor %}
+    </div>
+    {% endif %}
 
     <div class="story-units">
         <small>

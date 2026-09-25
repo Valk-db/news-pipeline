@@ -20,6 +20,7 @@ def test_story_card_hides_primary_entity_ids():
         primary_entities=[entity_id],
         tier1_unit_count=2,
         distinct_owners=2,
+        viewpoint_cluster_id=None,
     )
     article = SimpleNamespace(
         url="https://example.com/a",
@@ -29,7 +30,14 @@ def test_story_card_hides_primary_entity_ids():
         source_tier=SimpleNamespace(value="tier1"),
     )
     html = env.get_template("story_card.html").render(
-        item=SimpleNamespace(story=story, articles=[article], units=[object(), object()])
+        item=SimpleNamespace(
+            story=story,
+            articles=[article],
+            units=[object(), object()],
+            reliability_by_domain={},
+            media=[],
+            snippets=[],
+        )
     )
     assert entity_id not in html
     assert "entity-tag" not in html

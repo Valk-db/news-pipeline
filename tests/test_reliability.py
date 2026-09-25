@@ -10,7 +10,6 @@ from src.schema.models import (
     FactCheckRecord,
     CorrectionRecord,
 )
-from src.shared.llm import LLMClient
 
 
 def test_reliability_models_exist():
@@ -132,11 +131,13 @@ async def test_fact_checker_basic():
         claim_type="definition",
     )
 
-    # Test with mocked LLM - patch the LLMClient.chat_completion method directly
-    with patch.object(LLMClient, 'chat_completion', new_callable=AsyncMock) as mock_chat:
-        mock_chat.return_value = {
+    # Test with mocked LLM - patch the get_llm_client function where it's used
+    with patch("src.reliability.fact_checker.get_llm_client", new_callable=AsyncMock) as mock_get_llm:
+        mock_llm = AsyncMock()
+        mock_llm.chat_completion = AsyncMock(return_value={
             "choices": [{"message": {"content": '{"verdict": "true", "confidence": 95, "explanation": "Basic astronomy fact", "evidence_needed": "None"}'}}]
-        }
+        })
+        mock_get_llm.return_value = mock_llm
 
         result = await checker.check_claim(claim, "example.com")
 

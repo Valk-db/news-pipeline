@@ -2,11 +2,15 @@
 
 import asyncio
 import logging
+import uuid
 from typing import List, Dict, Any, Awaitable, Tuple
 from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.schema.models import Story, RawArticle, ReportingUnit, StoryUnitLink
+from src.schema.models import (
+    Story, RawArticle, ReportingUnit, StoryUnitLink,
+    MediaAsset, StoryEmbedding
+)
 from src.enrichment.media_extractor import extract_media_from_article
 from src.enrichment.video_finder import find_videos_for_story
 from src.enrichment.social_snippets import find_snippets_for_story
@@ -17,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 # Type alias for enrichment tasks
-EnrichmentTask = Tuple[str, Awaitable[Any]]
+# For media tasks, include article_id: (kind, article_id, coroutine)
+# For other tasks: (kind, None, coroutine)
+EnrichmentTask = Tuple[str, Any, Awaitable[Any]]
 
 
 async def enrich_story(
@@ -32,7 +38,7 @@ async def enrich_story(
 
     Args:
         session: Database session
-        story_id: Story UUID
+        story_id: Story UUID (as string)
         max_videos: Max videos to find
         max_snippets: Max social snippets to find
         enable_embeddings: Whether to generate embeddings
@@ -40,6 +46,9 @@ async def enrich_story(
     Returns:
         Dict with enrichment results
     """
+    # Convert story_id string to UUID for database queries
+    story_uuid = uuid.UUID(story_id)
+
     results: Dict[str, Any] = {
         "story_id": story_id,
         "media_assets": 0,
@@ -51,7 +60,7 @@ async def enrich_story(
     }
 
     # Get story details
-    stmt = select(Story).where(Story.id == story_id)
+    stmt = select(Story).where(Story.id == story_uuid)
     result = await session.execute(stmt)
     story = result.scalar_one_or_none()
     if not story:
@@ -63,10 +72,10 @@ async def enrich_story(
         select(RawArticle)
         .join(ReportingUnit, RawArticle.id == ReportingUnit.representative_article_id)
         .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
-        .where(StoryUnitLink.story_id == story_id)
+        .where(StoryUnitLink.story_id == story_uuid)
     )
     result = await session.execute(stmt)
-    articles: List[RawArticle] = result.scalars().all()
+    articles: List[RawArticle] = list(result.scalars().all())
 
     if not articles:
         results["errors"].append("No articles in story")
@@ -90,49 +99,215 @@ async def enrich_story(
     # Run enrichment tasks in parallel
     tasks: List[EnrichmentTask] = []
 
-    # 1. Media extraction from articles
-    for article in article_data:
-        if article["url"]:
-            tasks.append(("media", extract_media_from_article(article["article_id"], article["url"])))
+    # 1. Media extraction from articles - include article_id for each
+    for article_dict in article_data:
+        if article_dict["url"]:
+            tasks.append(("media", article_dict["article_id"], extract_media_from_article(article_dict["article_id"], article_dict["url"])))
 
     # 2. Video finding
-    story_title = " ".join([a["title"] for a in articles[:3]])
-    tasks.append(("videos", find_videos_for_story(story_title, key_entities, max_videos)))
+    story_title = " ".join([a["title"] for a in article_data[:3]])
+    tasks.append(("videos", None, find_videos_for_story(story_title, key_entities, max_videos)))
 
     # 3. Social snippets
-    tasks.append(("social_snippets", find_snippets_for_story(story_title, key_entities, max_snippets)))
+    tasks.append(("social_snippets", None, find_snippets_for_story(story_title, key_entities, max_snippets)))
 
     # 4. Snippet extraction (LLM-based)
-    tasks.append(("snippets", enrich_story_with_snippets(session, story_id)))
+    tasks.append(("snippets", None, enrich_story_with_snippets(session, story_id)))
 
     # 5. Embeddings
     if enable_embeddings:
-        texts = [a["body_text"] for a in articles if a["body_text"]]
-        tasks.append(("embeddings", embed_story(story_id, texts)))
+        texts = [a["body_text"] for a in article_data if a["body_text"]]
+        tasks.append(("embeddings", None, embed_story(story_id, texts)))
 
     # Execute all tasks
     if tasks:
-        enrichment_results = await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
+        # Separate coroutines from task metadata
+        task_coroutines = [t[2] for t in tasks]
+        enrichment_results = await asyncio.gather(*task_coroutines, return_exceptions=True)
 
-        # Process results
-        task_names = [t[0] for t in tasks]
-        for name, result in zip(task_names, enrichment_results):
+        # Process results - match by index
+        for i, (kind, article_id, _) in enumerate(tasks):
+            result = enrichment_results[i]
             if isinstance(result, Exception):
-                logger.error(f"Enrichment task {name} failed: {result}")
-                results["errors"].append(f"{name}: {result}")
-            elif name == "media":
-                # Media results are per-article, need to store
-                pass  # Handled separately
-            elif name == "videos":
-                results["videos_found"] = len(result) if isinstance(result, list) else 0
-            elif name == "social_snippets":
-                results["social_snippets_found"] = len(result) if isinstance(result, list) else 0
-            elif name == "snippets":
+                logger.error(f"Enrichment task {kind} failed: {result}")
+                results["errors"].append(f"{kind}: {result}")
+                continue
+
+            # Process each kind of result
+            if kind == "media":
+                # Media results are per-article
+                if isinstance(result, dict):
+                    article_media_count = await _persist_media_assets(
+                        session, story_uuid, article_id, result
+                    )
+                    results["media_assets"] += article_media_count
+
+            elif kind == "videos":
+                if isinstance(result, list):
+                    video_count = await _persist_video_assets(session, story_uuid, result)
+                    results["videos_found"] = video_count
+
+            elif kind == "social_snippets":
+                if isinstance(result, list):
+                    social_count = await _persist_social_snippets(session, story_uuid, result)
+                    results["social_snippets_found"] = social_count
+
+            elif kind == "snippets":
+                # enrich_story_with_snippets already commits internally
                 results["snippets_extracted"] = result if isinstance(result, int) else 0
-            elif name == "embeddings":
-                results["embeddings_generated"] = 1 if result else 0
+
+            elif kind == "embeddings":
+                if result and isinstance(result, dict):
+                    await _persist_story_embedding(session, story_uuid, result)
+                    results["embeddings_generated"] = 1
+
+        # Commit all new MediaAsset and StoryEmbedding rows at once
+        try:
+            await session.commit()
+        except Exception as e:
+            logger.error(f"Failed to commit enrichment results for story {story_id}: {e}")
+            results["errors"].append(f"commit: {e}")
+            await session.rollback()
 
     return results
+
+
+async def _persist_media_assets(
+    session: AsyncSession,
+    story_id: uuid.UUID,
+    article_id: str,
+    media_result: Dict[str, List[Dict[str, Any]]]
+) -> int:
+    """Persist media assets from article extraction to MediaAsset table."""
+    count = 0
+    media_type_map = {
+        "images": MediaAsset.MediaType.IMAGE,
+        "videos": MediaAsset.MediaType.VIDEO,
+        "embeds": MediaAsset.MediaType.EMBED,
+        "audio": MediaAsset.MediaType.AUDIO,
+    }
+
+    for media_type_key, media_items in media_result.items():
+        if not isinstance(media_items, list):
+            continue
+
+        media_type = media_type_map.get(media_type_key)
+        if not media_type:
+            continue
+
+        for item in media_items:
+            # Build meta_data with any extra fields not in the model
+            meta_data = {}
+            for key, value in item.items():
+                if key not in {
+                    "url", "alt_text", "width", "height", "source", "source_id",
+                    "thumbnail_url", "duration_seconds", "media_type", "type"
+                }:
+                    meta_data[key] = value
+
+            asset = MediaAsset(
+                article_id=article_id,
+                story_id=story_id,
+                media_type=media_type,
+                url=item.get("url", ""),
+                thumbnail_url=item.get("thumbnail_url"),
+                alt_text=item.get("alt_text"),
+                width=item.get("width"),
+                height=item.get("height"),
+                duration_seconds=item.get("duration_seconds"),
+                source=item.get("source"),
+                source_id=item.get("source_id"),
+                meta_data=meta_data if meta_data else None,
+            )
+            session.add(asset)
+            count += 1
+
+    return count
+
+
+async def _persist_video_assets(
+    session: AsyncSession,
+    story_id: uuid.UUID,
+    videos: List[Dict[str, Any]]
+) -> int:
+    """Persist video search results to MediaAsset table."""
+    count = 0
+    for video in videos:
+        meta_data = {}
+        for key, value in video.items():
+            if key not in {
+                "video_id", "title", "description", "thumbnail_url", "channel_title",
+                "channel_id", "published_at", "embed_url", "watch_url", "source",
+                "duration_seconds", "view_count", "like_count", "comment_count"
+            }:
+                meta_data[key] = value
+
+        asset = MediaAsset(
+            story_id=story_id,
+            article_id=None,
+            media_type=MediaAsset.MediaType.VIDEO,
+            url=video.get("embed_url") or video.get("watch_url", ""),
+            thumbnail_url=video.get("thumbnail_url"),
+            alt_text=video.get("title"),
+            duration_seconds=video.get("duration_seconds"),
+            source=video.get("source"),
+            source_id=video.get("video_id"),
+            meta_data=meta_data if meta_data else None,
+        )
+        session.add(asset)
+        count += 1
+
+    return count
+
+
+async def _persist_social_snippets(
+    session: AsyncSession,
+    story_id: uuid.UUID,
+    snippets: List[Dict[str, Any]]
+) -> int:
+    """Persist social media snippets to MediaAsset table."""
+    count = 0
+    for snippet in snippets:
+        meta_data = {}
+        for key, value in snippet.items():
+            if key not in {
+                "post_id", "text", "author_username", "author_verified", "created_at",
+                "retweet_count", "like_count", "reply_count", "quote_count", "url",
+                "source", "platform", "author_handle", "author_did", "author_avatar",
+                "repost_count", "title", "subreddit", "score", "upvote_ratio",
+                "num_comments", "author"
+            }:
+                meta_data[key] = value
+
+        asset = MediaAsset(
+            story_id=story_id,
+            article_id=None,
+            media_type=MediaAsset.MediaType.EMBED,
+            url=snippet.get("url", ""),
+            alt_text=snippet.get("text", "")[:300] if snippet.get("text") else None,
+            source=snippet.get("source") or snippet.get("platform"),
+            source_id=snippet.get("post_id"),
+            meta_data=meta_data if meta_data else None,
+        )
+        session.add(asset)
+        count += 1
+
+    return count
+
+
+async def _persist_story_embedding(
+    session: AsyncSession,
+    story_id: uuid.UUID,
+    embedding_result: Dict[str, Any]
+) -> None:
+    """Persist story embedding to StoryEmbedding table."""
+    embedding = StoryEmbedding(
+        story_id=story_id,
+        model=embedding_result.get("model", "unknown"),
+        embedding=embedding_result.get("embedding", []),
+        dimensions=embedding_result.get("dimensions", 0),
+    )
+    session.add(embedding)
 
 
 def extract_key_entities(articles: List[RawArticle]) -> List[str]:
@@ -140,10 +315,11 @@ def extract_key_entities(articles: List[RawArticle]) -> List[str]:
     entity_counts = {}
 
     for article in articles:
-        if article.entities:
-            for entity_type, entities in article.entities.items():
+        entities = getattr(article, "entities", None)
+        if entities:
+            for entity_type, entity_list in entities.items():
                 if entity_type in {"PERSON", "ORG", "GPE", "LOC", "EVENT"}:
-                    for entity in entities:
+                    for entity in entity_list:
                         entity_counts[entity] = entity_counts.get(entity, 0) + 1
 
     # Sort by frequency and return top entities
