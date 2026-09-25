@@ -411,4 +411,3 @@ class MediaAsset(Base):
 
     article = relationship("RawArticle")
     story = relationship("Story")
->>>>>>> ddc4dcf (feat: Phase 2 - Multimedia & Snippet Enrichment)
