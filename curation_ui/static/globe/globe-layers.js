@@ -79,7 +79,8 @@ function toggleLayer(layerId, visible) {
     }
 
     // Reload events with new filters
-    if (window.GlobeCore && window.GlobeCore.loadEvents) {
+    const viewer = window.GlobeCore?.viewer?.();
+    if (viewer && !viewer.isDestroyed() && window.GlobeCore && window.GlobeCore.loadEvents) {
         window.GlobeCore.loadEvents(window.GlobeCore.currentFilters());
     }
 }

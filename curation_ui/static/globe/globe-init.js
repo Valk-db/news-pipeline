@@ -77,21 +77,17 @@ function showInitError(message) {
 
 // Handle visibility change for performance
 document.addEventListener('visibilitychange', () => {
-    if (window.GlobeCore?.viewer) {
-        const viewer = window.GlobeCore.viewer();
-        if (viewer) {
-            viewer.clock.shouldAnimate = !document.hidden;
-        }
+    const viewer = window.GlobeCore?.viewer?.();
+    if (viewer && !viewer.isDestroyed()) {
+        viewer.clock.shouldAnimate = !document.hidden;
     }
 });
 
 // Handle window resize
 window.addEventListener('resize', () => {
-    if (window.GlobeCore?.viewer) {
-        const viewer = window.GlobeCore.viewer();
-        if (viewer) {
-            viewer.resize();
-        }
+    const viewer = window.GlobeCore?.viewer?.();
+    if (viewer && !viewer.isDestroyed()) {
+        viewer.resize();
     }
 
     // Re-render timeline chart

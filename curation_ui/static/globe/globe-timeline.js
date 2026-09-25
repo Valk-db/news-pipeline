@@ -216,6 +216,12 @@ function onTimelineSliderChange() {
     renderTimelineChart();
 }
 
+// Helper to check if viewer is valid
+function isViewerValid() {
+    const viewer = window.GlobeCore?.viewer?.();
+    return viewer && !viewer.isDestroyed();
+}
+
 function filterEventsByTime(timeIndex) {
     if (timeIndex < 0 || timeIndex >= timelineData.length) return;
 

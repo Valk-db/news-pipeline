@@ -60,9 +60,12 @@ function initInteractions() {
 
     // Setup periodic refresh
     setInterval(() => {
-        if (!document.hidden) {
-            loadRecentEvents();
-            loadGlobeStats();
+        if (!document.hidden && window.GlobeCore?.viewer) {
+            const viewer = window.GlobeCore.viewer();
+            if (viewer && !viewer.isDestroyed()) {
+                loadRecentEvents();
+                loadGlobeStats();
+            }
         }
     }, 60000); // Every minute
 }
