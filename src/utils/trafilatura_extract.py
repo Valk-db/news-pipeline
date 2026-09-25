@@ -4,6 +4,7 @@ import trafilatura
 from typing import Optional, Tuple
 import hashlib
 import asyncio
+import httpx
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 try:
@@ -14,6 +15,23 @@ except ImportError:
 
 _TRACKING_PARAMS = {"fbclid", "gclid", "ocid", "cmpid", "ref", "taid", "mc_cid", "mc_eid"}
 _TRACKING_PREFIXES = ("utm_", "at_")
+
+# Module-level HTTP client for connection pooling
+# Created lazily and lives for process lifetime (short-lived GitHub Actions jobs)
+_http_client: Optional[httpx.Client] = None
+
+
+def _get_http_client() -> httpx.Client:
+    """Get or create the shared HTTP client with connection pooling."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.Client(
+            headers={"User-Agent": "Mozilla/5.0 (compatible; news-pipeline/0.1; +https://github.com/Valk-db/news-pipeline)"},
+            timeout=20,
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=20),
+        )
+    return _http_client
 
 
 def canonicalize_url(url: str) -> str:
@@ -50,12 +68,9 @@ def _extract_article_sync(url: str, html: Optional[str] = None, source_key: Opti
         if html:
             downloaded = html
         else:
-            import httpx
-            headers = {
-                "User-Agent": "Mozilla/5.0 (compatible; news-pipeline/0.1; +https://github.com/Valk-db/news-pipeline)"
-            }
+            client = _get_http_client()
             try:
-                response = httpx.get(url, headers=headers, timeout=20, follow_redirects=True)
+                response = client.get(url)
                 response.raise_for_status()
                 downloaded = response.text
             except httpx.HTTPStatusError as e:

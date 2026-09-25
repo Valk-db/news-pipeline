@@ -13,16 +13,20 @@ class TestTrafilaturaExtractionFailures:
 
     def setup_method(self):
         STATS.reset()
+        # Reset the shared HTTP client for test isolation
+        import src.utils.trafilatura_extract as te
+        te._http_client = None
 
     def test_http_status_error_records_correct_code(self):
         """HTTP status errors record fetch_failed:http_<status>."""
-        with patch("httpx.get") as mock_get:
-            mock_response = MagicMock()
-            mock_response.status_code = 404
-            mock_get.side_effect = httpx.HTTPStatusError(
-                "404 Not Found", request=MagicMock(), response=mock_response
-            )
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_client.get.side_effect = httpx.HTTPStatusError(
+            "404 Not Found", request=MagicMock(), response=mock_response
+        )
 
+        with patch("src.utils.trafilatura_extract._get_http_client", return_value=mock_client):
             body, title = _extract_article_sync(
                 "https://example.com/article", source_key="test_source"
             )
@@ -34,9 +38,10 @@ class TestTrafilaturaExtractionFailures:
 
     def test_timeout_error_records_timeout(self):
         """Timeout errors record fetch_failed:timeout (regression test for B.1)."""
-        with patch("httpx.get") as mock_get:
-            mock_get.side_effect = httpx.TimeoutException("Read timeout")
+        mock_client = MagicMock()
+        mock_client.get.side_effect = httpx.TimeoutException("Read timeout")
 
+        with patch("src.utils.trafilatura_extract._get_http_client", return_value=mock_client):
             body, title = _extract_article_sync(
                 "https://example.com/article", source_key="test_source"
             )
@@ -48,9 +53,10 @@ class TestTrafilaturaExtractionFailures:
 
     def test_generic_exception_records_error_type(self):
         """Generic exceptions record fetch_failed:error_<ExcType>."""
-        with patch("httpx.get") as mock_get:
-            mock_get.side_effect = ValueError("Invalid URL")
+        mock_client = MagicMock()
+        mock_client.get.side_effect = ValueError("Invalid URL")
 
+        with patch("src.utils.trafilatura_extract._get_http_client", return_value=mock_client):
             body, title = _extract_article_sync(
                 "https://example.com/article", source_key="test_source"
             )
@@ -62,11 +68,12 @@ class TestTrafilaturaExtractionFailures:
 
     def test_empty_extract_records_empty_extract(self):
         """Empty extraction records fetch_failed:empty_extract."""
-        with patch("httpx.get") as mock_get:
-            mock_response = MagicMock()
-            mock_response.text = "<html><body>Too short</body></html>"
-            mock_get.return_value = mock_response
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = "<html><body>Too short</body></html>"
+        mock_client.get.return_value = mock_response
 
+        with patch("src.utils.trafilatura_extract._get_http_client", return_value=mock_client):
             with patch("trafilatura.extract") as mock_extract:
                 mock_extract.return_value = None
 

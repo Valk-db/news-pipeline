@@ -10,6 +10,7 @@ if `ingest_rss_feeds(sources=None)` is called explicitly (legacy path).
 
 import feedparser
 import httpx
+import logging
 from typing import List, Optional
 from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
@@ -18,6 +19,9 @@ from src.utils.ingest_stats import STATS
 from src.schema.models import RawArticle, SourceTier
 from src.shared.config import get_settings
 import asyncio
+
+
+logger = logging.getLogger(__name__)
 
 
 # DEPRECATED: This dict is NOT used in production (run.py uses source_registry).
@@ -122,27 +126,27 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
             # Retry only on 5xx or 429
             should_retry = status >= 500 or status == 429
             if should_retry and attempt < max_retries - 1:
-                print(f"Failed to fetch {feed_url} (attempt {attempt + 1}/{max_retries}): {e}, retrying in {retry_delay}s...")
+                logger.warning("Failed to fetch %s (attempt %d/%d): %s, retrying in %ds...", feed_url, attempt + 1, max_retries, e, retry_delay)
                 await asyncio.sleep(retry_delay)
             else:
-                print(f"Failed to fetch {feed_url} after {attempt + 1} attempt(s): {e}")
+                logger.error("Failed to fetch %s after %d attempt(s): %s", feed_url, attempt + 1, e)
                 STATS.record(source_key, f"feed_failed:http_{status}")
                 return None
         except httpx.TimeoutException:
             if attempt < max_retries - 1:
-                print(f"Timeout fetching {feed_url} (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                logger.warning("Timeout fetching %s (attempt %d/%d), retrying in %ds...", feed_url, attempt + 1, max_retries, retry_delay)
                 await asyncio.sleep(retry_delay)
             else:
-                print(f"Timeout fetching {feed_url} after {max_retries} attempts")
+                logger.error("Timeout fetching %s after %d attempts", feed_url, max_retries)
                 STATS.record(source_key, "feed_failed:timeout")
                 return None
         except Exception as e:
             # Network errors (connection refused, DNS, etc.) retry
             if attempt < max_retries - 1:
-                print(f"Failed to fetch {feed_url} (attempt {attempt + 1}/{max_retries}): {e}, retrying in {retry_delay}s...")
+                logger.warning("Failed to fetch %s (attempt %d/%d): %s, retrying in %ds...", feed_url, attempt + 1, max_retries, e, retry_delay)
                 await asyncio.sleep(retry_delay)
             else:
-                print(f"Failed to fetch {feed_url} after {max_retries} attempts: {e}")
+                logger.error("Failed to fetch %s after %d attempts: %s", feed_url, max_retries, e)
                 STATS.record(source_key, f"feed_failed:error_{type(e).__name__}")
                 return None
 
@@ -228,32 +232,72 @@ async def ingest_rss_feeds(max_per_feed: int = 50, sources: dict | None = None) 
         sources = TIER1_FEEDS
 
     async with httpx.AsyncClient(timeout=timeout) as client:
+        # Build list of (source_key, feed_url, source_info_dict) tuples
+        feed_tasks = []
         for source_key, source_info in sources.items():
-            # Handle both TIER1_FEEDS format and SourceConfig format
             if hasattr(source_info, 'rss_urls'):
-                # SourceConfig from source_registry
                 feed_urls = source_info.rss_urls
                 domain = source_info.domain
                 tier = source_info.tier
                 source_name = source_info.name
             else:
-                # Legacy TIER1_FEEDS format
                 feed_urls = source_info["feeds"]
                 domain = source_info["domain"]
                 tier = source_info["tier"]
                 source_name = source_info["name"]
 
+            source_info_dict = {"domain": domain, "tier": tier, "name": source_name}
             for feed_url in feed_urls:
-                feed = await fetch_feed(client, feed_url, timeout=timeout, source_key=source_key)
-                if not feed or not feed.entries:
-                    continue
+                feed_tasks.append((source_key, feed_url, source_info_dict))
 
-                for entry in feed.entries[:max_per_feed]:
-                    # Build source_info dict for process_feed_entry
-                    si = {"domain": domain, "tier": tier, "name": source_name}
-                    article = await process_feed_entry(entry, si, seen_urls, source_key)
+        # Fetch all feeds concurrently with bounded semaphore
+        fetch_sem = asyncio.Semaphore(10)
+
+        async def _bounded_fetch(source_key: str, feed_url: str) -> tuple:
+            async with fetch_sem:
+                feed = await fetch_feed(client, feed_url, timeout=timeout, source_key=source_key)
+                return (source_key, feed_url, feed)
+
+        fetch_futures = [_bounded_fetch(source_key, feed_url) for source_key, feed_url, _ in feed_tasks]
+        fetched = await asyncio.gather(*fetch_futures)
+
+        # Process entries with bounded concurrency and dedup lock
+        seen_lock = asyncio.Lock()
+        extract_sem = asyncio.Semaphore(15)
+
+        async def _bounded_process(source_key: str, feed, source_info_dict: dict) -> List[RawArticle]:
+            if not feed or not feed.entries:
+                return []
+
+            local_articles = []
+            for entry in feed.entries[:max_per_feed]:
+                url = entry.get("link", "")
+                url_hash = compute_url_hash(url) if url else None
+
+                # Reserve URL in seen_urls before extraction (dedup lock)
+                async with seen_lock:
+                    if not url or url_hash in seen_urls:
+                        continue
+                    seen_urls.add(url_hash)
+
+                async with extract_sem:
+                    article = await process_feed_entry(entry, source_info_dict, seen_urls, source_key)
                     if article:
-                        articles.append(article)
-                        seen_urls.add(article.url_hash)
+                        local_articles.append(article)
+
+            return local_articles
+
+        # Build process tasks
+        process_tasks = []
+        for (source_key, feed_url, source_info_dict), (_, _, feed) in zip(feed_tasks, fetched):
+            if feed and feed.entries:
+                process_tasks.append(_bounded_process(source_key, feed, source_info_dict))
+
+        # Run extraction concurrently
+        results = await asyncio.gather(*process_tasks)
+
+        # Flatten results
+        for article_list in results:
+            articles.extend(article_list)
 
     return articles

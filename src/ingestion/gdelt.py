@@ -2,6 +2,7 @@
 
 import httpx
 import asyncio
+import logging
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,6 +11,9 @@ from src.utils.ner import extract_entities_top_n
 from src.schema.models import RawArticle, SourceTier
 from src.shared.config import get_settings
 import random
+
+
+logger = logging.getLogger(__name__)
 
 
 GDELT_API = "https://api.gdeltproject.org/api/v2/doc/doc"
@@ -42,7 +46,7 @@ async def fetch_with_retry(
 
         # Rate limited - exponential backoff with jitter
         delay = base_delay * (2 ** attempt) + random.uniform(0, 2)
-        print(f"GDELT rate limited (429), attempt {attempt + 1}/{max_retries}, waiting {delay:.1f}s...")
+        logger.warning("GDELT rate limited (429), attempt %d/%d, waiting %.1fs...", attempt + 1, max_retries, delay)
         await asyncio.sleep(delay)
 
     # Final attempt without catching 429
@@ -147,7 +151,7 @@ async def fetch_gdelt_articles(
                 articles.append(art)
 
         except Exception as e:
-            print(f"GDELT fetch failed for {domain}: {e}")
+            logger.error("GDELT fetch failed for %s: %s", domain, e)
             return DomainResult(domain=domain, ok=False, error=str(e))
 
         await asyncio.sleep(throttle)
@@ -195,5 +199,5 @@ async def verify_sources() -> Dict[str, int]:
     for domain in ["apnews.com", "reuters.com"]:
         result = await fetch_gdelt_articles(domain, hours_back=24, max_records=10, throttle_seconds=0)
         results[domain] = len(result.articles)
-        print(f"GDELT {domain}: {len(result.articles)} articles in last 24h")
+        logger.info("GDELT %s: %d articles in last 24h", domain, len(result.articles))
     return results
