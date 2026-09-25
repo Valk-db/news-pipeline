@@ -128,7 +128,7 @@ class CuratedPost(Base):
     caption = Column(Text, nullable=False)
     media_urls = Column(JSON, nullable=True)  # [{"type": "image", "url": "...", "alt": "..."}]
     source_urls = Column(JSON, nullable=False)  # Canonical source URLs for attribution
-    status = Column(Enum(Status, name="curatedpoststatus"), nullable=False, default=Status.DRAFT)
+    status = Column(Enum(Status, name="curated_post_status"), nullable=False, default=Status.DRAFT)
     scheduled_at = Column(DateTime(timezone=True), nullable=True)
     posted_at = Column(DateTime(timezone=True), nullable=True)
     error = Column(Text, nullable=True)
