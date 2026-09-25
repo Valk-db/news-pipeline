@@ -88,8 +88,8 @@ def test_missing_enum_label_detected():
     assert has_drift(report) is True
 
 
-def test_missing_table_no_drift():
-    """Test d: Delete stories from actual_columns -> missing_tables has stories, has_drift False."""
+def test_missing_table_is_drift():
+    """Test d: Delete stories from actual_columns -> missing_tables has stories, has_drift True (missing tables are now drift)."""
     actual_columns = {
         table_name: {col.name for col in table.columns}
         for table_name, table in Base.metadata.tables.items()
@@ -116,7 +116,7 @@ def test_missing_table_no_drift():
     report = find_drift(Base.metadata, actual_columns, actual_enums)
 
     assert "stories" in report["missing_tables"]
-    assert has_drift(report) is False
+    assert has_drift(report) is True
 
 
 def test_extra_columns_ignored():

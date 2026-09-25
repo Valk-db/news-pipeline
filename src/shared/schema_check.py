@@ -78,11 +78,8 @@ def find_drift(
 
 
 def has_drift(report: dict[str, list[Any]]) -> bool:
-    """
-    True iff missing_columns or missing_enum_labels is non-empty.
-    Missing tables alone are NOT drift, because init_db() creates them.
-    """
-    return bool(report["missing_columns"]) or bool(report["missing_enum_labels"])
+    """True iff any of missing_tables, missing_columns, or missing_enum_labels is non-empty."""
+    return bool(report["missing_tables"]) or bool(report["missing_columns"]) or bool(report["missing_enum_labels"])
 
 
 async def fetch_actual(engine: Engine) -> tuple[dict[str, set[str]], dict[str, set[str]]]:

@@ -262,19 +262,19 @@ function handleKeyboardShortcuts(e) {
 
 // Fly to event (exposed globally for onclick handlers)
 function flyToEvent(eventId) {
+    const viewer = window.GlobeCore?.viewer?.();
+    if (!viewer || viewer.isDestroyed()) return;
+
     const entity = window.GlobeCore?.eventEntities?.values?.find?.(e =>
         e.properties?.event_id === eventId
     );
 
     if (entity && entity.position) {
-        const viewer = window.GlobeCore?.viewer?.();
-        if (viewer) {
-            viewer.camera.flyTo({
-                destination: entity.position.getValue(viewer.clock.currentTime),
-                duration: 1.5,
-                offset: new Cesium.HeadingPitchRange(0, -Cesium.Math.PI_OVER_FOUR, 50000)
-            });
-        }
+        viewer.camera.flyTo({
+            destination: entity.position.getValue(viewer.clock.currentTime),
+            duration: 1.5,
+            offset: new Cesium.HeadingPitchRange(0, -Cesium.Math.PI_OVER_FOUR, 50000)
+        });
     }
 }
 
@@ -307,9 +307,11 @@ function renderEventTypeLegend() {
 // Cluster events at current zoom level
 function clusterEvents() {
     const viewer = window.GlobeCore?.viewer?.();
+    if (!viewer || viewer.isDestroyed()) return;
+
     const entities = window.GlobeCore?.eventEntities?.values;
 
-    if (!viewer || !entities || entities.length === 0) return;
+    if (!entities || entities.length === 0) return;
 
     // Get visible entities
     const visibleEntities = entities.filter(e => {
@@ -354,15 +356,18 @@ function clusterEvents() {
 }
 
 function showClusterMarker(entities, key) {
+    const viewer = window.GlobeCore?.viewer?.();
+    if (!viewer || viewer.isDestroyed()) return;
+
     // Calculate center
-    const positions = entities.map(e => e.position.getValue(window.GlobeCore.viewer().clock.currentTime));
+    const positions = entities.map(e => e.position.getValue(viewer.clock.currentTime));
     const center = Cesium.Cartesian3.fromDegrees(
         positions.reduce((sum, p) => {
-            const c = window.GlobeCore.viewer().scene.globe.ellipsoid.cartesianToCartographic(p);
+            const c = viewer.scene.globe.ellipsoid.cartesianToCartographic(p);
             return sum + Cesium.Math.toDegrees(c.longitude);
         }, 0) / positions.length,
         positions.reduce((sum, p) => {
-            const c = window.GlobeCore.viewer().scene.globe.ellipsoid.cartesianToCartographic(p);
+            const c = viewer.scene.globe.ellipsoid.cartesianToCartographic(p);
             return sum + Cesium.Math.toDegrees(c.latitude);
         }, 0) / positions.length
     );

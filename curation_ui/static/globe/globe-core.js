@@ -68,11 +68,7 @@ async function initGlobe() {
         navigationInstructionsInitiallyVisible: false,
         scene3DOnly: true,
         shadows: true,
-        terrainProvider: new Cesium.CesiumTerrainProvider({
-            url: 'https://assets.cesium.com/terrain',
-            requestWaterMask: true,
-            requestVertexNormals: true
-        }),
+        terrainProvider: new Cesium.EllipsoidTerrainProvider(),
         imageryProvider: osmImagery,
         skyBox: new Cesium.SkyBox({
             sources: {
@@ -339,6 +335,7 @@ function resetView() {
 }
 
 function fitEvents() {
+    if (!viewer || viewer.isDestroyed()) return;
     if (eventEntities.values.length === 0) return;
 
     const boundingSphere = Cesium.BoundingSphere.fromPoints(
@@ -359,6 +356,7 @@ function fitEvents() {
 let hoveredEntity = null;
 
 function onLeftClick(movement) {
+    if (!viewer || viewer.isDestroyed()) return;
     const picked = viewer.scene.pick(movement.position);
     if (Cesium.defined(picked) && picked.entity) {
         showEventDetail(picked.entity);
@@ -368,6 +366,7 @@ function onLeftClick(movement) {
 }
 
 function onMouseMove(movement) {
+    if (!viewer || viewer.isDestroyed()) return;
     const picked = viewer.scene.pick(movement.endPosition);
     if (Cesium.defined(picked) && picked.entity && picked.entity !== hoveredEntity) {
         hoveredEntity = picked.entity;
@@ -464,26 +463,6 @@ function showEventDetail(entity) {
     panel.classList.add('open');
 }
 
-function hideEventDetail() {
-    const panel = document.getElementById('event-detail-panel');
-    panel.classList.remove('open');
-}
-
-function openStory(storyId) {
-    window.location.href = `/story/${storyId}/edit`;
-}
-
-function flyToEvent(eventId) {
-    const entity = eventEntities.values.find(e => e.properties?.event_id === eventId);
-    if (entity && entity.position) {
-        camera.flyTo({
-            destination: entity.position.getValue(viewer.clock.currentTime),
-            duration: 1.5,
-            offset: new Cesium.HeadingPitchRange(0, -Cesium.Math.PI_OVER_FOUR, 50000)
-        });
-    }
-    hideEventDetail();
-}
 
 // Clustering support
 let clusteringEnabled = false;
