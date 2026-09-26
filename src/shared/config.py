@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # Scheduling
     cron_schedule: str = "0 6,18 * * *"  # 6 AM and 6 PM UTC
 
+    # Dynamic gate (P3-C) - feature flag, default off for shadow mode
+    dynamic_gate_enabled: bool = False
+
     # Feature availability checks
     @property
     def has_database(self) -> bool:

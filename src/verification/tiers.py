@@ -5,9 +5,11 @@ from collections import defaultdict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import (
-    ReportingUnit, Story, StoryUnitLink, SourceTier
+    ReportingUnit, Story, StoryUnitLink, SourceTier,
+    Claim, ClaimType, CanonicalEntity
 )
 from typing import List, Optional, Tuple
+from src.shared.config import get_settings
 
 
 async def recompute_story_counters(session: AsyncSession, story_ids: List[uuid.UUID]) -> None:
@@ -382,6 +384,198 @@ async def apply_tier1_gate(
         else:
             story.status = Story.Status.BLOCKED
             story.gate_reason = f"Blocked: {reason}"
+            blocked += 1
+
+    await session.commit()
+    return {"queued": queued, "blocked": blocked}
+
+
+async def compute_harm_level(session: AsyncSession, story: "Story") -> str:
+    """Return 'high' iff the story has an ALLEGATION claim AND at least one
+    entity in story.primary_entities resolves to a CanonicalEntity with
+    entity_type == 'PERSON'. Otherwise returns 'low'.
+
+    Note: primary_entities stores canonical entity IDs (UUIDs) as strings.
+    """
+    # Check if story has any ALLEGATION claims
+    claim_stmt = select(Claim).where(
+        Claim.story_id == story.id,
+        Claim.claim_type == ClaimType.ALLEGATION,
+    )
+    claim_result = await session.execute(claim_stmt)
+    has_allegation = claim_result.scalar_one_or_none() is not None
+
+    if not has_allegation:
+        return "low"
+
+    # Check if any primary_entity is a PERSON
+    # primary_entities stores canonical IDs as strings (JSON array of UUID strings)
+    if not story.primary_entities:
+        return "low"
+
+    # Convert string IDs to UUID for the .in_() filter
+    canonical_ids = [uuid.UUID(eid) for eid in story.primary_entities if eid]
+    if not canonical_ids:
+        return "low"
+
+    entity_stmt = select(CanonicalEntity).where(
+        CanonicalEntity.id.in_(canonical_ids),
+        CanonicalEntity.entity_type == "PERSON",
+    )
+    entity_result = await session.execute(entity_stmt)
+    person_entity = entity_result.scalar_one_or_none()
+
+    return "high" if person_entity else "low"
+
+
+async def compute_virality_signal(session: AsyncSession, story: "Story") -> int:
+    """Return max article_count for units on this story where source_tiers
+    includes tier3 or tier4. 0 if none.
+    """
+    stmt = select(ReportingUnit).where(
+        ReportingUnit.id.in_(
+            select(StoryUnitLink.unit_id).where(StoryUnitLink.story_id == story.id)
+        )
+    )
+    result = await session.execute(stmt)
+    units = result.scalars().all()
+
+    max_viral = 0
+    for unit in units:
+        source_tiers = unit.source_tiers or {}
+        if "tier3" in source_tiers or "tier4" in source_tiers:
+            max_viral = max(max_viral, unit.article_count or 0)
+
+    return max_viral
+
+
+async def compute_admission_score(
+    session: AsyncSession,
+    story: "Story",
+    tier1_unit_count: int,
+    distinct_owners: int,
+) -> tuple[int, dict]:
+    """Returns (score 0-100, breakdown dict for gate_reason logging).
+
+    Factors:
+    1. source_tier_baseline: 40 if tier1_unit_count >= 2 else 0
+    2. corroboration: min(tier1_unit_count * 10, 30)
+    3. distinct_owners: min(distinct_owners * 5, 20)
+    4. virality_signal: min(virality_signal * 2, 10) -- tier3/4 article count
+    5. harm_level penalty: -20 if 'high', else 0 -- raises the bar
+
+    If harm_level == 'high', the required score to pass is increased by 20
+    (i.e., need 70 instead of 50). This implements 'scales the bar' not
+    'gates alone' per GRAND_PLAN §3.
+    """
+    # 1. Source tier baseline (matches old boolean gate)
+    tier_baseline = 40 if tier1_unit_count >= 2 else 0
+
+    # 2. Corroboration (more tier-1 units = more corroboration)
+    corroboration = min(tier1_unit_count * 10, 30)
+
+    # 3. Distinct owners
+    owners_score = min(distinct_owners * 5, 20)
+
+    # 4. Virality signal (tier3/4 article count)
+    virality = await compute_virality_signal(session, story)
+    virality_score = min(virality * 2, 10)
+
+    # 5. Harm level
+    harm_level = await compute_harm_level(session, story)
+    harm_penalty = -20 if harm_level == "high" else 0
+
+    # Base score
+    base_score = tier_baseline + corroboration + owners_score + virality_score
+    final_score = max(0, min(100, base_score + harm_penalty))
+
+    # Passing threshold: 50 normally, 70 if harm_level == "high"
+    pass_threshold = 70 if harm_level == "high" else 50
+    passes = final_score >= pass_threshold
+
+    breakdown = {
+        "tier_baseline": tier_baseline,
+        "corroboration": corroboration,
+        "distinct_owners": owners_score,
+        "virality": virality_score,
+        "harm_level": harm_level,
+        "harm_penalty": harm_penalty,
+        "base_score": base_score,
+        "final_score": final_score,
+        "pass_threshold": pass_threshold,
+        "passes": passes,
+    }
+
+    return final_score, breakdown
+
+
+async def apply_dynamic_gate(
+    session: AsyncSession,
+    story_ids: Optional[List[uuid.UUID]] = None,
+) -> dict:
+    """Apply the dynamic admission score gate.
+
+    If dynamic_gate_enabled is False, delegates to apply_tier1_gate.
+    If enabled, runs compute_admission_score and uses score threshold.
+    """
+    settings = get_settings()
+
+    if not settings.dynamic_gate_enabled:
+        # Shadow mode - just run old gate
+        return await apply_tier1_gate(session, story_ids)
+
+    # Build query - if story_ids is not None, get those (any status), else get PENDING
+    if story_ids is not None:
+        stmt = select(Story).where(Story.id.in_(story_ids))
+    else:
+        stmt = select(Story).where(Story.status == Story.Status.PENDING)
+    result = await session.execute(stmt)
+    stories = result.scalars().all()
+
+    queued = 0
+    blocked = 0
+
+    # First, recompute all counters from current StoryUnitLinks
+    story_id_list = [s.id for s in stories]
+    if story_id_list:
+        await recompute_story_counters(session, story_id_list)
+
+    # Batch fetch all units for all stories in a single query
+    story_units: defaultdict[uuid.UUID, list] = defaultdict(list)
+    if story_id_list:
+        stmt = (
+            select(Story, ReportingUnit)
+            .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
+            .join(Story, Story.id == StoryUnitLink.story_id)
+            .where(Story.id.in_(story_id_list))
+        )
+        result = await session.execute(stmt)
+        for story, unit in result.all():
+            story_units[story.id].append(unit)
+
+    for story in stories:
+        # Use already-computed counters (from recompute_story_counters)
+        tier1_unit_count = story.tier1_unit_count
+        distinct_owners = story.distinct_owners
+
+        # Compute admission score
+        score, breakdown = await compute_admission_score(
+            session, story, tier1_unit_count, distinct_owners
+        )
+
+        # Determine pass/fail
+        passes = breakdown["passes"]
+
+        # Update story status and gate_reason
+        if passes:
+            story.status = Story.Status.PENDING
+            parts = [f"{k}={v}" for k, v in breakdown.items() if k not in ("passes", "pass_threshold")]
+            story.gate_reason = f"Dynamic gate passed (score={score}, threshold={breakdown['pass_threshold']}): " + ", ".join(parts)
+            queued += 1
+        else:
+            story.status = Story.Status.BLOCKED
+            parts = [f"{k}={v}" for k, v in breakdown.items() if k not in ("passes", "pass_threshold")]
+            story.gate_reason = f"Dynamic gate blocked (score={score}, threshold={breakdown['pass_threshold']}): " + ", ".join(parts)
             blocked += 1
 
     await session.commit()
