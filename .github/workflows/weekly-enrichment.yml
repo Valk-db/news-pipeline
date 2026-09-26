@@ -156,6 +156,13 @@ jobs:
           asyncio.run(main())
           "
 
+      - name: Compute per-(source, topic) reliability scores
+        id: reliability_scoring
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: uv run python -m scripts.compute_reliability
+
   reliability:
     runs-on: ubuntu-latest
     timeout-minutes: 60
