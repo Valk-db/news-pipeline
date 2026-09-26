@@ -1,107 +1,173 @@
-# AGENT_TASKS.md v21
+# AGENT_TASKS.md v22
 
-Supersedes v20. **P3-A and P3-B are done and merged** — commits `b66d923`
-and `466b5ce` on `main`. Independently verified against a fresh clone:
+Supersedes v21 (v21 was never applied — this refines it, mainly T0/T5, before any
+code exists, so nothing is lost). v20's paused P3 Python work (source_topic_reliability
+schema etc.) is still paused, unchanged from v21 — revisit only if Tyler says so.
 
-- `ruff check .` — clean on `main`.
-- `SourceTopicReliability` model present in `src/schema/models.py`;
-  migration `20260927000000_source_topic_reliability.sql` present.
-- `src/verification/reliability.py::compute_source_topic_reliability()` and
-  its `MIN_SAMPLE_SIZE = 3` floor match the P3-B spec exactly.
-- `scripts/compute_reliability.py` wired into `weekly-enrichment.yml`.
-- Full suite on `main`: **358 passed, 5 skipped, 363 collected** — not the
-  285 the summary claimed. Same class of self-reported-number error as the
-  "277" one two rounds ago; worth building the habit of running `pytest -q`
-  yourself before writing a number in a completion summary.
+**Merge policy (standing, unchanged):** once your own checks pass for a task —
+`cargo build` clean, targeted `cargo test` green — merge it yourself, separate PR
+per task. Don't wait for review. Flag any scope change or substituted approach in
+the PR description — don't fold it in silently, same convention as the Python
+AGENT_TASKS history.
 
-**P3-C is not merged, and "Phase 3 — Complete" is inaccurate.** Checked
-`git branch -a --contains 1a7616a`: only `origin/p3-c-dynamic-gate`, not
-`main`. `dynamic_gate_enabled` doesn't exist in `main`'s `config.py` either
-— confirms it. Two of three Phase 3 tasks are done; the third is a pushed
-branch, not a landed one.
-
-## Why it wasn't merged, and why that's correct
-
-`tests/test_dynamic_gate.py` on that branch: **7 failed, 3 passed** (not
-"mock setup needs refinement" — 70% of the new file fails outright). Per
-the standing merge policy (checks green → merge yourself), not merging a
-red branch was the right call — the problem is the "Phase 3 — Complete"
-framing sitting above that, not the branch being held back.
-
-Sampled 3 of the 7 tracebacks to find the actual root cause before
-prescribing a fix:
-
-- `test_compute_admission_score_basic` — `StopIteration` inside
-  `compute_harm_level`'s second `session.execute()` call. The mock's
-  `side_effect` list has fewer entries than the number of `execute()` calls
-  `compute_harm_level` actually makes.
-- `test_apply_dynamic_gate_shadow_mode` — `AttributeError: 'tuple' object
-  has no attribute 'id'` inside the *pre-existing*
-  `recompute_story_counters` (unchanged by P3-C). The mock's return value
-  for that call is shaped as raw tuples where `.scalars().all()` is
-  expected to yield `Story` objects.
-- `test_compute_virality_signal_no_viral` — `TypeError: object MagicMock
-  can't be used in 'await' expression`. That particular call in the
-  sequence got a plain `MagicMock()` instead of an `AsyncMock()`/awaitable
-  result.
-
-All three are **mock-configuration bugs in the test file, not logic bugs in
-`tiers.py`** — nothing here indicates `compute_harm_level`,
-`compute_admission_score`, or `apply_dynamic_gate` themselves are wrong,
-only that the tests don't feed their mocked session enough correctly-shaped
-`execute()` results to reach that conclusion. This is the same
-`AsyncMock(spec=AsyncSession)` + `session.execute.side_effect = [...]`
-pattern `tests/test_reliability_scoring.py` (P3-B) already uses
-successfully — copy that file's setup style, don't invent a new one.
+**Branch:** all of this happens on a new `rust-port` branch off `main`. Each task
+below is its own PR **into `rust-port`**, self-merged per the policy above — not
+into `main`. `main` keeps running the live Python pipeline via the existing
+`.yml` workflows untouched until the Cutover task at the end explicitly merges
+`rust-port` → `main`. If a task's PR sits half-broken, `main` is never affected.
 
 ---
 
-## P3-C-fix — Make `test_dynamic_gate.py` actually pass
+## Scope
 
-### Goal
-Not "make the 7 red tests green" — make them **correctly** green. A test
-that's mocked into passing without actually exercising the real query
-sequence is worse than a red test.
+Target: replace the pipeline backend (`src/`, `scripts/`, the cron jobs in
+`.github/workflows/daily-ingest.yml`, `weekly-enrichment.yml`, `cleanup.yml`)
+with a Rust binary. Same Supabase Postgres, same $0/month budget, same GitHub
+Actions compute.
 
-### Method, per failing test
-1. Read the real function under test in `src/verification/tiers.py` end to
-   end first. Count exactly how many `await session.execute(...)` calls it
-   makes, in order, and what each one's result is used for
-   (`.scalar_one_or_none()` vs `.scalars().all()` vs raw rows).
-2. Build `mock_session.execute.side_effect` as a list with exactly that
-   many entries, each shaped to match what that specific call site expects
-   — a bare `MagicMock()` when `.scalar_one_or_none()` is called on it, one
-   whose `.scalars().all()` returns the right objects when that's called
-   instead. Don't pad with extra generic mocks to silence `StopIteration` —
-   an extra or missing entry means the test doesn't match the real call
-   sequence, which defeats the point of the test.
-3. For `test_apply_dynamic_gate_shadow_mode` specifically:
-   `apply_dynamic_gate()` delegates to the existing `apply_tier1_gate()`,
-   which calls `recompute_story_counters()` — that function's mocked
-   `execute()` result needs `.scalars().all()` to yield `Story`-like objects
-   (objects with a real `.id`), not tuples. Check
-   `recompute_story_counters`'s own existing tests (if any exist elsewhere
-   in the suite) for a mock shape to copy rather than guessing one.
-4. After each fix, run that one test in isolation
-   (`pytest tests/test_dynamic_gate.py::<name> -v`) before moving to the
-   next — don't fix all 7 blind and run the file once at the end.
+**Not in scope:** `curation_ui/` stays Python/FastAPI on Vercel — no mature
+general-purpose Rust web-app runtime there, and the UI already just reads/writes
+the same tables regardless of what language wrote them.
 
-### Acceptance
-`pytest tests/test_dynamic_gate.py -v` — 10 passed, 0 failed.
-`pytest -q` on the full branch — no new failures beyond the 6 pre-existing
-`test_ner.py` failures if `en_core_web_sm` isn't downloaded in your sandbox
-(same known gap as every prior round; download it and confirm 0 failures if
-you want the clean number). `ruff check .` — clean (already is).
-
-### Then merge
-Per the standing merge policy: once genuinely green, merge
-`p3-c-dynamic-gate` into `main` yourself. Don't re-summarize Phase 3 as
-"complete" until this PR is actually merged — say what's landed and what
-isn't in the same summary, the way this file does above.
+**Where the Rust code lives:** `pipeline-rs/` at repo root, not root itself —
+keeps it additive alongside the existing `pyproject.toml`/`uv.lock` packaging
+and the still-running Python CI, until Cutover.
 
 ---
 
-## Not in this batch (unchanged from v20's backlog)
-Certification badge, evidence snapshotting, media forensics, Phase 1a new
-source categories, Phase 4 globe expansion, and wiring `fact_check_article()`
-into a real job — none started, none blocked by anything in this task.
+## Infra — Supabase connection strategy (read before T1)
+
+1. **Use Supavisor session mode (port 5432), not direct connection, not
+   transaction mode (port 6543).**
+   - GitHub-hosted runners have no outbound IPv6 by default; Supabase's raw
+     direct-connection string is IPv6-only without the paid IPv4 add-on.
+   - sqlx's Postgres driver uses protocol-level named prepared statements for
+     nearly every query — Supavisor's transaction-mode pooler doesn't support
+     those. This is a known, structural incompatibility, not something to
+     debug around.
+   - Session mode (`aws-0-<region>.pooler.supabase.com:5432`) is IPv4-safe and
+     behaves like a normal direct connection to sqlx. Pull the exact URI from
+     Database Settings → Connection string (pooling display on, port 5432) —
+     don't hand-construct it, the host is region-specific.
+2. **Keep `max_connections` low** — `PgPoolOptions::new().max_connections(3)`
+   to start. A GitHub Actions run is one batch process, not a concurrent server;
+   check the project's Pool Size in Database Settings and stay well under it,
+   since `curation_ui`'s own `asyncpg` pool shares the same cap.
+3. Require TLS; let the pool close naturally at the end of `main()`.
+4. `runtime-tokio-native-tls` (as asked) is fine to start with; `tls-rustls` is
+   a drop-in swap if OpenSSL/pkg-config gives the Actions build any trouble —
+   note it, don't switch silently.
+5. Use `cargo add sqlx --features postgres,runtime-tokio-native-tls,chrono,uuid`
+   rather than hand-typing `Cargo.toml` — `cargo add` errors immediately on an
+   unknown feature name instead of silently accepting a bad list, and sqlx's
+   feature names have shifted across versions.
+
+---
+
+## T1 — Scaffolding + shared layer
+
+- `cd pipeline-rs && cargo init --bin`
+- `cargo add tokio --features full`
+- `cargo add serde --features derive`
+- `cargo add serde_json reqwest --features reqwest/json`
+- `cargo add dotenvy`
+- Port `src/shared/config.py` → `config.rs`: same env var names (`database_url`,
+  `groq_api_key`, `groq_model`, `cerebras_api_key`, `cerebras_model`,
+  `reddit_user_agent`, `rss_fetch_timeout`, `max_articles_per_feed`,
+  `groq_daily_request_budget`, `containment_threshold`,
+  `min_reporting_units_per_story`, `top_n_entities`, etc.) — no secret renaming
+  in GitHub Actions.
+- Port `src/shared/database.py` → `database.rs`: `PgPool` per the Infra section.
+- Port `src/shared/llm.py` + `llm_budget.py` → `llm.rs`: Groq and Cerebras are
+  both OpenAI-compatible chat-completions endpoints — plain `reqwest` +
+  `serde_json`, no SDK.
+- Port `src/schema/models.py` → `models.rs`: structs with `#[derive(sqlx::FromRow)]`
+  matching `supabase/migrations/`.
+- **Done when:** `cargo build` succeeds, `main()` opens the pool and runs
+  `SELECT 1`.
+
+## T2 — Ingestion + mechanical extraction bits
+
+- `src/ingestion/rss.py` → `feed-rs` crate for RSS/Atom.
+- `src/ingestion/reddit.py`, `adapter.py`, `source_registry.py`,
+  `tiered_scheduler.py`, `run.py` → HTTP + orchestration, translates directly.
+- `src/ingestion/gdelt.py` — disabled currently, port last or skip.
+- **From `trafilatura_extract.py`:** `canonicalize_url` and the tracking-param
+  stripping (`_TRACKING_PARAMS`/`_TRACKING_PREFIXES`) are pure string
+  manipulation, no library dependency — port now, doesn't wait on T5.
+- Run `cargo check` after each file, view the error, fix, move on.
+
+## T3 — Verification arithmetic + entity canonicalization + utils
+
+- `src/utils/minhash_utils.py`, `ingest_stats.py` → portable, no ML.
+- `src/verification/tiers.py`, `topics.py`, `cleanup.py` → portable.
+- **From `ner.py`:** everything *except* the spaCy call is portable now —
+  `_normalize_text`, `_generate_aliases`, `EntityCanonicalizer`,
+  `resolve_entities_to_canonical`, `canonical_jaccard`. This is regex +
+  Postgres reads (currently SQLAlchemy against `CanonicalEntity`/`EntityAlias`),
+  no model dependency — port it here, against T1's `models.rs`/`database.rs`.
+- `src/verification/units.py`, `stories.py` → port the entity-Jaccard grouping
+  math to accept an already-extracted `Dict<label, Vec<String>>` as input
+  (matching `extract_entities_top_n`'s return shape) so it isn't blocked on T5.
+
+## T4 — LLM-calling verification/reliability
+
+- `src/verification/claims.py`, `narrative.py`,
+  `src/reliability/consensus_analyzer.py`, `fact_checker.py` → request-building
+  + response-parsing against T1's `llm.rs`, portable once that lands.
+
+---
+
+## T5 — NER, embeddings, extraction: wire against real crates, verify, don't invent
+
+The only genuinely ML-shaped pieces left. For each: build it against the crate
+below, then validate on real data before calling it done — this is "swap the
+model runtime and confirm the output still means the same thing downstream,"
+not "translate the file."
+
+1. **NER** — only `extract_entities_top_n` itself (the spaCy call), everything
+   else moved to T3 above. `rust-bert` (Hugging Face Transformers port, tch or
+   onnxruntime backend) ships a ready `NERModel`/`TokenClassificationModel`.
+   **The catch:** spaCy's `en_core_web_sm` uses the OntoNotes label set —
+   PERSON, ORG, GPE, LOC, EVENT, PRODUCT — and `get_primary_entity_set`
+   specifically needs the GPE-vs-LOC distinction. Most off-the-shelf BERT NER
+   checkpoints (including common `rust-bert` defaults) are CoNLL-2003-trained
+   (PER/ORG/LOC/MISC), which collapses GPE into LOC and drops EVENT/PRODUCT
+   entirely. Before wiring this in: confirm which checkpoint `rust-bert`'s NER
+   pipeline actually loads, and whether it (or another onnx-loadable checkpoint)
+   preserves an OntoNotes-style split. If nothing clean does, that's a scoped,
+   upstream-able gap — not a reason to bail on `rust-bert` for this task.
+2. **Embeddings** — currently `sentence-transformers/all-MiniLM-L6-v2`, 384
+   dims, feeding pgvector. Check whether `rust-bert`'s sentence-embeddings
+   pipeline has this exact preset. The Python code already has an
+   API-fallback path scaffolded (`use_local=False` + `api_key`, currently
+   unused) — mirror that same optionality in Rust rather than forcing local-only.
+   Whatever model gets picked: re-embed a sample of existing rows and diff
+   nearest-neighbor results against current pgvector data before calling this
+   done — a different model produces different vectors, not just a different
+   runtime.
+3. **Extraction** — only the `trafilatura.extract(...)` call itself, the
+   URL-canonicalization already moved to T2. Candidates now exist:
+   `trafilatura` crate itself (Rust port via an intermediate Go port), `justext`
+   (paragraph-level, has published parity benchmarks vs. Python), `libreadability`,
+   or `readex` (runs a Readability → Trafilatura → htmldate cascade with
+   differential parity testing built in — closest in spirit to what
+   `trafilatura` does internally). These are all young/low-version crates —
+   spot-check the pick against a sample of real articles from your actual RSS
+   sources before trusting it, more scrutiny than `rust-bert` gets, not less.
+
+For all three: if wiring one up surfaces a specific gap — a missing model
+preset, a label-scheme mismatch, a site your extraction crate mishandles that
+trafilatura didn't — that gap is the scoped, upstream-able contribution. Write
+it up in the PR description, same convention as everything else here. Don't
+route around it silently.
+
+---
+
+## Cutover (own task, own PR, at the end)
+
+Once T1–T5 have parity with Python (tests green, a real run against a scratch
+Supabase project produces the same shape of output) — merge `rust-port` into
+`main`, repoint `daily-ingest.yml` / `weekly-enrichment.yml` / `cleanup.yml` at
+the compiled binary, add a `cargo build --release` + `cargo test` step to
+`ci.yml`. Not folded into any task above.
