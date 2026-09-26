@@ -266,7 +266,15 @@ async def test_compute_admission_score_harm_high(mock_session, sample_story_high
     """Test admission score with harm_level='high'."""
     story = sample_story_high_harm
 
-    # Harm level check: ALLEGATION claim exists (1 query)
+    # compute_admission_score calls:
+    # 1. compute_virality_signal → 1 execute call (FIRST)
+    # 2. compute_harm_level → 2 execute calls (claim + entity)
+    # Total: 3 execute calls
+
+    # 1. virality: execute returns empty list (no tier3/4 units)
+    viral_result = make_execute_mock_for_side_effect([])
+
+    # 2. harm_level: claim query → scalar_one_or_none returns ALLEGATION claim
     claim = Claim(
         id=uuid.uuid4(),
         story_id=story.id,
@@ -275,7 +283,7 @@ async def test_compute_admission_score_harm_high(mock_session, sample_story_high
     )
     claim_result = make_scalar_mock(claim)
 
-    # PERSON entity exists (1 query)
+    # 3. harm_level: entity query → scalar_one_or_none returns PERSON entity
     person_id = uuid.UUID(story.primary_entities[0])
     person_entity = CanonicalEntity(
         id=person_id,
@@ -284,11 +292,8 @@ async def test_compute_admission_score_harm_high(mock_session, sample_story_high
     )
     entity_result = make_scalar_mock(person_entity)
 
-    # Virality check: no tier3/4 units (1 query)
-    viral_result = make_execute_mock([])
-
-    # Sequence: harm_level calls claim + entity, then virality calls viral
-    mock_session.execute.side_effect = [claim_result, entity_result, viral_result]
+    # Correct sequence: virality FIRST, then harm_level (claim, then entity)
+    mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
     score, breakdown = await compute_admission_score(mock_session, story, 2, 2)
 
