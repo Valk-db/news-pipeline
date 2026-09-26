@@ -3,6 +3,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+/// MinHash signature for near-duplicate detection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MinHashSignature {
+    pub hashvalues: Vec<u64>,
+    pub num_perm: usize,
+}
+
 /// Source tier enum matching database
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "source_tier", rename_all = "lowercase")]

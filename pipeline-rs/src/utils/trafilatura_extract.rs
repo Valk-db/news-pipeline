@@ -49,7 +49,11 @@ pub fn canonicalize_url(url: &str) -> String {
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
 
-    url.query_pairs_mut().clear().extend_pairs(pairs);
+    if pairs.is_empty() {
+        url.set_query(None);
+    } else {
+        url.query_pairs_mut().clear().extend_pairs(pairs);
+    }
 
     // Normalize path - strip trailing slash
     let path: String = url.path().trim_end_matches('/').to_string();
@@ -152,7 +156,8 @@ mod tests {
     fn test_canonicalize_url() {
         let url = "https://www.example.com/path/?utm_source=test&fbclid=123#fragment";
         let canonical = canonicalize_url(url);
-        assert!(canonical.starts_with("https://example.com/path/"));
+        // Function strips trailing slash from path, so expect "https://example.com/path"
+        assert_eq!(canonical, "https://example.com/path");
         assert!(!canonical.contains("utm_source"));
         assert!(!canonical.contains("fbclid"));
         assert!(!canonical.contains("#fragment"));
