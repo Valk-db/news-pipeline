@@ -24,7 +24,7 @@ from sqlalchemy import select, desc, and_, func
 from sqlalchemy.types import Float
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.shared.database import get_session
-from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, Event, EventLayer
+from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, Event, EventLayer, Claim, ClaimEvidence, StoryTopicGroup, EntityEdge, EdgePredicate
 from src.shared.llm import get_llm_client, validate_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
@@ -211,6 +211,77 @@ async def _render_stories_grid(session: AsyncSession) -> list:
     else:
         reliability_by_domain = {}
 
+    # Batch fetch Claims for all stories
+    claim_stmt = (
+        select(Claim)
+        .where(Claim.story_id.in_(story_ids))
+    )
+    claim_result = await session.execute(claim_stmt)
+    claims = claim_result.scalars().all()
+
+    # Group claims by story_id
+    claims_by_story = {}
+    for claim in claims:
+        story_id = str(claim.story_id)
+        if story_id not in claims_by_story:
+            claims_by_story[story_id] = []
+        claims_by_story[story_id].append(claim)
+
+    # Batch fetch ClaimEvidence for all claims
+    claim_ids = [c.id for c in claims]
+    if claim_ids:
+        evidence_stmt = (
+            select(ClaimEvidence)
+            .where(ClaimEvidence.claim_id.in_(claim_ids))
+        )
+        evidence_result = await session.execute(evidence_stmt)
+        evidence_items = evidence_result.scalars().all()
+
+        # Group evidence by claim_id
+        evidence_by_claim = {}
+        for ev in evidence_items:
+            claim_id = str(ev.claim_id)
+            if claim_id not in evidence_by_claim:
+                evidence_by_claim[claim_id] = []
+            evidence_by_claim[claim_id].append(ev)
+    else:
+        evidence_by_claim = {}
+
+    # Batch fetch StoryTopicGroup for all stories
+    topic_stmt = (
+        select(StoryTopicGroup)
+        .where(StoryTopicGroup.story_id.in_(story_ids))
+    )
+    topic_result = await session.execute(topic_stmt)
+    topic_links = topic_result.scalars().all()
+
+    # Group topic groups by story_id
+    topics_by_story = {}
+    for link in topic_links:
+        story_id = str(link.story_id)
+        if story_id not in topics_by_story:
+            topics_by_story[story_id] = []
+        topics_by_story[story_id].append(link)
+
+    # Batch fetch EntityEdges (narrative arcs) for all stories
+    # We want edges where this story is the subject (newer story linking to older)
+    edge_stmt = (
+        select(EntityEdge)
+        .where(EntityEdge.subject_type == "story")
+        .where(EntityEdge.subject_id.in_(story_ids))
+        .where(EntityEdge.predicate.in_([EdgePredicate.SAME_EVENT_AS, EdgePredicate.PART_OF_NARRATIVE]))
+    )
+    edge_result = await session.execute(edge_stmt)
+    edges = edge_result.scalars().all()
+
+    # Group edges by subject story_id
+    edges_by_story = {}
+    for edge in edges:
+        story_id = str(edge.subject_id)
+        if story_id not in edges_by_story:
+            edges_by_story[story_id] = []
+        edges_by_story[story_id].append(edge)
+
     for story in stories:
         units = story.units
         articles = [unit.representative for unit in units if unit.representative]
@@ -230,6 +301,22 @@ async def _render_stories_grid(session: AsyncSession) -> list:
         # Get snippets for this story (cap at 3)
         story_snippets = snippets_by_story.get(str(story.id), [])[:3]
 
+        # Get claims for this story with evidence
+        story_claims = claims_by_story.get(str(story.id), [])
+        claims_with_evidence = []
+        for claim in story_claims:
+            ev = evidence_by_claim.get(str(claim.id), [])
+            claims_with_evidence.append({
+                "claim": claim,
+                "evidence": ev,
+            })
+
+        # Get topic groups for this story
+        story_topics = topics_by_story.get(str(story.id), [])
+
+        # Get narrative arcs for this story
+        story_edges = edges_by_story.get(str(story.id), [])
+
         # Build reliability map for this story's sources
         story_reliability = {}
         for article in articles:
@@ -243,6 +330,9 @@ async def _render_stories_grid(session: AsyncSession) -> list:
             "media": filtered_media,
             "snippets": story_snippets,
             "reliability_by_domain": story_reliability,
+            "claims": claims_with_evidence,
+            "topic_groups": story_topics,
+            "narrative_arcs": story_edges,
         })
 
     return story_data

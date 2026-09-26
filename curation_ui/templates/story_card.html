@@ -106,6 +106,56 @@
     </div>
     {% endif %}
 
+    {% if item.claims %}
+    <div class="story-claims">
+        <small class="claim-badge">Claims: {{ item.claims|length }}</small>
+        <details class="claims-details">
+            <summary>View Claim Matrix</summary>
+            {% for claim_data in item.claims %}
+            <div class="claim-item claim-{{ claim_data.claim.claim_type.value }}">
+                <div class="claim-text">{{ claim_data.claim.text }}</div>
+                <div class="claim-meta">
+                    <span class="claim-type-badge">{{ claim_data.claim.claim_type.value|title }}</span>
+                    <span class="claim-date">First seen: {{ claim_data.claim.first_seen_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                </div>
+                {% if claim_data.evidence %}
+                <div class="claim-evidence">
+                    {% for ev in claim_data.evidence %}
+                    <span class="evidence-badge evidence-{{ ev.stance.value }}" title="Unit {{ ev.unit_id[:8] }}: {{ ev.stance.value }} (conf: {{ ev.confidence }})">
+                        {{ ev.stance.value|title }} ({{ ev.confidence }}%)
+                    </span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </details>
+    </div>
+    {% endif %}
+
+    {% if item.topic_groups %}
+    <div class="story-topics">
+        <small class="topic-badge">Topics:</small>
+        {% for tg in item.topic_groups %}
+        {% if tg.topic_group %}
+        <span class="topic-tag" title="Confidence: {{ tg.confidence }}%">{{ tg.topic_group.name }}</span>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if item.narrative_arcs %}
+    <div class="story-narrative">
+        <small class="narrative-badge">Narrative Links:</small>
+        {% for edge in item.narrative_arcs %}
+        <span class="narrative-tag narrative-{{ edge.predicate.value }}"
+              title="{{ edge.predicate.value|replace('_', ' ') }} (conf: {{ edge.confidence }}%)">
+            {{ edge.predicate.value|replace('_', ' ')|title }} → {{ edge.object_id[:8] }}
+        </span>
+        {% endfor %}
+    </div>
+    {% endif %}
+
     <div class="story-actions">
         <button class="btn btn-success" hx-post="/story/{{ item.story.id }}/approve" hx-target="#stories" hx-swap="outerHTML">
             Approve (A)
