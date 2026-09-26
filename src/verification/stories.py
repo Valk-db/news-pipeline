@@ -16,6 +16,45 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+async def _gather_unit_texts_for_story(
+    session: AsyncSession, story: "Story", max_units: int = 10, max_chars: int = 2000,
+) -> list[dict]:
+    """Load up to max_units representative-article texts for a story's units,
+    truncated to max_chars each. Shared by cluster_viewpoints() and the claim
+    extraction pipeline (src/verification/claims.py) -- keep this the single
+    source of truth for "what text do we show the LLM about a story."
+    """
+    from sqlalchemy.orm import selectinload
+    from src.schema.models import RawArticle
+
+    # Get all units for this story with selectinload
+    stmt = (
+        select(Story)
+        .options(selectinload(Story.units))
+        .where(Story.id == story.id)
+    )
+    result = await session.execute(stmt)
+    story_with_units = result.scalar_one_or_none()
+    if not story_with_units:
+        return []
+
+    # Extract article texts for each unit
+    unit_texts = []
+    for unit in story_with_units.units[:max_units]:
+        # Get representative article
+        stmt = select(RawArticle).where(RawArticle.id == unit.representative_article_id)
+        result = await session.execute(stmt)
+        article = result.scalar_one_or_none()
+        if article and article.body_text:
+            unit_texts.append({
+                "unit_id": unit.id,
+                "text": article.body_text[:max_chars],
+                "source_tier": list((unit.source_tiers or {}).keys())[0] if unit.source_tiers else "unknown",
+            })
+
+    return unit_texts
+
+
 async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
     """
     Group reporting units into stories using top-N canonical entity Jaccard similarity.
@@ -160,29 +199,8 @@ async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) 
             # Not enough units for viewpoint clustering
             continue
 
-        # Get all units for this story
-        from sqlalchemy.orm import selectinload
-        stmt = (
-            select(Story)
-            .options(selectinload(Story.units))
-            .where(Story.id == story.id)
-        )
-        result = await session.execute(stmt)
-        story_with_units = result.scalar_one_or_none()
-
-        # Extract article texts for embedding
-        unit_texts = []
-        for unit in story_with_units.units:
-            # Get representative article
-            stmt = select(RawArticle).where(RawArticle.id == unit.representative_article_id)
-            result = await session.execute(stmt)
-            article = result.scalar_one_or_none()
-            if article and article.body_text:
-                unit_texts.append({
-                    "unit_id": unit.id,
-                    "text": article.body_text[:2000],  # Truncate for embedding
-                    "source_tier": list((unit.source_tiers or {}).keys())[0] if unit.source_tiers else "unknown",
-                })
+        # Use shared helper to gather unit texts
+        unit_texts = await _gather_unit_texts_for_story(session, story, max_units=10, max_chars=2000)
 
         if len(unit_texts) < 3:
             continue
@@ -192,7 +210,7 @@ async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) 
         llm = await get_llm_client()
 
         # Create a prompt to classify viewpoints
-        texts_for_prompt = "\n\n---\n\n".join([f"Source: {u['source_tier']}\n{u['text']}" for u in unit_texts[:10]])
+        texts_for_prompt = "\n\n---\n\n".join([f"Source: {u['source_tier']}\n{u['text']}" for u in unit_texts])
 
         prompt = f"""Analyze these news article excerpts about the same event and identify distinct viewpoints/stances.
 Group them into perspectives (e.g., pro-government, opposition, neutral/international, local, skeptical).

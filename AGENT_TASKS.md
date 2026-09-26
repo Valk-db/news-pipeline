@@ -1,267 +1,26 @@
-# AGENT_TASKS.md v18
+# AGENT_TASKS.md v19
 
-Supersedes v17. v17's P1-A/B/C (adapter contract, DATA_SOURCES.md, Groq budget
-governor) are merged into `main` and confirmed clean (lint + targeted tests
-verified after merge). This revision is Phase 2 of `GRAND_PLAN.md` (§2):
-narrative & story intelligence — the claim matrix and the graph layer that
-lets a story from March link forward to one in September as the same ongoing
-narrative.
+Supersedes v18. **P2-A is done and merged** — commit `01985b3` on `main`
+("P2-A: Add claim, claim_evidence, entity_edges, topic_groups schema").
+Independently verified against a fresh clone (not just taken on your word):
 
-**P2-A must land first — everything else depends on the schema.** P2-B, P2-C,
-P2-D can proceed in parallel once P2-A is merged.
+- `ruff check .` — clean across the whole repo.
+- All 8 new symbols (`ClaimType`, `Claim`, `ClaimStance`, `ClaimEvidence`,
+  `EdgePredicate`, `EntityEdge`, `TopicGroup`, `StoryTopicGroup`) import
+  cleanly from `src.schema.models`.
+- `supabase/migrations/20260926000000_phase2_claims_and_graph.sql` matches
+  the ORM models column-for-column and is idempotent (`IF NOT EXISTS` guards
+  throughout).
+- Full `pytest tests/` run: 254 passed, 5 skipped. The 6 failures seen were
+  all in `test_ner.py` and are a sandbox-only gap (missing the
+  `en_core_web_sm` spacy model download), not a regression — worth a quick
+  check that CI's cache actually has that model, but it's not a P2-A defect.
 
-Every new table needs an idempotent migration in `supabase/migrations/`,
-following the existing convention in
-`supabase/migrations/20260925000000_globe_events_schema.sql` (`DO $$ ... IF
-NOT EXISTS` for enum types, `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT
-EXISTS`).
-
----
-
-## P2-A — Schema: `claims`, `claim_evidence`, `entity_edges`, `topic_groups`
-
-### Goal
-
-The storage layer for "who says what" per story, and the graph layer for
-linking stories across time. Postgres tables, not a separate graph DB —
-matches the existing Supabase/pgvector setup, no new infra.
-
-**Note on naming:** `FactCheckRecord` already exists in `src/schema/models.py`
-and also has a field called `claim` — that table is for verdicts from
-*external* fact-checkers (ClaimBuster, ClaimReview, manual). The new `claims`
-table below is for atomic assertions *this pipeline* extracts from its own
-units. They're related concepts but not the same table — don't merge them,
-and don't rename either one. A future phase can cross-reference a `Claim` row
-against `FactCheckRecord` by matching text/entities; out of scope here.
-
-### Additions to `src/schema/models.py`
-
-Add after `CorrectionRecord` (end of file):
-
-```python
-class ClaimType(str, PyEnum):
-    FACT = "fact"
-    ALLEGATION = "allegation"
-    PREDICTION = "prediction"
-    QUOTE = "quote"
-
-
-class Claim(Base):
-    """An atomic factual assertion extracted from a story's reporting units.
-
-    Distinct from FactCheckRecord (verdicts from external fact-checkers) --
-    this is the pipeline's own claim-extraction output, feeding the per-story
-    claim matrix described in GRAND_PLAN.md §2.
-    """
-    __tablename__ = "claims"
-    __table_args__ = (
-        Index("ix_claims_story_id", "story_id"),
-        Index("ix_claims_claim_type", "claim_type"),
-    )
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
-    text = Column(Text, nullable=False)
-    claim_type = Column(Enum(ClaimType), nullable=False, default=ClaimType.FACT)
-    first_seen_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-
-    story = relationship("Story")
-    evidence = relationship("ClaimEvidence", back_populates="claim", cascade="all, delete-orphan")
-
-
-class ClaimStance(str, PyEnum):
-    SUPPORTS = "supports"
-    DISPUTES = "disputes"
-    NEUTRAL = "neutral"
-
-
-class ClaimEvidence(Base):
-    """Edge: which reporting unit said what about which claim.
-
-    This is the "source A says X, source B says Y" matrix -- one row per
-    (claim, unit) pair.
-    """
-    __tablename__ = "claim_evidence"
-    __table_args__ = (
-        UniqueConstraint("claim_id", "unit_id", name="uq_claim_unit"),
-        Index("ix_claim_evidence_unit_id", "unit_id"),
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    claim_id = Column(UUID(as_uuid=True), ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
-    unit_id = Column(UUID(as_uuid=True), ForeignKey("reporting_units.id", ondelete="CASCADE"), nullable=False)
-    stance = Column(Enum(ClaimStance), nullable=False, default=ClaimStance.NEUTRAL)
-    confidence = Column(Integer, nullable=False, default=50)  # 0-100, matches FactCheckRecord's convention
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-
-    claim = relationship("Claim", back_populates="evidence")
-    unit = relationship("ReportingUnit")
-
-
-class EdgePredicate(str, PyEnum):
-    CORROBORATES = "corroborates"
-    DISPUTES = "disputes"
-    SAME_EVENT_AS = "same_event_as"
-    PART_OF_NARRATIVE = "part_of_narrative"
-    CAUSED_BY = "caused_by"
-
-
-class EntityEdge(Base):
-    """Generic typed edge between two things in the graph.
-
-    Polymorphic on purpose (subject_type/object_type + a UUID, no FK
-    constraint on subject_id/object_id) so this one table can hold
-    story-to-story narrative links now and claim-to-claim or entity-to-entity
-    edges later without a schema change. Phase 2 (P2-D) only populates
-    subject_type="story"/object_type="story" edges -- validate the type
-    strings at the application layer, not the database layer.
-    """
-    __tablename__ = "entity_edges"
-    __table_args__ = (
-        Index("ix_entity_edges_subject", "subject_type", "subject_id"),
-        Index("ix_entity_edges_object", "object_type", "object_id"),
-        Index("ix_entity_edges_predicate", "predicate"),
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    subject_type = Column(String(20), nullable=False)  # "story" for now; "claim"/"entity" later
-    subject_id = Column(UUID(as_uuid=True), nullable=False)
-    predicate = Column(Enum(EdgePredicate), nullable=False)
-    object_type = Column(String(20), nullable=False)
-    object_id = Column(UUID(as_uuid=True), nullable=False)
-    confidence = Column(Integer, nullable=False, default=50)  # 0-100
-    source_unit_id = Column(UUID(as_uuid=True), ForeignKey("reporting_units.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-
-
-class TopicGroup(Base):
-    """Hierarchical topic group, e.g. Geopolitics -> Middle East -> Israel-Gaza."""
-    __tablename__ = "topic_groups"
-    __table_args__ = (
-        UniqueConstraint("name", "parent_group_id", name="uq_topic_group_name_parent"),
-        Index("ix_topic_groups_parent", "parent_group_id"),
-    )
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(255), nullable=False)
-    description = Column(Text, nullable=True)
-    parent_group_id = Column(UUID(as_uuid=True), ForeignKey("topic_groups.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-
-    children = relationship("TopicGroup", backref=backref("parent", remote_side=[id]))
-
-
-class StoryTopicGroup(Base):
-    """Many-to-many: stories <-> topic_groups, with an assignment confidence."""
-    __tablename__ = "story_topic_groups"
-    __table_args__ = (UniqueConstraint("story_id", "topic_group_id", name="uq_story_topic_group"),)
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
-    topic_group_id = Column(UUID(as_uuid=True), ForeignKey("topic_groups.id", ondelete="CASCADE"), nullable=False)
-    confidence = Column(Integer, nullable=True)  # 0-100, null if manually assigned
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-```
-
-`backref` needs adding to the existing `from sqlalchemy.orm import declarative_base, relationship` import line at the top of `models.py` -- change to `from sqlalchemy.orm import declarative_base, relationship, backref`.
-
-### New migration: `supabase/migrations/20260926000000_phase2_claims_and_graph.sql`
-
-```sql
--- Phase 2: claims, claim evidence, entity edges, topic groups
--- Idempotent migration -- see GRAND_PLAN.md §2
-
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'claim_type') THEN
-        CREATE TYPE claim_type AS ENUM ('fact', 'allegation', 'prediction', 'quote');
-    END IF;
-END $$;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'claim_stance') THEN
-        CREATE TYPE claim_stance AS ENUM ('supports', 'disputes', 'neutral');
-    END IF;
-END $$;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'edge_predicate') THEN
-        CREATE TYPE edge_predicate AS ENUM (
-            'corroborates', 'disputes', 'same_event_as', 'part_of_narrative', 'caused_by'
-        );
-    END IF;
-END $$;
-
-CREATE TABLE IF NOT EXISTS claims (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
-    text TEXT NOT NULL,
-    claim_type claim_type NOT NULL DEFAULT 'fact',
-    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS claim_evidence (
-    id SERIAL PRIMARY KEY,
-    claim_id UUID NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
-    unit_id UUID NOT NULL REFERENCES reporting_units(id) ON DELETE CASCADE,
-    stance claim_stance NOT NULL DEFAULT 'neutral',
-    confidence INTEGER NOT NULL DEFAULT 50,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_claim_unit UNIQUE (claim_id, unit_id)
-);
-
-CREATE TABLE IF NOT EXISTS entity_edges (
-    id SERIAL PRIMARY KEY,
-    subject_type VARCHAR(20) NOT NULL,
-    subject_id UUID NOT NULL,
-    predicate edge_predicate NOT NULL,
-    object_type VARCHAR(20) NOT NULL,
-    object_id UUID NOT NULL,
-    confidence INTEGER NOT NULL DEFAULT 50,
-    source_unit_id UUID REFERENCES reporting_units(id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS topic_groups (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(255) NOT NULL,
-    description TEXT,
-    parent_group_id UUID REFERENCES topic_groups(id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_topic_group_name_parent UNIQUE (name, parent_group_id)
-);
-
-CREATE TABLE IF NOT EXISTS story_topic_groups (
-    id SERIAL PRIMARY KEY,
-    story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
-    topic_group_id UUID NOT NULL REFERENCES topic_groups(id) ON DELETE CASCADE,
-    confidence INTEGER,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_story_topic_group UNIQUE (story_id, topic_group_id)
-);
-
-CREATE INDEX IF NOT EXISTS ix_claims_story_id ON claims(story_id);
-CREATE INDEX IF NOT EXISTS ix_claims_claim_type ON claims(claim_type);
-CREATE INDEX IF NOT EXISTS ix_claim_evidence_unit_id ON claim_evidence(unit_id);
-CREATE INDEX IF NOT EXISTS ix_entity_edges_subject ON entity_edges(subject_type, subject_id);
-CREATE INDEX IF NOT EXISTS ix_entity_edges_object ON entity_edges(object_type, object_id);
-CREATE INDEX IF NOT EXISTS ix_entity_edges_predicate ON entity_edges(predicate);
-CREATE INDEX IF NOT EXISTS ix_topic_groups_parent ON topic_groups(parent_group_id);
-```
-
-### Acceptance
-
-`scripts/check_schema.py` (if it diffs models against live schema) passes, or
-if it doesn't cover new tables, confirm manually: run the migration against a
-throwaway/local Postgres, then confirm `Base.metadata.create_all` in
-`init_db()` doesn't try to recreate tables that already exist (it shouldn't --
-SQLAlchemy's `create_all` is already idempotent against existing tables, this
-is just confirming the migration and the ORM models agree on column names and
-types). No existing table's columns are touched by this migration.
+**Merge policy (standing instruction, applies to every task below):** once
+your own checks pass for a task — `ruff check .` clean, and that task's
+targeted tests green — merge it yourself. Separate PR per task (P2-B, P2-C,
+P2-D), same convention P2-A used. Don't stop and wait for review before
+merging; verified-passing work merges itself.
 
 ---
 
@@ -540,10 +299,12 @@ overlap gets no edge; a story doesn't get edged to itself.
 
 ## Order of work
 
-1. P2-A first, always — nothing else compiles without the schema.
-2. P2-B, P2-C, P2-D in parallel after P2-A merges.
+1. P2-A is done — skip it.
+2. P2-B, P2-C, P2-D can proceed in parallel (or sequentially in one branch,
+   your call) now that the schema is live on `main`.
 3. Run the full pytest suite after each task. Land as separate, revertable
-   PRs, same as Phase 1.
+   PRs, same as Phase 1 and P2-A — and merge each one yourself once its
+   checks are green (see the merge policy note at the top).
 4. Before starting, read `src/enrichment/pipeline.py`'s `enrich_recent_stories`
    and `src/verification/stories.py`'s `build_stories` in full — both are
    referenced above as "reuse this pattern" and neither is reproduced in full
