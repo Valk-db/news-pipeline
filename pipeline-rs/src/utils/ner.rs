@@ -243,31 +243,30 @@ impl EntityCanonicalizer {
 
         // Not found - create new canonical entity
         let canonical_id = Uuid::new_v4();
-        let canonical_id_str = canonical_id.to_string();
 
         // Create canonical entity
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO canonical_entities (id, canonical_name, entity_type)
             VALUES ($1, $2, $3)
-            "#,
-            canonical_id,
-            surface_form,
-            entity_type
+            "#
         )
+        .bind(canonical_id)
+        .bind(surface_form)
+        .bind(entity_type)
         .execute(&*self.pool)
         .await?;
 
         // Create initial alias (the surface form itself)
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO entity_aliases (canonical_entity_id, alias)
             VALUES ($1, $2)
             ON CONFLICT (canonical_entity_id, alias) DO NOTHING
-            "#,
-            canonical_id,
-            surface_form
+            "#
         )
+        .bind(canonical_id)
+        .bind(surface_form)
         .execute(&*self.pool)
         .await?;
 
@@ -276,15 +275,15 @@ impl EntityCanonicalizer {
             let normalized_alias = Self::normalize_text(&alias_text, entity_type);
             let normalized_main = Self::normalize_text(surface_form, entity_type);
             if normalized_alias != normalized_main {
-                sqlx::query!(
+                sqlx::query(
                     r#"
                     INSERT INTO entity_aliases (canonical_entity_id, alias)
                     VALUES ($1, $2)
                     ON CONFLICT (canonical_entity_id, alias) DO NOTHING
-                    "#,
-                    canonical_id,
-                    alias_text
+                    "#
                 )
+                .bind(canonical_id)
+                .bind(alias_text.clone())
                 .execute(&*self.pool)
                 .await?;
 
@@ -293,8 +292,8 @@ impl EntityCanonicalizer {
                 cache.insert(
                     normalized_alias,
                     CanonicalMention {
-                        surface_form: alias_text,
-                        canonical_id: canonical_id_str.clone(),
+                        surface_form: alias_text.clone(),
+                        canonical_id: canonical_id.to_string(),
                         canonical_name: surface_form.to_string(),
                         entity_type: entity_type.to_string(),
                         confidence: 0.9,
@@ -307,7 +306,7 @@ impl EntityCanonicalizer {
         let normalized = Self::normalize_text(surface_form, entity_type);
         let mention = CanonicalMention {
             surface_form: surface_form.to_string(),
-            canonical_id: canonical_id_str,
+            canonical_id: canonical_id.to_string(),
             canonical_name: surface_form.to_string(),
             entity_type: entity_type.to_string(),
             confidence: 1.0,
