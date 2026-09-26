@@ -8,7 +8,7 @@ from src.utils.ner import (
     resolve_entities_to_canonical,
     canonical_jaccard,
 )
-from src.verification.tiers import recompute_story_counters, apply_tier1_gate
+from src.verification.tiers import recompute_story_counters, apply_dynamic_gate
 from datetime import datetime, timezone, timedelta
 import uuid
 import logging
@@ -271,10 +271,10 @@ Only return the JSON object, no explanation."""
                         viewpoint_clusters[story.id] = []
                     viewpoint_clusters[story.id].append(viewpoint_story.id)
 
-            # Apply tier-1 gate to viewpoint sub-stories to prevent gate bypass
+            # Apply dynamic gate to viewpoint sub-stories to prevent gate bypass
             if viewpoint_clusters.get(story.id):
                 viewpoint_story_ids = [sid for sid in viewpoint_clusters[story.id]]
-                await apply_tier1_gate(session, story_ids=viewpoint_story_ids)
+                await apply_dynamic_gate(session, story_ids=viewpoint_story_ids)
 
         except Exception as e:
             logger.warning(f"Viewpoint clustering failed for story {story.id}: {e}", exc_info=True)

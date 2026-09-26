@@ -109,7 +109,7 @@ class TestRunIngestionDedup:
              patch("src.ingestion.run.log_status"), \
              patch("src.ingestion.run.build_reporting_units", return_value=0), \
              patch("src.ingestion.run.build_stories", return_value=[]), \
-             patch("src.ingestion.run.apply_tier1_gate", return_value={"queued": 0, "blocked": 0}):
+             patch("src.ingestion.run.apply_dynamic_gate", return_value={"queued": 0, "blocked": 0}):
 
             results = await run_ingestion(dry_run=True)
 
@@ -154,7 +154,7 @@ class TestRunIngestionDedup:
              patch("src.ingestion.run.log_status"), \
              patch("src.ingestion.run.build_reporting_units", return_value=0), \
              patch("src.ingestion.run.build_stories", return_value=[]), \
-             patch("src.ingestion.run.apply_tier1_gate", return_value={"queued": 0, "blocked": 0}):
+             patch("src.ingestion.run.apply_dynamic_gate", return_value={"queued": 0, "blocked": 0}):
 
             results = await run_ingestion(dry_run=True)
             assert results["phases"]["ingestion"]["total_new"] == 0
@@ -197,7 +197,7 @@ class TestRunIngestionDedup:
              patch("src.ingestion.run.log_status"), \
              patch("src.ingestion.run.build_reporting_units", return_value=0), \
              patch("src.ingestion.run.build_stories", return_value=[]), \
-             patch("src.ingestion.run.apply_tier1_gate", return_value={"queued": 0, "blocked": 0}):
+             patch("src.ingestion.run.apply_dynamic_gate", return_value={"queued": 0, "blocked": 0}):
 
             results = await run_ingestion(dry_run=True)
             # Different owner, same wire content — must NOT be deduped away, or the
@@ -241,7 +241,7 @@ class TestRunIngestionDedup:
              patch("src.ingestion.run.log_status"), \
              patch("src.ingestion.run.build_reporting_units", return_value=0), \
              patch("src.ingestion.run.build_stories", return_value=[]), \
-             patch("src.ingestion.run.apply_tier1_gate", return_value={"queued": 0, "blocked": 0}):
+             patch("src.ingestion.run.apply_dynamic_gate", return_value={"queued": 0, "blocked": 0}):
 
             await run_ingestion(dry_run=True)
 
@@ -300,7 +300,7 @@ class TestRunIngestionDedup:
              patch("src.ingestion.run.log_status"), \
              patch("src.ingestion.run.build_reporting_units", return_value=0), \
              patch("src.ingestion.run.build_stories", return_value=[]), \
-             patch("src.ingestion.run.apply_tier1_gate", return_value={"queued": 0, "blocked": 0}):
+             patch("src.ingestion.run.apply_dynamic_gate", return_value={"queued": 0, "blocked": 0}):
 
             results = await run_ingestion(dry_run=True)
             ingestion = results["phases"]["ingestion"]

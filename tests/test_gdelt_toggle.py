@@ -16,7 +16,7 @@ class TestGdeltToggle:
                 with patch("src.ingestion.reddit.ingest_reddit", new_callable=AsyncMock) as mock_reddit:
                     with patch("src.ingestion.run.build_reporting_units", new_callable=AsyncMock):
                         with patch("src.ingestion.run.build_stories", new_callable=AsyncMock):
-                            with patch("src.ingestion.run.apply_tier1_gate", new_callable=AsyncMock):
+                            with patch("src.ingestion.run.apply_dynamic_gate", new_callable=AsyncMock):
                                 with patch("src.ingestion.run.get_settings") as mock_settings:
                                     settings = MagicMock()
                                     settings.gdelt_enabled = False
@@ -49,7 +49,7 @@ class TestGdeltToggle:
                 with patch("src.ingestion.reddit.ingest_reddit", new_callable=AsyncMock) as mock_reddit:
                     with patch("src.ingestion.run.build_reporting_units", new_callable=AsyncMock):
                         with patch("src.ingestion.run.build_stories", new_callable=AsyncMock):
-                            with patch("src.ingestion.run.apply_tier1_gate", new_callable=AsyncMock):
+                            with patch("src.ingestion.run.apply_dynamic_gate", new_callable=AsyncMock):
                                 with patch("src.ingestion.run.get_settings") as mock_settings:
                                     settings = MagicMock()
                                     settings.gdelt_enabled = True

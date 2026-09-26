@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import (
     ReportingUnit, Story, StoryUnitLink, SourceTier,
-    Claim, ClaimType, CanonicalEntity
+    Claim, ClaimType, CanonicalEntity, StatusLog
 )
 from typing import List, Optional, Tuple
 from src.shared.config import get_settings
@@ -515,14 +515,89 @@ async def apply_dynamic_gate(
 ) -> dict:
     """Apply the dynamic admission score gate.
 
-    If dynamic_gate_enabled is False, delegates to apply_tier1_gate.
+    If dynamic_gate_enabled is False, delegates to apply_tier1_gate
+    but still computes and logs admission scores for shadow-mode comparison.
     If enabled, runs compute_admission_score and uses score threshold.
     """
     settings = get_settings()
 
+    # Always fetch stories and recompute counters first (needed for both modes)
+    if story_ids is not None:
+        stmt = select(Story).where(Story.id.in_(story_ids))
+    else:
+        stmt = select(Story).where(Story.status == Story.Status.PENDING)
+    result = await session.execute(stmt)
+    stories = result.scalars().all()
+
+    story_id_list = [s.id for s in stories]
+    if story_id_list:
+        await recompute_story_counters(session, story_id_list)
+
+    # Batch fetch all units for all stories
+    story_units: defaultdict[uuid.UUID, list] = defaultdict(list)
+    if story_id_list:
+        stmt = (
+            select(Story, ReportingUnit)
+            .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
+            .join(Story, Story.id == StoryUnitLink.story_id)
+            .where(Story.id.in_(story_id_list))
+        )
+        result = await session.execute(stmt)
+        for story, unit in result.all():
+            story_units[story.id].append(unit)
+
     if not settings.dynamic_gate_enabled:
-        # Shadow mode - just run old gate
-        return await apply_tier1_gate(session, story_ids)
+        # Shadow mode: run apply_tier1_gate for actual decision, but also compute
+        # admission scores and log comparison for calibration
+        gate_result = await apply_tier1_gate(session, story_ids)
+
+        # Compute admission scores for comparison logging
+        for story in stories:
+            tier1_unit_count = story.tier1_unit_count
+            distinct_owners = story.distinct_owners
+            score, breakdown = await compute_admission_score(
+                session, story, tier1_unit_count, distinct_owners
+            )
+
+            # Determine boolean gate decision for this story
+            units = story_units.get(story.id, [])
+            tier_owner_pairs = []
+            for u in units:
+                source_tiers = u.source_tiers or {}
+                for tier, count in source_tiers.items():
+                    if tier == "tier1":
+                        tier1_owner_groups = u.tier1_owner_groups or {}
+                        for owner, owner_count in tier1_owner_groups.items():
+                            for _ in range(owner_count):
+                                tier_owner_pairs.append((tier, owner))
+
+            bool_passes, bool_reason = evaluate_tier1_gate(tier_owner_pairs)
+            score_passes = breakdown["passes"]
+
+            # Log comparison to StatusLog for queryable calibration data
+            comparison = {
+                "story_id": str(story.id),
+                "score": score,
+                "breakdown": breakdown,
+                "boolean_gate": {
+                    "passes": bool_passes,
+                    "reason": bool_reason,
+                },
+                "dynamic_gate": {
+                    "passes": score_passes,
+                    "threshold": breakdown["pass_threshold"],
+                },
+                "agreement": bool_passes == score_passes,
+            }
+            log = StatusLog(
+                phase="gate_shadow",
+                status="ok",
+                details=comparison,
+            )
+            session.add(log)
+
+        await session.commit()
+        return gate_result
 
     # Build query - if story_ids is not None, get those (any status), else get PENDING
     if story_ids is not None:

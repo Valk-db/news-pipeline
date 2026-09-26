@@ -330,43 +330,88 @@ async def test_compute_admission_score_virality(mock_session, sample_story_viral
 
 @pytest.mark.asyncio
 async def test_apply_dynamic_gate_shadow_mode(mock_session, sample_story):
-    """Test that apply_dynamic_gate delegates to apply_tier1_gate when disabled."""
+    """Test that apply_dynamic_gate delegates to apply_tier1_gate when disabled,
+    and logs shadow-mode comparison to StatusLog."""
     settings = get_settings()
     original = settings.dynamic_gate_enabled
     settings.dynamic_gate_enabled = False
 
     try:
-        # Call 1: Story query in apply_tier1_gate (select Story) -> scalars().all()
+        # apply_dynamic_gate calls (shadow mode):
+        # 1. select Story -> scalars().all()
         story_result = make_result_mock([sample_story])
-
-        # Call 2: recompute_story_counters first query (select StoryUnitLink, ReportingUnit) -> .all() returns tuples
+        # 2. recompute_story_counters: select StoryUnitLink, ReportingUnit -> .all() tuples
         counter_query1_result = make_result_mock([
             (sample_story.id, {"tier1": 1}, {"BBC": 1}),
             (sample_story.id, {"tier1": 1}, {"Guardian": 1}),
         ])
-
-        # Call 3: recompute_story_counters second query (select Story) -> scalars().all() returns Story objects
+        # 3. recompute_story_counters: select Story -> scalars().all() Story objects
         counter_query2_result = make_result_mock([sample_story])
-
-        # Call 4: Batched units query (select Story, ReportingUnit) -> .all() returns tuples
-        unit = ReportingUnit(
+        # 4. batch fetch units: select Story, ReportingUnit -> .all() tuples
+        # Need 2 tier-1 units from different owners (BBC and Guardian)
+        unit1 = ReportingUnit(
             id=uuid.uuid4(),
             source_tiers={"tier1": 1},
             tier1_owner_groups={"BBC": 1},
         )
-        batched_result = make_result_mock([(sample_story, unit)])
+        unit2 = ReportingUnit(
+            id=uuid.uuid4(),
+            source_tiers={"tier1": 1},
+            tier1_owner_groups={"Guardian": 1},
+        )
+        batched_result = make_result_mock([(sample_story, unit1), (sample_story, unit2)])
+
+        # apply_tier1_gate calls (inside shadow mode):
+        # 5. select Story -> scalars().all()
+        tier1_story_result = make_result_mock([sample_story])
+        # 6. recompute_story_counters: select StoryUnitLink, ReportingUnit -> .all() tuples
+        tier1_counter1_result = make_result_mock([
+            (sample_story.id, {"tier1": 1}, {"BBC": 1}),
+            (sample_story.id, {"tier1": 1}, {"Guardian": 1}),
+        ])
+        # 7. recompute_story_counters: select Story -> scalars().all() Story objects
+        tier1_counter2_result = make_result_mock([sample_story])
+        # 8. batch fetch units: select Story, ReportingUnit -> .all() tuples
+        tier1_batched_result = make_result_mock([(sample_story, unit1), (sample_story, unit2)])
+
+        # compute_admission_score calls (inside shadow mode, for logging):
+        # 9. compute_virality_signal: select ReportingUnit -> scalars().all() []
+        viral_result = make_result_mock([])
+        # 10. compute_harm_level claim: scalar_one_or_none -> None
+        claim_result = make_scalar_mock(None)
+        # 11. compute_harm_level entity: scalar_one_or_none -> None
+        entity_result = make_scalar_mock(None)
 
         mock_session.execute.side_effect = [
-            story_result,
-            counter_query1_result,
-            counter_query2_result,
-            batched_result,
+            story_result,           # 1
+            counter_query1_result,  # 2
+            counter_query2_result,  # 3
+            batched_result,         # 4
+            tier1_story_result,     # 5
+            tier1_counter1_result,  # 6
+            tier1_counter2_result,  # 7
+            tier1_batched_result,   # 8
+            viral_result,           # 9
+            claim_result,           # 10
+            entity_result,          # 11
         ]
         mock_session.commit = AsyncMock()
 
         result = await apply_dynamic_gate(mock_session, [sample_story.id])
 
-        assert "queued" in result or "blocked" in result
+        # Should return same queued/blocked as apply_tier1_gate
+        assert "queued" in result
+        assert "blocked" in result
+        # Story should have passed (2 tier-1 units from BBC and Guardian)
+        assert result["queued"] == 1
+        assert result["blocked"] == 0
+
+        # Should have logged to StatusLog (at least one add call for shadow comparison)
+        assert mock_session.add.called
+        # Check that a StatusLog was added with phase="gate_shadow"
+        status_log_calls = [call for call in mock_session.add.call_args_list
+                           if hasattr(call[0][0], '__tablename__') and call[0][0].__tablename__ == 'status_log']
+        assert len(status_log_calls) >= 1
     finally:
         settings.dynamic_gate_enabled = original
 

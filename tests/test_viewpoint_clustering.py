@@ -150,7 +150,7 @@ async def test_cluster_viewpoints_basic(mock_session, sample_story, sample_units
 
     # Mock LLM client - use the real interface
     with patch('src.shared.llm.get_llm_client') as mock_get_llm, \
-         patch('src.verification.stories.apply_tier1_gate') as mock_apply_gate:
+         patch('src.verification.stories.apply_dynamic_gate') as mock_apply_gate:
         mock_llm = AsyncMock()
         mock_get_llm.return_value = mock_llm
         mock_apply_gate.return_value = {"queued": 0, "blocked": 0}
@@ -305,9 +305,9 @@ async def test_viewpoint_substories_blocked_by_tier1_gate(mock_session, sample_u
     mock_session.add = MagicMock()
     mock_session.refresh = AsyncMock()
 
-    # Mock LLM client and apply_tier1_gate
+    # Mock LLM client and apply_dynamic_gate
     with patch('src.shared.llm.get_llm_client') as mock_get_llm, \
-         patch('src.verification.stories.apply_tier1_gate') as mock_apply_gate:
+         patch('src.verification.stories.apply_dynamic_gate') as mock_apply_gate:
         mock_llm = AsyncMock()
         mock_get_llm.return_value = mock_llm
 

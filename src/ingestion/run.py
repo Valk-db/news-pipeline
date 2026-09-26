@@ -11,7 +11,7 @@ from src.ingestion.adapters.gdelt_adapter import GDELTAdapter
 from src.ingestion.adapters.reddit_adapter import RedditAdapter
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
-from src.verification.tiers import apply_tier1_gate
+from src.verification.tiers import apply_dynamic_gate
 from src.shared.database import get_session, init_db
 from src.schema.models import RawArticle, StatusLog
 from src.shared.config import get_settings
@@ -247,9 +247,9 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
         results["phases"]["stories"] = {"created_or_modified": stories_created, "modified_story_ids": [str(sid) for sid in modified_story_ids]}
         await log_status(session, "group", "ok", {"stories_created_or_modified": stories_created})
 
-        # Phase 4: Apply tier-1 gate (re-evaluate modified stories)
-        print("Phase 4: Applying tier-1 gate...")
-        gated = await apply_tier1_gate(session, story_ids=modified_story_ids)
+        # Phase 4: Apply dynamic gate (re-evaluate modified stories)
+        print("Phase 4: Applying dynamic gate...")
+        gated = await apply_dynamic_gate(session, story_ids=modified_story_ids)
         print(f"  Stories queued: {gated['queued']}, blocked: {gated['blocked']}")
         results["phases"]["gate"] = gated
         await log_status(session, "gate", "ok", gated)
