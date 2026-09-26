@@ -3,7 +3,7 @@
 import logging
 from typing import Optional, List, Dict, Any, Tuple
 from src.shared.config import get_settings
-from src.shared.llm_budget import RequestBudget, BudgetExhausted, BudgetStatus
+from src.shared.llm_budget import RequestBudget, BudgetExhausted
 from tenacity import retry, stop_after_attempt, wait_exponential
 from httpx import HTTPStatusError, TimeoutException, ConnectError
 import json

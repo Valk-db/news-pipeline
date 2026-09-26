@@ -2,11 +2,10 @@
 
 import asyncio
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.shared.llm_budget import RequestBudget, BudgetExhausted, BudgetStatus
+from src.shared.llm_budget import RequestBudget, BudgetExhausted
 
 
 class TestRequestBudget:
