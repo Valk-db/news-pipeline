@@ -7,7 +7,7 @@ tier1_critical_down — keep that computation in run.py after calling
 health_check(), don't bury it inside the adapter.
 """
 from src.ingestion.adapter import SourceHealth
-from src.ingestion.gdelt import ingest_gdelt
+from src.ingestion import gdelt
 
 
 class GDELTAdapter:
@@ -21,7 +21,7 @@ class GDELTAdapter:
 
     async def fetch(self) -> list:
         """Fetch articles from GDELT."""
-        articles, health = await ingest_gdelt(hours_back=24, max_per_domain=50)
+        articles, health = await gdelt.ingest_gdelt(hours_back=24, max_per_domain=50)
         self._last_articles = articles
         self._last_health = health
         return articles

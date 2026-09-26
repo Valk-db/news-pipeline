@@ -177,7 +177,14 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
         print(f"  Content duplicates skipped: {content_dup}")
 
         # Get GDELT health from adapter for tier1_critical_down check
-        gdelt_health = adapter_health.get("gdelt", {"succeeded": [], "failed": [], "skipped": []})
+        from src.ingestion.adapter import SourceHealth
+        gdelt_health = adapter_health.get("gdelt", SourceHealth(
+            status="down",
+            detail="GDELT adapter not run",
+            succeeded=[],
+            failed=[],
+            skipped=[],
+        ))
 
         # Check for tier-1 critical GDELT domains down
         tier1_critical_down = sorted(

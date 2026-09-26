@@ -35,8 +35,11 @@ class TestGdeltToggle:
 
                                     # GDELT should not be called
                                     mock_gdelt.assert_not_called()
-                                    # Results should show disabled
-                                    assert results["phases"]["ingestion"]["gdelt_health"]["disabled"] is True
+                                    # Results should show health from fallback (GDELT adapter not run)
+                                    gdelt_health = results["phases"]["ingestion"]["gdelt_health"]
+                                    assert gdelt_health["succeeded"] == []
+                                    assert gdelt_health["failed"] == []
+                                    assert gdelt_health["skipped"] == []
 
     @pytest.mark.asyncio
     async def test_gdelt_enabled_called_once(self):
@@ -66,5 +69,8 @@ class TestGdeltToggle:
 
                                     # GDELT should be called exactly once
                                     mock_gdelt.assert_called_once()
-                                    # Results should show health (not disabled)
-                                    assert "disabled" not in results["phases"]["ingestion"]["gdelt_health"]
+                                    # Results should show health from GDELT adapter
+                                    gdelt_health = results["phases"]["ingestion"]["gdelt_health"]
+                                    assert gdelt_health["succeeded"] == []
+                                    assert gdelt_health["failed"] == []
+                                    assert gdelt_health["skipped"] == []

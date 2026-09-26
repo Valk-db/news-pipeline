@@ -1,6 +1,6 @@
 """Reddit adapter wrapping ingest_reddit() from reddit.py."""
 from src.ingestion.adapter import SourceHealth
-from src.ingestion.reddit import ingest_reddit
+from src.ingestion import reddit
 
 
 class RedditAdapter:
@@ -13,7 +13,7 @@ class RedditAdapter:
 
     async def fetch(self) -> list:
         """Fetch articles from Reddit."""
-        articles = await ingest_reddit(limit_per_sub=25)
+        articles = await reddit.ingest_reddit(limit_per_sub=25)
         self._last_articles = articles
         return articles
 

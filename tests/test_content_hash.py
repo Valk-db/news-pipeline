@@ -189,9 +189,9 @@ class TestRunIngestionDedup:
             content_hash=content_hash,
         )
 
-        with patch("src.ingestion.run.ingest_rss_feeds", return_value=[]), \
-             patch("src.ingestion.run.ingest_gdelt", return_value=([article], {"succeeded": ["reuters.com"], "failed": [], "skipped": []})), \
-             patch("src.ingestion.run.ingest_reddit", return_value=[]), \
+        with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[]), \
+             patch("src.ingestion.gdelt.ingest_gdelt", return_value=([article], {"succeeded": ["reuters.com"], "failed": [], "skipped": []})), \
+             patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
              patch("src.ingestion.run.init_db"), \
              patch("src.ingestion.run.get_session", return_value=mock_session), \
              patch("src.ingestion.run.log_status"), \
@@ -233,9 +233,9 @@ class TestRunIngestionDedup:
         mock_session.execute = AsyncMock(side_effect=[url_hash_result, content_hash_result])
         mock_session.commit = AsyncMock()
 
-        with patch("src.ingestion.run.ingest_rss_feeds", return_value=[article]), \
-             patch("src.ingestion.run.ingest_gdelt", return_value=([], {"succeeded": [], "failed": [], "skipped": []})), \
-             patch("src.ingestion.run.ingest_reddit", return_value=[]), \
+        with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[article]), \
+             patch("src.ingestion.gdelt.ingest_gdelt", return_value=([], {"succeeded": [], "failed": [], "skipped": []})), \
+             patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
              patch("src.ingestion.run.init_db"), \
              patch("src.ingestion.run.get_session", return_value=mock_session), \
              patch("src.ingestion.run.log_status"), \

@@ -6,7 +6,7 @@ get_enabled_sources_by_tier() in source_registry.py exactly as run.py
 does today.
 """
 from src.ingestion.adapter import SourceHealth
-from src.ingestion.rss import ingest_rss_feeds
+from src.ingestion import rss
 from src.ingestion.source_registry import get_enabled_sources_by_tier, SourceTier
 
 
@@ -23,7 +23,7 @@ class RssAdapter:
     async def fetch(self) -> list:
         """Fetch articles from RSS feeds for the configured tier."""
         sources = get_enabled_sources_by_tier(self.tier)
-        articles = await ingest_rss_feeds(max_per_feed=50, sources=sources)
+        articles = await rss.ingest_rss_feeds(max_per_feed=50, sources=sources)
         self._last_fetch_articles = articles
         # Track per-domain success/failure from stats
         from src.utils.ingest_stats import STATS
