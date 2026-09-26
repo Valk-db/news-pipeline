@@ -3,6 +3,7 @@
 import logging
 from typing import Optional, List, Dict, Any, Tuple
 from src.shared.config import get_settings
+from src.shared.llm_budget import RequestBudget, BudgetExhausted, BudgetStatus
 from tenacity import retry, stop_after_attempt, wait_exponential
 from httpx import HTTPStatusError, TimeoutException, ConnectError
 import json
@@ -95,6 +96,7 @@ class LLMClient:
         self.settings = get_settings()
         self.groq_client: Optional[AsyncGroq] = None
         self.cerebras_client: Optional[AsyncCerebras] = None
+        self._budget = RequestBudget(self.settings.groq_daily_request_budget)
         self._init_clients()
 
     def _init_clients(self):
@@ -127,16 +129,21 @@ class LLMClient:
         temperature: float = 0.3,
         response_format: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        """Make a chat completion request to Groq."""
+        """Make a chat completion request to Groq, routed through budget + coalescing."""
         if not self.groq_client:
             raise LLMError("Groq client not initialized")
-        kwargs = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
-        if response_format:
-            kwargs["response_format"] = response_format
-        response = await self.groq_client.chat.completions.create(**kwargs)
-        return {
-            "choices": [{"message": {"content": response.choices[0].message.content}}]
-        }
+
+        async def _do_groq_call():
+            kwargs = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
+            if response_format:
+                kwargs["response_format"] = response_format
+            response = await self.groq_client.chat.completions.create(**kwargs)
+            return {
+                "choices": [{"message": {"content": response.choices[0].message.content}}]
+            }
+
+        # Route through budget + coalescing
+        return await self._budget.run(_do_groq_call, messages, model)
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -224,6 +231,8 @@ OUTPUT: Just the post text, nothing else."""
                 if is_valid:
                     return caption
                 logger.warning("Groq caption validation failed: %s", error)
+            except BudgetExhausted as e:
+                logger.warning("Groq budget exhausted: %s", e)
             except Exception as e:
                 logger.warning("Groq failed: %s", e)
 
@@ -244,6 +253,10 @@ OUTPUT: Just the post text, nothing else."""
             except Exception as e:
                 logger.warning("Cerebras failed: %s", e)
 
+        # Budget exhausted and no Cerebras fallback - record skip
+        if not self.cerebras_client:
+            from src.utils.ingest_stats import STATS
+            STATS.record("groq", "budget_skipped")
         return None
 
     async def classify_relevance(
@@ -281,6 +294,8 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                 content = result["choices"][0]["message"]["content"]
                 data = self._parse_json_response(content)
                 return float(data.get("score", 0))
+            except BudgetExhausted as e:
+                logger.warning("Groq budget exhausted: %s", e)
             except (json.JSONDecodeError, KeyError, ValueError) as e:
                 logger.warning("classify_relevance Groq parse failed: %s", e)
 
@@ -296,9 +311,13 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                 content = result["choices"][0]["message"]["content"]
                 data = self._parse_json_response(content)
                 return float(data.get("score", 0))
-            except (json.JSONDecodeError, KeyError, ValueError) as e:
-                logger.warning("classify_relevance Cerebras parse failed: %s", e)
+            except Exception as e:
+                logger.warning("classify_relevance Cerebras failed: %s", e)
 
+        # Budget exhausted and no Cerebras fallback - record skip
+        if not self.cerebras_client:
+            from src.utils.ingest_stats import STATS
+            STATS.record("groq", "budget_skipped")
         return 0.5  # Default neutral
 
     def _parse_json_response(self, content: str) -> Dict[str, Any]:
@@ -337,6 +356,8 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     max_tokens=max_tokens,
                     temperature=temperature,
                 )
+            except BudgetExhausted as e:
+                logger.warning(f"Groq budget exhausted: {e}")
             except Exception as e:
                 logger.warning(f"Groq chat completion failed: {e}")
 

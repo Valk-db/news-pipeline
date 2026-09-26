@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     gdelt_max_retries: int = 7
     gdelt_base_delay: float = 10.0
 
+    # LLM budget (sized under provider's published cap for headroom)
+    groq_daily_request_budget: int = 900
+
     # Tiered ingestion schedules (cron expressions)
     tier1_schedule: str = "0 * * * *"      # Hourly
     tier2_schedule: str = "0 */4 * * *"    # Every 4 hours

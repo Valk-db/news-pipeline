@@ -11,9 +11,9 @@ class TestGdeltToggle:
     @pytest.mark.asyncio
     async def test_gdelt_disabled_never_called(self):
         """With gdelt_enabled=False, ingest_gdelt is never called."""
-        with patch("src.ingestion.run.ingest_gdelt", new_callable=AsyncMock) as mock_gdelt:
-            with patch("src.ingestion.run.ingest_rss_feeds", new_callable=AsyncMock) as mock_rss:
-                with patch("src.ingestion.run.ingest_reddit", new_callable=AsyncMock) as mock_reddit:
+        with patch("src.ingestion.gdelt.ingest_gdelt", new_callable=AsyncMock) as mock_gdelt:
+            with patch("src.ingestion.rss.ingest_rss_feeds", new_callable=AsyncMock) as mock_rss:
+                with patch("src.ingestion.reddit.ingest_reddit", new_callable=AsyncMock) as mock_reddit:
                     with patch("src.ingestion.run.build_reporting_units", new_callable=AsyncMock):
                         with patch("src.ingestion.run.build_stories", new_callable=AsyncMock):
                             with patch("src.ingestion.run.apply_tier1_gate", new_callable=AsyncMock):
@@ -41,9 +41,9 @@ class TestGdeltToggle:
     @pytest.mark.asyncio
     async def test_gdelt_enabled_called_once(self):
         """With gdelt_enabled=True, ingest_gdelt is called once."""
-        with patch("src.ingestion.run.ingest_gdelt", new_callable=AsyncMock) as mock_gdelt:
-            with patch("src.ingestion.run.ingest_rss_feeds", new_callable=AsyncMock) as mock_rss:
-                with patch("src.ingestion.run.ingest_reddit", new_callable=AsyncMock) as mock_reddit:
+        with patch("src.ingestion.gdelt.ingest_gdelt", new_callable=AsyncMock) as mock_gdelt:
+            with patch("src.ingestion.rss.ingest_rss_feeds", new_callable=AsyncMock) as mock_rss:
+                with patch("src.ingestion.reddit.ingest_reddit", new_callable=AsyncMock) as mock_reddit:
                     with patch("src.ingestion.run.build_reporting_units", new_callable=AsyncMock):
                         with patch("src.ingestion.run.build_stories", new_callable=AsyncMock):
                             with patch("src.ingestion.run.apply_tier1_gate", new_callable=AsyncMock):

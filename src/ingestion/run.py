@@ -4,10 +4,11 @@ import asyncio
 import sys
 import os
 from datetime import datetime, timezone
-from src.ingestion.rss import ingest_rss_feeds
-from src.ingestion.gdelt import ingest_gdelt, GDELT_TIER1_CRITICAL_DOMAINS
-from src.ingestion.reddit import ingest_reddit
+from src.ingestion.gdelt import GDELT_TIER1_CRITICAL_DOMAINS
 from src.ingestion.source_registry import SourceTier
+from src.ingestion.adapters.rss_adapter import RssAdapter
+from src.ingestion.adapters.gdelt_adapter import GDELTAdapter
+from src.ingestion.adapters.reddit_adapter import RedditAdapter
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_tier1_gate
@@ -95,40 +96,50 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
         print("Phase 1: Ingesting articles...")
         all_articles = []
 
-        # Initialize to avoid NameError if tier is not in tiers
-        rss_articles: list = []
-        tier2_articles: list = []
-        reddit_articles: list = []
+        # Build list of adapters for requested tiers
+        adapters = []
 
-        # Ingest tier-1 sources (RSS)
+        # RSS adapters per tier
         if SourceTier.TIER1 in tiers:
-            from src.ingestion.source_registry import get_enabled_sources_by_tier
-            tier1_sources = get_enabled_sources_by_tier(SourceTier.TIER1)
-            rss_articles = await ingest_rss_feeds(settings.max_articles_per_feed, tier1_sources)
-            all_articles.extend(rss_articles)
-            print(f"  Tier-1 RSS: {len(rss_articles)}")
-
-        # Ingest tier-2 sources (RSS)
+            adapters.append(RssAdapter(SourceTier.TIER1))
         if SourceTier.TIER2 in tiers:
-            from src.ingestion.source_registry import get_enabled_sources_by_tier
-            tier2_sources = get_enabled_sources_by_tier(SourceTier.TIER2)
-            tier2_articles = await ingest_rss_feeds(settings.max_articles_per_feed, tier2_sources)
-            all_articles.extend(tier2_articles)
-            print(f"  Tier-2 RSS: {len(tier2_articles)}")
+            adapters.append(RssAdapter(SourceTier.TIER2))
 
-        # GDELT (tier-1 domains only, currently disabled)
+        # GDELT (only if enabled and tier-1 requested)
         if settings.gdelt_enabled and SourceTier.TIER1 in tiers:
-            gdelt_articles, gdelt_health = await ingest_gdelt(hours_back=24, max_per_domain=50)
-        else:
-            gdelt_articles, gdelt_health = [], {"succeeded": [], "failed": [], "skipped": [], "disabled": True}
-        all_articles.extend(gdelt_articles)
-        print(f"  GDELT: {len(gdelt_articles)}")
+            adapters.append(GDELTAdapter())
 
         # Reddit (tier-3)
         if SourceTier.TIER3 in tiers:
-            reddit_articles = await ingest_reddit(limit_per_sub=25)
-            all_articles.extend(reddit_articles)
-            print(f"  Tier-3 Reddit: {len(reddit_articles)}")
+            adapters.append(RedditAdapter())
+
+        # Fetch from each adapter sequentially (match current sequential ordering
+        # to avoid changing GDELT's circuit-breaker timing)
+        rss_tier1_count = 0
+        rss_tier2_count = 0
+        gdelt_count = 0
+        reddit_count = 0
+        adapter_health = {}
+
+        for adapter in adapters:
+            articles = await adapter.fetch()
+            all_articles.extend(articles)
+            health = await adapter.health_check()
+            adapter_health[adapter.name] = health
+
+            # Track counts per source type for backward compatibility
+            if adapter.name == "rss_tier1":
+                rss_tier1_count = len(articles)
+                print(f"  Tier-1 RSS: {rss_tier1_count}")
+            elif adapter.name == "rss_tier2":
+                rss_tier2_count = len(articles)
+                print(f"  Tier-2 RSS: {rss_tier2_count}")
+            elif adapter.name == "gdelt":
+                gdelt_count = len(articles)
+                print(f"  GDELT: {gdelt_count}")
+            elif adapter.name == "reddit_tier3":
+                reddit_count = len(articles)
+                print(f"  Tier-3 Reddit: {reddit_count}")
 
         print(f"  Total fetched articles: {len(all_articles)}")
 
@@ -165,9 +176,12 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
         print(f"  URL duplicates skipped: {url_dup}")
         print(f"  Content duplicates skipped: {content_dup}")
 
+        # Get GDELT health from adapter for tier1_critical_down check
+        gdelt_health = adapter_health.get("gdelt", {"succeeded": [], "failed": [], "skipped": []})
+
         # Check for tier-1 critical GDELT domains down
         tier1_critical_down = sorted(
-            GDELT_TIER1_CRITICAL_DOMAINS & set(gdelt_health["failed"] + gdelt_health["skipped"])
+            GDELT_TIER1_CRITICAL_DOMAINS & set(gdelt_health.failed + gdelt_health.skipped)
         )
         ingest_status = "degraded" if tier1_critical_down else "ok"
 
@@ -175,16 +189,30 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
         stats_snapshot = STATS.snapshot()
 
         results["phases"]["ingestion"] = {
-            "rss": len(rss_articles),
-            "gdelt": len(gdelt_articles),
-            "reddit": len(reddit_articles),
+            "rss": rss_tier1_count + rss_tier2_count,
+            "gdelt": gdelt_count,
+            "reddit": reddit_count,
             "total_fetched": len(all_articles),
             "total_new": len(new_articles),
             "url_duplicates_skipped": url_dup,
             "content_duplicates_skipped": content_dup,
-            "gdelt_health": gdelt_health,
+            "gdelt_health": {
+                "succeeded": gdelt_health.succeeded,
+                "failed": gdelt_health.failed,
+                "skipped": gdelt_health.skipped,
+            },
             "tier1_critical_down": tier1_critical_down,
             "extraction_stats": stats_snapshot,
+            "adapter_health": {
+                name: {
+                    "status": health.status,
+                    "detail": health.detail,
+                    "succeeded": health.succeeded,
+                    "failed": health.failed,
+                    "skipped": health.skipped,
+                }
+                for name, health in adapter_health.items()
+            },
         }
 
         if dry_run:

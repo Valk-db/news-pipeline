@@ -1,306 +1,316 @@
-# AGENT_TASKS.md v16
+# AGENT_TASKS.md v17
 
-Supersedes v15. v15's P0-C/P0-D/P0-E are merged into `main` (commit `c078281`) and confirmed
-live. This revision adds two more bugs in the same `/globe` init path that P0-E's fix
-uncovered: `TypeError: y.isDestroyed is not a function` thrown by `initGlobe()` itself
-(P0-F), plus a picking bug in the same file that would have surfaced the moment P0-F stopped
-throwing (P0-G).
+Supersedes v16. v16's P0-F/P0-G globe fixes are implemented and verified per
+that revision's own record — if not yet merged, apply those independently;
+they're unrelated to this revision (globe rendering vs. ingestion infra).
 
-Status: **both fixes (P0-F, P0-G) are implemented in this checkout** (see diff below) and
-verified against a stubbed-Cesium Node harness (real Cesium can't run headless here, so this
-is the same style of verification used for P0-E in v15 — see Verification). This doc is the
-record of what was wrong and why, for the PR description / commit message.
+This revision is Phase 1 of `GRAND_PLAN.md` (§1b/§1c): three infrastructure
+pieces the next wave of sources (sensor feeds, gov docs, OSINT tier,
+translation) will plug into. No new sources are added by these tasks — this
+is the plumbing, not the water.
 
----
-
-## P0-F — `/globe` page crashes: `TypeError: y.isDestroyed is not a function`
-
-### Symptom
-
-Once P0-E's `hideEventDetail` fix let `window.GlobeCore` build successfully, the console
-error changed from a `ReferenceError` to this (`y.isDestroyed` is the minified name inside
-Cesium's own `PrimitiveCollection.add`):
-
-```
-globe-init.js:13 Initializing Globe...
-globe-init.js:43 Globe initialization failed: TypeError: y.isDestroyed is not a function
-    at d (Cesium.js:14612:35596)
-    at ML.raiseEvent (Cesium.js:95:1311)
-    at ca.add (Cesium.js:8798:109871)
-    at Object.initGlobe (globe-core.js:103:22)
-    at HTMLDocument.<anonymous> (globe-init.js:17:32)
-```
-
-### Diagnosis
-
-`curation_ui/static/globe/globe-core.js` declares:
-
-```js
-const eventEntities = new Cesium.EntityCollection();
-const clusterEntities = new Cesium.EntityCollection();
-```
-
-and `initGlobe()` then does:
-
-```js
-scene.primitives.add(eventEntities);
-scene.primitives.add(clusterEntities);
-```
-
-`scene.primitives` is a `PrimitiveCollection` — it's the API for things that implement
-Cesium's `Primitive` interface (billboards, polylines, point primitives, custom primitives:
-objects with their own `update()`/`isDestroyed()`/`destroy()`). A `Cesium.EntityCollection`
-is a completely different kind of object — it's the backing store for `Entity` instances, and
-the correct way to get it rendered is to hand it (via a `DataSource`) to `viewer.dataSources`,
-never to `scene.primitives`.
-
-`PrimitiveCollection.add()` immediately calls `.isDestroyed()` on whatever it's given, to
-raise its `primitiveAdded` event correctly. `EntityCollection` doesn't implement that method,
-so the very first call — `scene.primitives.add(eventEntities)` at line 103 — throws
-`TypeError: ... .isDestroyed is not a function` and aborts `initGlobe()` before it reaches
-the `ScreenSpaceEventHandler` setup a few lines later, which is why the globe never
-initializes at all.
-
-This was unreachable before P0-E's fix: `window.GlobeCore` didn't exist yet, so
-`globe-init.js` was throwing on `window.GlobeCore.initGlobe()` itself and never got far enough
-to run `initGlobe()`'s body and hit this line. It's a second, independent bug in the same
-function, not a regression from the P0-E fix.
-
-Confirmed the mechanism (real Cesium can't run outside a browser in this container) with a
-minimal Node harness stubbing just enough of the `Cesium`/`document` surface for `initGlobe()`
-to execute: against the original file, `scene.primitives.add` gets called twice with
-`EntityCollection` instances and `.entities.add()` (the delegation the fix below relies on)
-throws immediately because there's no `.entities` on a raw `EntityCollection` — see
-Verification.
-
-### Fix
-
-`curation_ui/static/globe/globe-core.js`:
-
-```js
-// Entity collections. Wrapped in a CustomDataSource so they can be
-// registered with viewer.dataSources (see initGlobe) -- but eventEntities/
-// clusterEntities themselves still point at the underlying EntityCollection
-// (CustomDataSource#entities), so every existing .removeAll()/.add()/.values
-// call in this file, and in globe-interaction.js's window.GlobeCore.eventEntities
-// reads, keeps working exactly as before -- only how the collection reaches the
-// screen (dataSources vs. primitives) changes.
-const eventEntitiesDataSource = new Cesium.CustomDataSource('events');
-const clusterEntitiesDataSource = new Cesium.CustomDataSource('clusters');
-const eventEntities = eventEntitiesDataSource.entities;
-const clusterEntities = clusterEntitiesDataSource.entities;
-```
-
-and in `initGlobe()`:
-
-```js
-// Register the data sources with the viewer (NOT scene.primitives --
-// EntityCollection/CustomDataSource are not Primitives; scene.primitives.add()
-// calls .isDestroyed() on whatever it's given the way it expects a Primitive
-// to implement it, which throws "isDestroyed is not a function" here and
-// aborted initGlobe() before the click handlers below were ever set up).
-viewer.dataSources.add(eventEntitiesDataSource);
-viewer.dataSources.add(clusterEntitiesDataSource);
-```
-
-**Why the wrapper split (`eventEntitiesDataSource` vs. `eventEntities`), instead of just
-swapping in `CustomDataSource` directly:** `globe-interaction.js` reads
-`window.GlobeCore.eventEntities.values` and `.find(...)` directly (in `flyToEvent()` and
-`clusterEvents()`) — it expects `eventEntities` itself to be the `EntityCollection`, not a
-`DataSource` wrapping one (a `CustomDataSource` has no top-level `.values`; you'd need
-`.entities.values`). Keeping `eventEntities`/`clusterEntities` pointed at
-`...DataSource.entities` means every other read/write of them — inside `globe-core.js`
-(`removeAll()`, `add()`, `.values` in `fitEvents()`) and in `globe-interaction.js` — needed
-zero changes. Only `initGlobe()`'s registration call and the two declaration lines change.
-
-### Verification
-
-Real Cesium needs a browser (WebGL/DOM), which isn't available in this container, so this was
-verified the same way P0-E was in v15 — a minimal Node harness stubbing the handful of
-`Cesium`/`document` APIs `initGlobe()` actually touches (`Viewer`, `CustomDataSource`,
-`EntityCollection`, `ScreenSpaceEventHandler`, etc.), with `scene.primitives.add` and
-`viewer.dataSources.add` both instrumented to record what they're called with:
-
-- **Before the fix:** `scene.primitives.add` is called twice, both times with an
-  `EntityCollection`-shaped stub; `viewer.dataSources.add` is never called. Exercising
-  `eventEntities.entities.add(...)` (what the fixed code's contract requires) throws
-  `TypeError: Cannot read properties of undefined (reading 'add')`, confirming a bare
-  `EntityCollection` has no `.entities`.
-- **After the fix:** `scene.primitives.add` is called zero times; `viewer.dataSources.add` is
-  called exactly twice, both times with `CustomDataSource`-shaped stubs;
-  `window.GlobeCore.eventEntities` is confirmed to still be the raw `EntityCollection`
-  (`instanceof` check) with working `.add()` / `.removeAll()` / `.values`, matching what
-  `globe-interaction.js` expects.
-
-```
-node --check curation_ui/static/globe/globe-core.js   # syntax OK
-```
+Do P1-A and P1-B in either order (independent). Do P1-C any time — it's
+independent of both, just wires into `src/shared/llm.py`.
 
 ---
 
-## P0-G — Globe clicks never open the event detail panel (latent, in the same functions)
+## P1-A — Uniform source adapter contract
 
-### Symptom
+### Goal
 
-No console error — this is a silent functional bug. Once P0-F stops `initGlobe()` from
-throwing, clicking an event marker on the globe does nothing (no detail panel), and hovering
-never shows the location label.
+`src/ingestion/run.py` currently branches per source
+(`if SourceTier.TIER1 in tiers: ... ingest_rss_feeds(...)`, a separate branch
+for GDELT, a separate branch for Reddit — see `run_ingestion()`). Every future
+Phase-1 source (sensor feeds, gov docs, OSINT) would mean another bespoke
+branch. Replace this with one adapter interface every source implements, so
+adding a source means writing one adapter class, not editing the orchestrator.
 
-### Diagnosis
+**This is a refactor, not a behavior change.** Existing dedup, tier gating,
+GDELT's circuit breaker, and the tier1-critical-domain exit-code logic in
+`run.py` must produce identical output to today.
 
-`onLeftClick()` and `onMouseMove()` in the same file do:
+### New file: `src/ingestion/adapter.py`
 
-```js
-const picked = viewer.scene.pick(movement.position);
-if (Cesium.defined(picked) && picked.entity) {
-    showEventDetail(picked.entity);
-} else {
-    hideEventDetail();
-}
+```python
+"""Common contract every ingestion source implements.
+
+Nothing in an adapter fetches on construction -- only when `fetch()` is
+called by the orchestrator in run.py. This mirrors the source_registry.py
+convention of declaring config without doing network I/O at import time.
+"""
+from dataclasses import dataclass, field
+from typing import Protocol, runtime_checkable
+from src.schema.models import RawArticle
+
+
+@dataclass
+class SourceHealth:
+    """Health snapshot returned by a source adapter's health_check().
+
+    status is one of "ok" | "degraded" | "down". succeeded/failed/skipped
+    hold per-domain or per-feed identifiers -- gdelt.py's existing health
+    dict (succeeded/failed/skipped keys) maps directly onto this shape.
+    """
+    status: str
+    detail: str = ""
+    succeeded: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+
+
+@runtime_checkable
+class SourceAdapter(Protocol):
+    """Every ingestion source (RSS, GDELT, Reddit, and future sensor/OSINT/
+    gov-doc sources) implements this."""
+
+    name: str  # e.g. "rss_tier1", "rss_tier2", "gdelt", "reddit_tier3"
+
+    async def fetch(self) -> list[RawArticle]:
+        """Fetch and return new articles. Must not raise on a single feed's
+        failure inside the batch -- log/record it via IngestStats and
+        continue; only raise for a total adapter failure (e.g. the adapter
+        cannot reach the network at all)."""
+        ...
+
+    async def health_check(self) -> SourceHealth:
+        """Cheap status check. RSS/GDELT-style adapters should reuse the
+        per-domain result from the most recent fetch() rather than making a
+        fresh network call here."""
+        ...
 ```
 
-Cesium's picking API sets the picked object's owning `Entity` on `.id`, not `.entity` — this
-is the standard, documented pattern (every Cesium Sandcastle picking example and the Cesium
-community docs use `Cesium.defined(pickedObject) && pickedObject.id`). `.entity` is never set
-by Cesium on a pick result, so `picked.entity` is always `undefined`: the `if` branch never
-runs, every click falls into the `else` (`hideEventDetail()`), and `onMouseMove`'s equivalent
-check for hover labels never fires either.
+### New directory: `src/ingestion/adapters/`
 
-This bug has presumably been here since the picking code was written, but P0-F's crash meant
-`initGlobe()` never got far enough to attach the `ScreenSpaceEventHandler` at all, so it was
-never exercised or visibly broken until now.
+Wrap the existing modules — **do not rewrite their internals.** Each adapter
+is a thin class that calls the existing function and reshapes the result.
 
-### Fix
+- `src/ingestion/adapters/rss_adapter.py` — wraps `ingest_rss_feeds()` from
+  `rss.py`. One adapter instance per tier (`RssAdapter(tier=SourceTier.TIER1)`,
+  `RssAdapter(tier=SourceTier.TIER2)`), sourcing its feed list from
+  `get_enabled_sources_by_tier()` in `source_registry.py` exactly as `run.py`
+  does today. `health_check()`: derive ok/degraded from whether the last
+  `fetch()` returned zero articles for any enabled tier-1 domain (this is the
+  same check `main()` already does per-source after the run today — move it
+  into the adapter instead of leaving it in `main()`).
+- `src/ingestion/adapters/gdelt_adapter.py` — wraps `ingest_gdelt()` from
+  `gdelt.py`. Its `(articles, health)` return already has
+  `succeeded`/`failed`/`skipped` keys — map straight into `SourceHealth`.
+  Preserve the existing `GDELT_TIER1_CRITICAL_DOMAINS` check; it currently
+  lives in `run.py` computing `tier1_critical_down` — keep that computation in
+  `run.py` after calling `health_check()`, don't bury it inside the adapter.
+- `src/ingestion/adapters/reddit_adapter.py` — wraps `ingest_reddit()` from
+  `reddit.py`.
 
-`onLeftClick()`:
+### Changes to `src/ingestion/run.py`
 
-```js
-const picked = viewer.scene.pick(movement.position);
-// scene.pick() sets .id to the owning Entity (Cesium's standard picking
-// API), not .entity -- picked.entity is always undefined, so clicks never
-// opened the detail panel even once initGlobe() stopped throwing.
-if (Cesium.defined(picked) && picked.id) {
-    showEventDetail(picked.id);
-} else {
-    hideEventDetail();
-}
-```
+Replace the three `if SourceTier.X in tiers:` branches (lines ~103-131 in the
+current file) with: build a list of adapters for the requested tiers, call
+`.fetch()` on each (gather or sequential — match current sequential ordering
+to avoid changing GDELT's circuit-breaker timing), extend `all_articles`, and
+collect `.health_check()` per adapter into
+`results["phases"]["ingestion"]["adapter_health"]` (a dict keyed by adapter
+`name`) instead of the current ad hoc `gdelt_health` special case. Keep
+`results["phases"]["ingestion"]["rss"]`, `["gdelt"]`, `["reddit"]` count keys
+as-is for backward compatibility with anything reading that JSON downstream
+(the curation UI's `/healthz`, any dashboards).
 
-`onMouseMove()` — both branches:
+### Acceptance
 
-```js
-if (Cesium.defined(picked) && picked.id && picked.id !== hoveredEntity) {
-    hoveredEntity = picked.id;
-    ...
-} else if (hoveredEntity && (!Cesium.defined(picked) || !picked.id)) {
-    ...
-}
-```
-
-### Verification
-
-No live browser/WebGL available in this container to click-test end to end. This is a
-one-line-per-branch identifier rename (`.entity` → `.id`) against Cesium's documented pick
-result shape, checked by `node --check` for syntax and by manual trace through both functions
-confirming every remaining reference to the picked object (`showEventDetail(picked.id)`,
-`hoveredEntity = picked.id`, the label-show/hide toggles) is internally consistent post-rename.
-**Flagging for the IDE agent to click-test in an actual browser against the deployed
-`/globe` page once P0-F is live** — this is the one piece of this revision not verified
-against real Cesium/WebGL.
+`uv run python -m src.ingestion.run --dry-run` before and after this change
+should produce byte-identical `results["phases"]["ingestion"]` counts (`rss`,
+`gdelt`, `reddit`, `total_fetched`, `total_new`, `tier1_critical_down`) against
+the same feed state. Diff the dry-run JSON output before/after as the check —
+if anything differs, the refactor changed behavior and that's a bug, not an
+improvement.
 
 ---
 
-## Full diff (P0-F + P0-G), `curation_ui/static/globe/globe-core.js`
+## P1-B — `DATA_SOURCES.md` license-risk ledger
 
-```diff
---- a/curation_ui/static/globe/globe-core.js
-+++ b/curation_ui/static/globe/globe-core.js
-@@ -8,9 +8,17 @@
- let scene = null;
- let camera = null;
+### Goal
 
--// Entity collections
--const eventEntities = new Cesium.EntityCollection();
--const clusterEntities = new Cesium.EntityCollection();
-+// Entity collections. Wrapped in a CustomDataSource so they can be
-+// registered with viewer.dataSources (see initGlobe) -- but eventEntities/
-+// clusterEntities themselves still point at the underlying EntityCollection
-+// (CustomDataSource#entities), so every existing .removeAll()/.add()/.values
-+// call in this file, and in globe-interaction.js's window.GlobeCore.eventEntities
-+// reads, keeps working exactly as before -- only how the collection reaches the
-+// screen (dataSources vs. primitives) changes.
-+const eventEntitiesDataSource = new Cesium.CustomDataSource('events');
-+const clusterEntitiesDataSource = new Cesium.CustomDataSource('clusters');
-+const eventEntities = eventEntitiesDataSource.entities;
-+const clusterEntities = clusterEntitiesDataSource.entities;
+Catch a noncommercial-use restriction on an existing or new source *before*
+it's load-bearing for a paying customer, not after. Modeled on
+`gods-eye-view`'s `DATA_SOURCES.md` — see `GRAND_PLAN.md` §1c for why this
+matters given the "sell access later" plan.
 
- // Event data store
- let eventData = [];
-@@ -99,9 +107,13 @@
-         }
-     });
+### New file: `DATA_SOURCES.md` at repo root
 
--    // Add event entities to scene
--    scene.primitives.add(eventEntities);
--    scene.primitives.add(clusterEntities);
-+    // Register the data sources with the viewer (NOT scene.primitives --
-+    // EntityCollection/CustomDataSource are not Primitives; scene.primitives.add()
-+    // calls .isDestroyed() on whatever it's given the way it expects a Primitive
-+    // to implement it, which throws "isDestroyed is not a function" here and
-+    // aborted initGlobe() before the click handlers below were ever set up).
-+    viewer.dataSources.add(eventEntitiesDataSource);
-+    viewer.dataSources.add(clusterEntitiesDataSource);
+One row per source. Columns:
 
-     // Setup clock for timeline
-     viewer.clock.shouldAnimate = false;
-@@ -358,8 +370,11 @@
- function onLeftClick(movement) {
-     if (!viewer || viewer.isDestroyed()) return;
-     const picked = viewer.scene.pick(movement.position);
--    if (Cesium.defined(picked) && picked.entity) {
--        showEventDetail(picked.entity);
-+    // scene.pick() sets .id to the owning Entity (Cesium's standard picking
-+    // API), not .entity -- picked.entity is always undefined, so clicks never
-+    // opened the detail panel even once initGlobe() stopped throwing.
-+    if (Cesium.defined(picked) && picked.id) {
-+        showEventDetail(picked.id);
-     } else {
-         hideEventDetail();
-     }
-@@ -368,13 +383,13 @@
- function onMouseMove(movement) {
-     if (!viewer || viewer.isDestroyed()) return;
-     const picked = viewer.scene.pick(movement.endPosition);
--    if (Cesium.defined(picked) && picked.entity && picked.entity !== hoveredEntity) {
--        hoveredEntity = picked.entity;
-+    if (Cesium.defined(picked) && picked.id && picked.id !== hoveredEntity) {
-+        hoveredEntity = picked.id;
-         // Show label on hover
-         if (hoveredEntity.label) {
-             hoveredEntity.label.show = true;
-         }
--    } else if (hoveredEntity && (!Cesium.defined(picked) || !picked.entity)) {
-+    } else if (hoveredEntity && (!Cesium.defined(picked) || !picked.id)) {
-         if (hoveredEntity.label) {
-             hoveredEntity.label.show = false;
-         }
 ```
+| Source | Used for | License / terms | Commercial-use risk | Attribution required | Cache/rate policy |
+```
+
+`Commercial-use risk` is one of: `none` / `attribution-only` /
+`noncommercial — flag` / `unclear — needs review`.
+
+**Populate retroactively for every existing source**, not just new ones:
+
+- Every domain in `TIER1_SOURCES`, `TIER2_SOURCES`, `TIER3_SOURCES`,
+  `TIER4_SOURCES` in `src/ingestion/source_registry.py` — check each
+  publisher's actual RSS/republication terms (BBC, Guardian, NPR, DW,
+  France24, Al Jazeera, Euronews, PBS NewsHour, NYT, FT, Economist, Foreign
+  Policy, Foreign Affairs, CSIS, WHO, LA Times, Chicago Tribune, Boston Globe,
+  SFGate, and the Reddit subs in `reddit.py`) — don't assume any of them are
+  commercial-clear, verify.
+- GDELT (`gdelt.py`) — its terms are already known to permit commercial use
+  with citation per `GRAND_PLAN.md` §1c; row it anyway so the ledger is
+  complete, not just the risky ones.
+
+Add a one-paragraph header linking to `GRAND_PLAN.md` §1c so the "why does
+this file exist" context isn't lost.
+
+### Acceptance
+
+Every domain key across the four tier dicts in `source_registry.py` has
+exactly one corresponding row. Any row marked `noncommercial — flag` or
+`unclear — needs review` gets called out explicitly in the PR description —
+don't let one slide through silently in a large diff.
 
 ---
 
-## Follow-up (not blocking, worth doing next)
+## P1-C — Groq daily-request budget governor
 
-1. **Click-test P0-G for real** once deployed: open `/globe`, click a marker, confirm the
-   detail panel opens with the right event's data; hover a marker, confirm its label appears.
-   This is the one thing in this revision not verified against live Cesium.
-2. Actually implement clustering. `clusterEntitiesDataSource`/`clusterEntities` is created and
-   now correctly registered with `viewer.dataSources`, but nothing ever populates it —
-   `enableClustering()` (line ~502) is still a bare `TODO` stub that only flips a boolean.
-   Low urgency (it's a no-op today, not broken), but worth a follow-up ticket since the
-   plumbing is now actually wired up correctly for the first time.
-3. From v15's follow-up list, still open: a JS test harness for this repo. This revision's
-   Node-stub-Cesium approach (see Verification above) could be generalized into one — it would
-   have caught both P0-F and P0-E before they shipped, and P0-G once real click simulation is
-   in scope.
-4. From v15's follow-up list, still open: the regression test for P0-D
-   (`test_index_with_media_and_snippets`), and the `.in_()` audit outside `curation_ui/main.py`.
+### Goal
+
+Groq's free tier is 1K requests/day (`README.md`'s Cost table). Nothing today
+tracks spend against that cap — `src/shared/llm.py`'s `LLMClient` calls Groq
+directly per request. As Phase 1/2 add more LLM-driven extraction (claims,
+translation, viewpoint clustering), this needs a governor before it needs a
+429 to notice the cap exists. Pattern: `gods-eye-view`'s TomTom tile budget,
+sized under the provider's published cap, not at it.
+
+### New file: `src/shared/llm_budget.py`
+
+```python
+"""Daily request budget + in-flight coalescing for LLMClient's Groq calls.
+
+In-memory, per-process daily counter -- resets at UTC midnight. This is
+correct for the current twice-daily GitHub Actions run (one process per
+run, no concurrent processes sharing a Groq key). It is NOT a distributed
+limiter: if this pipeline ever runs as more than one concurrent process
+against the same Groq key, replace this with a DB-backed counter.
+"""
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import asyncio
+import hashlib
+
+
+@dataclass
+class BudgetStatus:
+    used_today: int
+    limit: int
+    remaining: int
+    exhausted: bool
+
+
+class BudgetExhausted(Exception):
+    def __init__(self, status: BudgetStatus):
+        super().__init__(
+            f"Groq daily budget exhausted: {status.used_today}/{status.limit}"
+        )
+        self.status = status
+
+
+class RequestBudget:
+    def __init__(self, daily_limit: int):
+        self.daily_limit = daily_limit
+        self._count = 0
+        self._day = datetime.now(timezone.utc).date()
+        self._inflight: dict[str, "asyncio.Future"] = {}
+
+    def _roll_if_new_day(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        if today != self._day:
+            self._day = today
+            self._count = 0
+
+    def status(self) -> BudgetStatus:
+        self._roll_if_new_day()
+        remaining = max(0, self.daily_limit - self._count)
+        return BudgetStatus(
+            used_today=self._count,
+            limit=self.daily_limit,
+            remaining=remaining,
+            exhausted=remaining == 0,
+        )
+
+    @staticmethod
+    def _coalesce_key(messages: list[dict], model: str) -> str:
+        raw = repr(messages) + model
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    async def run(self, coro_factory, messages: list[dict], model: str):
+        """Run coro_factory() under the budget + coalescing. coro_factory is
+        a zero-arg callable returning the awaitable Groq call, so an
+        identical in-flight call is awaited a second time instead of
+        dispatched twice. Raises BudgetExhausted if the daily cap is spent."""
+        self._roll_if_new_day()
+        key = self._coalesce_key(messages, model)
+        if key in self._inflight:
+            return await self._inflight[key]
+
+        status = self.status()
+        if status.exhausted:
+            raise BudgetExhausted(status)
+
+        fut = asyncio.ensure_future(coro_factory())
+        self._inflight[key] = fut
+        try:
+            result = await fut
+            self._count += 1
+            return result
+        finally:
+            self._inflight.pop(key, None)
+```
+
+### Changes to `src/shared/config.py`
+
+Add `groq_daily_request_budget: int = 900` to `Settings` — deliberately under
+the published 1K cap to leave headroom, same reasoning as
+`TOMTOM_DAILY_TILE_BUDGET` in `gods-eye-view` sizing under, not at, the
+provider's real limit.
+
+### Changes to `src/shared/llm.py`
+
+- Give `LLMClient` a `RequestBudget` instance (constructed from
+  `settings.groq_daily_request_budget` in `_init_clients()` or `__init__`).
+- Route `_chat_completion_groq` through `self._budget.run(...)` instead of
+  calling `self.groq_client` directly.
+- On `BudgetExhausted`: fall back to Cerebras if `self.has_cerebras` (or the
+  equivalent check `LLMClient` already uses for its Cerebras fallback path —
+  reuse the existing fallback branch rather than adding a second one). If
+  Cerebras isn't configured either, the caller needs a defined behavior:
+  `generate_caption()` and `classify_relevance()` currently assume a result
+  always comes back. Recommend: return `None` and have the ingestion run skip
+  enrichment for that item rather than crash the run, recording it via
+  `IngestStats.record("groq", "budget_skipped")` (`src/utils/ingest_stats.py`)
+  so it surfaces in the existing run-summary markdown table instead of
+  silently vanishing.
+
+### Acceptance
+
+Unit test in `tests/` (new file, e.g. `tests/test_llm_budget.py`):
+
+1. Drive `RequestBudget` past `daily_limit` and assert `BudgetExhausted`
+   fires on the next `.run()` call.
+2. Fire two identical concurrent `.run()` calls (same messages + model) and
+   assert the underlying `coro_factory` was invoked exactly once (coalescing
+   works) — both callers still get the same result.
+3. Assert the counter resets after mocking the clock across a UTC day
+   boundary.
+
+Existing LLM-dependent tests (`tests/test_enrichment.py`,
+`tests/test_enrichment_pipeline.py`, etc.) must keep passing unchanged — wire
+the budget in at whatever default limit doesn't make those tests trip it.
+
+---
+
+## Order of work
+
+1. P1-A and P1-B can run in parallel (no shared files).
+2. P1-C touches `llm.py`/`config.py` only — no overlap with A or B.
+3. Run the full `pytest` suite after each task, not just at the end — these
+   are meant to land as three separate, independently-revertable PRs.

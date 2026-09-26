@@ -322,9 +322,9 @@ class TestRunIngestionIntegration:
         """run_ingestion logs 'degraded' when tier-1 critical domain is down."""
         from src.ingestion.run import run_ingestion
 
-        with patch("src.ingestion.run.ingest_rss_feeds") as mock_rss, \
-             patch("src.ingestion.run.ingest_gdelt") as mock_gdelt, \
-             patch("src.ingestion.run.ingest_reddit") as mock_reddit, \
+        with patch("src.ingestion.rss.ingest_rss_feeds") as mock_rss, \
+             patch("src.ingestion.gdelt.ingest_gdelt") as mock_gdelt, \
+             patch("src.ingestion.reddit.ingest_reddit") as mock_reddit, \
              patch("src.ingestion.run.init_db"), \
              patch("src.ingestion.run.get_session") as mock_session, \
              patch("src.ingestion.run.log_status"):
