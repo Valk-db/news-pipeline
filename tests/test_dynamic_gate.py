@@ -20,18 +20,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def make_scalar_mock(obj):
-    """Create a mock result where scalar_one_or_none returns obj."""
+    """Create a mock result where scalar_one_or_none() returns obj (synchronous method)."""
     mock_result = MagicMock()
-    mock_result.scalar_one_or_none = AsyncMock(return_value=obj)
+    # scalar_one_or_none is a SYNCHRONOUS method in SQLAlchemy Result
+    mock_result.scalar_one_or_none = lambda: obj
     return mock_result
 
 
-def make_execute_mock(result_data):
-    """Create a mock for session.execute where scalars().all() returns result_data."""
+def make_result_mock(result_data):
+    """Create a mock result object where scalars().all() returns result_data."""
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = result_data
     mock_result.all.return_value = result_data  # for queries using .all() directly
     return mock_result
+
+
+def make_execute_mock(result_data):
+    """Create an AsyncMock for session.execute that returns a result mock."""
+    mock_result = make_result_mock(result_data)
+    mock_execute = AsyncMock()
+    mock_execute.return_value = mock_result
+    return mock_execute
+
+
+def make_execute_mock_for_side_effect(result_data):
+    """Create a result mock for use directly in side_effect (not an AsyncMock wrapper)."""
+    return make_result_mock(result_data)
 
 
 @pytest.fixture
@@ -130,12 +144,7 @@ async def test_compute_harm_level_no_allegation(mock_session, sample_story):
     """Test harm_level returns 'low' when no ALLEGATION claim."""
     story = sample_story
 
-    # Claim query returns None (no ALLEGATION)
-    mock_session.execute = make_execute_mock([])
-    # Or we need scalar_one_or_none for Claim
-    # compute_harm_level uses scalar_one_or_none for Claim
-    # So we need a mock that returns None for scalar_one_or_none
-
+    # First execute: Claim query → scalar_one_or_none() returns None
     claim_result = make_scalar_mock(None)
     mock_session.execute = AsyncMock(return_value=claim_result)
 
@@ -224,17 +233,19 @@ async def test_compute_admission_score_basic(mock_session, sample_story):
     """Test basic admission score calculation."""
     story = sample_story
 
-    # Need 2 calls for compute_admission_score: harm_level + virality
-    # Each call to session.execute should return a mock with proper scalars
-    mock_session.execute = AsyncMock()
+    # compute_admission_score calls:
+    # 1. compute_harm_level → 2 execute calls (claim + entity)
+    # 2. compute_virality_signal → 1 execute call
+    # Total: 3 execute calls
 
-    # Harm level check: no ALLEGATION - scalar_one_or_none returns None
+    # 1. harm_level: claim query → scalar_one_or_none returns None
     claim_result = make_scalar_mock(None)
-
-    # Virality check: no tier3/4 units - scalars().all() returns []
+    # 2. harm_level: entity query → scalar_one_or_none returns None (no PERSON)
+    entity_result = make_scalar_mock(None)
+    # 3. virality: execute returns empty list
     viral_result = make_execute_mock([])
 
-    mock_session.execute.side_effect = [claim_result, viral_result]
+    mock_session.execute.side_effect = [claim_result, entity_result, viral_result]
 
     score, breakdown = await compute_admission_score(mock_session, story, 2, 2)
 
@@ -296,18 +307,25 @@ async def test_compute_admission_score_virality(mock_session, sample_story_viral
     """Test admission score with virality signal."""
     story = sample_story_viral
 
-    # Harm level: low (no ALLEGATION) - 1 query
-    claim_result = make_scalar_mock(None)
+    # compute_admission_score calls:
+    # 1. compute_virality_signal → 1 execute call (FIRST)
+    # 2. compute_harm_level → 2 execute calls (claim + entity)
+    # Total: 3 execute calls
 
-    # Virality: tier3 unit with article_count=5 - 1 query
+    # 1. virality: execute returns tier3 unit
     unit = ReportingUnit(
         id=uuid.uuid4(),
         article_count=5,
         source_tiers={"tier3": 1},
     )
-    viral_result = make_execute_mock([unit])
+    viral_result = make_execute_mock_for_side_effect([unit])
+    # 2. harm_level: claim query → scalar_one_or_none returns None
+    claim_result = make_scalar_mock(None)
+    # 3. harm_level: entity query → scalar_one_or_none returns None (no PERSON)
+    entity_result = make_scalar_mock(None)
 
-    mock_session.execute.side_effect = [claim_result, viral_result]
+    # Set up the mock properly
+    mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
     score, breakdown = await compute_admission_score(mock_session, story, 2, 2)
 
@@ -325,24 +343,32 @@ async def test_apply_dynamic_gate_shadow_mode(mock_session, sample_story):
     settings.dynamic_gate_enabled = False
 
     try:
-        # Story query
-        story_result = make_execute_mock([sample_story])
+        # Call 1: Story query in apply_tier1_gate (select Story) -> scalars().all()
+        story_result = make_execute_mock_for_side_effect([sample_story])
 
-        # recompute_story_counters query
-        counter_result = make_execute_mock([
+        # Call 2: recompute_story_counters first query (select StoryUnitLink, ReportingUnit) -> .all() returns tuples
+        counter_query1_result = make_execute_mock_for_side_effect([
             (sample_story.id, {"tier1": 1}, {"BBC": 1}),
             (sample_story.id, {"tier1": 1}, {"Guardian": 1}),
         ])
 
-        # Batched units query
+        # Call 3: recompute_story_counters second query (select Story) -> scalars().all() returns Story objects
+        counter_query2_result = make_execute_mock_for_side_effect([sample_story])
+
+        # Call 4: Batched units query (select Story, ReportingUnit) -> .all() returns tuples
         unit = ReportingUnit(
             id=uuid.uuid4(),
             source_tiers={"tier1": 1},
             tier1_owner_groups={"BBC": 1},
         )
-        batched_result = make_execute_mock([(sample_story, unit)])
+        batched_result = make_execute_mock_for_side_effect([(sample_story, unit)])
 
-        mock_session.execute.side_effect = [story_result, counter_result, batched_result]
+        mock_session.execute.side_effect = [
+            story_result,
+            counter_query1_result,
+            counter_query2_result,
+            batched_result,
+        ]
         mock_session.commit = AsyncMock()
 
         result = await apply_dynamic_gate(mock_session, [sample_story.id])
