@@ -4,7 +4,7 @@ from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, JSON, Boolean, Float
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.orm import declarative_base, relationship, backref
 import uuid
 
 Base = declarative_base()
@@ -520,3 +520,128 @@ class CorrectionRecord(Base):
     detected_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     article = relationship("RawArticle")
+
+
+class ClaimType(str, PyEnum):
+    FACT = "fact"
+    ALLEGATION = "allegation"
+    PREDICTION = "prediction"
+    QUOTE = "quote"
+
+
+class Claim(Base):
+    """An atomic factual assertion extracted from a story's reporting units.
+
+    Distinct from FactCheckRecord (verdicts from external fact-checkers) --
+    this is the pipeline's own claim-extraction output, feeding the per-story
+    claim matrix described in GRAND_PLAN.md §2.
+    """
+    __tablename__ = "claims"
+    __table_args__ = (
+        Index("ix_claims_story_id", "story_id"),
+        Index("ix_claims_claim_type", "claim_type"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
+    text = Column(Text, nullable=False)
+    claim_type = Column(Enum(ClaimType), nullable=False, default=ClaimType.FACT)
+    first_seen_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    story = relationship("Story")
+    evidence = relationship("ClaimEvidence", back_populates="claim", cascade="all, delete-orphan")
+
+
+class ClaimStance(str, PyEnum):
+    SUPPORTS = "supports"
+    DISPUTES = "disputes"
+    NEUTRAL = "neutral"
+
+
+class ClaimEvidence(Base):
+    """Edge: which reporting unit said what about which claim.
+
+    This is the "source A says X, source B says Y" matrix -- one row per
+    (claim, unit) pair.
+    """
+    __tablename__ = "claim_evidence"
+    __table_args__ = (
+        UniqueConstraint("claim_id", "unit_id", name="uq_claim_unit"),
+        Index("ix_claim_evidence_unit_id", "unit_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    claim_id = Column(UUID(as_uuid=True), ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
+    unit_id = Column(UUID(as_uuid=True), ForeignKey("reporting_units.id", ondelete="CASCADE"), nullable=False)
+    stance = Column(Enum(ClaimStance), nullable=False, default=ClaimStance.NEUTRAL)
+    confidence = Column(Integer, nullable=False, default=50)  # 0-100, matches FactCheckRecord's convention
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    claim = relationship("Claim", back_populates="evidence")
+    unit = relationship("ReportingUnit")
+
+
+class EdgePredicate(str, PyEnum):
+    CORROBORATES = "corroborates"
+    DISPUTES = "disputes"
+    SAME_EVENT_AS = "same_event_as"
+    PART_OF_NARRATIVE = "part_of_narrative"
+    CAUSED_BY = "caused_by"
+
+
+class EntityEdge(Base):
+    """Generic typed edge between two things in the graph.
+
+    Polymorphic on purpose (subject_type/object_type + a UUID, no FK
+    constraint on subject_id/object_id) so this one table can hold
+    story-to-story narrative links now and claim-to-claim or entity-to-entity
+    edges later without a schema change. Phase 2 (P2-D) only populates
+    subject_type="story"/object_type="story" edges -- validate the type
+    strings at the application layer, not the database layer.
+    """
+    __tablename__ = "entity_edges"
+    __table_args__ = (
+        Index("ix_entity_edges_subject", "subject_type", "subject_id"),
+        Index("ix_entity_edges_object", "object_type", "object_id"),
+        Index("ix_entity_edges_predicate", "predicate"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    subject_type = Column(String(20), nullable=False)  # "story" for now; "claim"/"entity" later
+    subject_id = Column(UUID(as_uuid=True), nullable=False)
+    predicate = Column(Enum(EdgePredicate), nullable=False)
+    object_type = Column(String(20), nullable=False)
+    object_id = Column(UUID(as_uuid=True), nullable=False)
+    confidence = Column(Integer, nullable=False, default=50)  # 0-100
+    source_unit_id = Column(UUID(as_uuid=True), ForeignKey("reporting_units.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class TopicGroup(Base):
+    """Hierarchical topic group, e.g. Geopolitics -> Middle East -> Israel-Gaza."""
+    __tablename__ = "topic_groups"
+    __table_args__ = (
+        UniqueConstraint("name", "parent_group_id", name="uq_topic_group_name_parent"),
+        Index("ix_topic_groups_parent", "parent_group_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    parent_group_id = Column(UUID(as_uuid=True), ForeignKey("topic_groups.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    children = relationship("TopicGroup", backref=backref("parent", remote_side=[id]))
+
+
+class StoryTopicGroup(Base):
+    """Many-to-many: stories <-> topic_groups, with an assignment confidence."""
+    __tablename__ = "story_topic_groups"
+    __table_args__ = (UniqueConstraint("story_id", "topic_group_id", name="uq_story_topic_group"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
+    topic_group_id = Column(UUID(as_uuid=True), ForeignKey("topic_groups.id", ondelete="CASCADE"), nullable=False)
+    confidence = Column(Integer, nullable=True)  # 0-100, null if manually assigned
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
