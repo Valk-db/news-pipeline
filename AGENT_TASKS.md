@@ -1,312 +1,320 @@
-# AGENT_TASKS.md v19
+# AGENT_TASKS.md v20
 
-Supersedes v18. **P2-A is done and merged** — commit `01985b3` on `main`
-("P2-A: Add claim, claim_evidence, entity_edges, topic_groups schema").
-Independently verified against a fresh clone (not just taken on your word):
+Supersedes v19. **Phase 2 (P2-A/B/C/D) is done and merged** — commit `c038b0b`
+on `main`. Independently verified against a fresh clone:
 
-- `ruff check .` — clean across the whole repo.
-- All 8 new symbols (`ClaimType`, `Claim`, `ClaimStance`, `ClaimEvidence`,
-  `EdgePredicate`, `EntityEdge`, `TopicGroup`, `StoryTopicGroup`) import
-  cleanly from `src.schema.models`.
-- `supabase/migrations/20260926000000_phase2_claims_and_graph.sql` matches
-  the ORM models column-for-column and is idempotent (`IF NOT EXISTS` guards
-  throughout).
-- Full `pytest tests/` run: 254 passed, 5 skipped. The 6 failures seen were
-  all in `test_ner.py` and are a sandbox-only gap (missing the
-  `en_core_web_sm` spacy model download), not a regression — worth a quick
-  check that CI's cache actually has that model, but it's not a P2-A defect.
+- `ruff check .` — clean.
+- Full suite: 355 collected, 350 passed, 5 skipped (the 5 are the known
+  Postgres-integration guard in `test_verification.py`, expected outside CI).
+- Baseline before Phase 2 (commit `303816d`) was 330 collected — so Phase 2
+  added ~25 net-new tests.
+- `20260926000000_phase2_claims_and_graph.sql` matches the ORM models
+  column-for-column, idempotent (`IF NOT EXISTS` throughout).
+- `weekly-enrichment.yml`'s `phase2` job and the curation UI wiring (claim
+  matrix, topic badges, narrative links) are present exactly as described.
 
-**Merge policy (standing instruction, applies to every task below):** once
-your own checks pass for a task — `ruff check .` clean, and that task's
-targeted tests green — merge it yourself. Separate PR per task (P2-B, P2-C,
-P2-D), same convention P2-A used. Don't stop and wait for review before
-merging; verified-passing work merges itself.
+**Correction to the record:** the Phase 2 completion summary claimed "277
+tests pass." That number matches neither the pre-Phase2 baseline (330) nor
+the post-Phase2 total (355) nor the net-new delta (~25) — no scenario
+reconstructs it, and CI runs the identical bare `pytest tests/ -v --tb=short`
+so it isn't an environment artifact. Not a regression, just don't trust that
+class of self-reported number without a spot-check going forward.
+
+**Merge policy (standing, unchanged):** once your own checks pass for a
+task — `ruff check .` clean, targeted tests green — merge it yourself,
+separate PR per task, same convention as Phase 1/2. Don't wait for review.
 
 ---
 
-## P2-B — Claim extraction pipeline
+## Scope of this batch — and one finding that changes it
+
+This batch is `GRAND_PLAN.md` §3, the verification & certification layer.
+It's next because §2's `claims`/`topic_groups` just landed and §3 explicitly
+builds on both.
+
+**Verified finding that overrides part of §3's text:** `GRAND_PLAN.md` §3
+says `source_topic_reliability` "extends `SourceReliabilitySnapshot`,
+`FactCheckRecord`, `CorrectionRecord`." Checked all three:
+
+- `SourceReliabilitySnapshot` is live — `scripts/run_weekly_reliability.py`
+  calls `compute_daily_reliability_snapshots()` and is wired into
+  `weekly-enrichment.yml`.
+- `FactCheckRecord`/`CorrectionRecord` are **not** live. `fact_check_article()`
+  in `src/reliability/fact_checker.py` exists but is called from nowhere in
+  `src/` — only `tests/test_reliability.py::test_...` asserts it's
+  `callable()`, which is an importability check, not a usage check. Nothing
+  in ingestion, enrichment, or any scheduled workflow writes a
+  `FactCheckRecord` or `CorrectionRecord` row. Both tables are effectively
+  always empty right now.
+
+Building P3-B against those two tables would ship a job that always finds
+zero rows. **P3-B below is redesigned to score off `Claim`/`ClaimEvidence`
+instead** (populated today, via `run_claim_extraction.py`) — a
+claim-consensus-agreement signal per source/topic, not a fact-check-verdict
+signal. This is a real scope change from the doc's original wording, not a
+silent substitution — flag it as such in the PR description. Wiring
+`fact_check_article()` into an actual scheduled job so `FactCheckRecord`
+becomes real data is listed as backlog below — it's an LLM call per claim
+and needs its own budget-governor decision, same as claim extraction did;
+don't fold it into this task silently.
+
+---
+
+## P3-A — Schema: `source_topic_reliability`
 
 ### Goal
+Per-(source, topic) reliability score, generalizing the single global
+`SourceReliabilitySnapshot` per `GRAND_PLAN.md` §3.
 
-Populate `claims` + `claim_evidence` for a story: one LLM call per story
-(not per unit -- budget-conscious, matches `cluster_viewpoints`'s existing
-pattern of capping at 10 unit texts per prompt) that extracts the atomic
-claims being made and, for each claim, which units support/dispute/are
-neutral on it.
-
-**Trigger point matters for budget**: only run this on stories that have
-already passed `apply_tier1_gate` (status `QUEUED`), not on every story as
-it's created. An unqueued/blocked story never gets published, so spending a
-Groq call on its claim matrix is wasted budget. Wire this as a periodic job
-alongside enrichment, not inline in `run_ingestion()`.
-
-### Refactor first: extract the shared unit-gathering helper
-
-`src/verification/stories.py`'s `cluster_viewpoints()` (lines ~163-188) has
-inline logic that loads a story's units, fetches each unit's representative
-article, and builds a capped/truncated list of `{unit_id, text, source_tier}`
-dicts. Extract this into a standalone function in the same file:
-
-```python
-async def _gather_unit_texts_for_story(
-    session: AsyncSession, story: "Story", max_units: int = 10, max_chars: int = 2000,
-) -> list[dict]:
-    """Load up to max_units representative-article texts for a story's units,
-    truncated to max_chars each. Shared by cluster_viewpoints() and the claim
-    extraction pipeline (src/verification/claims.py) -- keep this the single
-    source of truth for "what text do we show the LLM about a story."
-    """
-    ...  # move the existing inline logic here unchanged, just parameterize
-    # max_units (cluster_viewpoints currently hardcodes [:10] on the prompt
-    # build step, not on the gathering step -- fix that inconsistency here:
-    # cap during gathering, not just during prompt assembly)
+### New migration
+```sql
+-- supabase/migrations/<next-timestamp>_source_topic_reliability.sql
+CREATE TABLE IF NOT EXISTS source_topic_reliability (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_domain VARCHAR(255) NOT NULL,
+    topic_group_id UUID NOT NULL REFERENCES topic_groups(id) ON DELETE CASCADE,
+    score INTEGER NOT NULL,          -- 0-100, same convention as source_reliability_snapshots
+    sample_size INTEGER NOT NULL DEFAULT 0,
+    snapshot_date TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (source_domain, topic_group_id, snapshot_date)
+);
+CREATE INDEX IF NOT EXISTS ix_str_lookup ON source_topic_reliability(source_domain, topic_group_id);
+CREATE INDEX IF NOT EXISTS ix_str_date ON source_topic_reliability(snapshot_date);
 ```
+Checked first: zero existing hits for `source_topic_reliability` anywhere in
+`supabase/migrations/` — this is a genuinely new table, no collision.
 
-Update `cluster_viewpoints()` to call this helper instead of its inline block.
-**This must not change `cluster_viewpoints()`'s existing behavior** --
-`tests/test_viewpoint_clustering.py` must pass unchanged after the extraction.
+Mirror into `src/schema/models.py` as `SourceTopicReliability(Base)`,
+placed directly after `StoryTopicGroup` (line ~647), same column
+conventions as `SourceReliabilitySnapshot` (`Integer` 0-100 for score, not
+`Float`).
 
-### New file: `src/verification/claims.py`
+### Acceptance
+Model imports cleanly from `src.schema.models`; migration applies against a
+scratch DB with no name collisions.
 
+---
+
+## P3-B — Reliability scoring job (claim-consensus based — see finding above)
+
+### Goal
+Populate `source_topic_reliability` from `Claim`/`ClaimEvidence`: for each
+claim with ≥2 non-neutral evidence rows, find the confidence-weighted
+majority stance; a unit's evidence that agrees with the majority is a point
+*for* that unit's source, disagreement is a point *against*. Roll up by
+`(source_domain, topic_group_id)`.
+
+### Join path
+`ClaimEvidence.claim_id → Claim.story_id → StoryTopicGroup.story_id →
+topic_group_id` (direct — no need to route through articles/units for the
+topic side). `ClaimEvidence.unit_id → ReportingUnit.representative_article_id
+→ RawArticle.source_domain` for the source side (representative article's
+domain stands in for the unit's source — same simplification the rest of
+the codebase already makes for units).
+
+### New file: `src/verification/reliability.py`
 ```python
-"""Claim extraction: populate claims + claim_evidence for gated stories.
+"""Per-(source, topic) reliability scoring from claim-evidence consensus.
 
-One LLM call per story (not per unit) -- see AGENT_TASKS.md P2-B for why.
+Not fact-check-verdict based -- see AGENT_TASKS.md P3-B for why
+FactCheckRecord/CorrectionRecord aren't the source here (they're
+unpopulated in production today).
 """
-import json
-import logging
 import uuid
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.schema.models import Story, Claim, ClaimEvidence, ClaimType, ClaimStance
-from src.verification.stories import _gather_unit_texts_for_story
+from src.schema.models import (
+    Claim, ClaimEvidence, ClaimStance, ReportingUnit, RawArticle,
+    StoryTopicGroup, SourceTopicReliability,
+)
 
-logger = logging.getLogger(__name__)
-
-CLAIM_EXTRACTION_PROMPT = """Analyze these news article excerpts about the same event and extract the atomic factual claims being made.
-
-For each distinct claim, identify:
-- The claim text (one sentence, self-contained)
-- claim_type: one of "fact", "allegation", "prediction", "quote"
-- Which sources support it, dispute it, or are neutral/don't mention it
-
-Articles:
-{texts_for_prompt}
-
-Return ONLY a JSON object of this exact shape, no explanation, no markdown fences:
-{{
-  "claims": [
-    {{
-      "text": "...",
-      "claim_type": "fact",
-      "evidence": [
-        {{"unit_id": "...", "stance": "supports", "confidence": 80}}
-      ]
-    }}
-  ]
-}}
-"""
+MIN_SAMPLE_SIZE = 3  # don't write a score off fewer than this many evidence rows
 
 
-async def extract_claims_for_story(session: AsyncSession, story_id: uuid.UUID) -> dict:
-    """Extract and persist the claim matrix for one story.
+async def compute_source_topic_reliability(session: AsyncSession, lookback_days: int = 90) -> dict:
+    results = {"pairs_scored": 0, "claims_considered": 0, "errors": []}
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
 
-    Returns a result dict with counts, matching the shape enrich_story()
-    in src/enrichment/pipeline.py uses (errors: list, plus per-type counts)
-    so this slots into the same reporting pattern as weekly enrichment.
-    """
-    results = {"story_id": str(story_id), "claims_created": 0, "evidence_created": 0, "errors": []}
-
-    stmt = select(Story).where(Story.id == story_id)
-    story = (await session.execute(stmt)).scalar_one_or_none()
-    if not story:
-        results["errors"].append("Story not found")
-        return results
-
-    unit_texts = await _gather_unit_texts_for_story(session, story, max_units=10)
-    if len(unit_texts) < 2:
-        # Not enough units for a meaningful claim matrix -- same threshold
-        # philosophy as cluster_viewpoints, doesn't need to match exactly.
-        return results
-
-    texts_for_prompt = "\n\n---\n\n".join(
-        f"unit_id: {u['unit_id']}\nSource: {u['source_tier']}\n{u['text']}" for u in unit_texts
-    )
-
-    from src.shared.llm import get_llm_client
-    llm = await get_llm_client()
-
-    try:
-        result = await llm.chat_completion(
-            messages=[{"role": "user", "content": CLAIM_EXTRACTION_PROMPT.format(texts_for_prompt=texts_for_prompt)}],
-            temperature=0.1,
-            max_tokens=1500,
+    stmt = (
+        select(
+            ClaimEvidence.claim_id, ClaimEvidence.stance, ClaimEvidence.confidence,
+            StoryTopicGroup.topic_group_id, RawArticle.source_domain,
         )
-        # Use llm._parse_json_response, not raw json.loads -- it strips
-        # fenced code blocks. cluster_viewpoints uses raw json.loads and is
-        # fragile to this; don't repeat that in new code.
-        data = llm._parse_json_response(result["choices"][0]["message"]["content"])
+        .join(Claim, Claim.id == ClaimEvidence.claim_id)
+        .join(StoryTopicGroup, StoryTopicGroup.story_id == Claim.story_id)
+        .join(ReportingUnit, ReportingUnit.id == ClaimEvidence.unit_id)
+        .join(RawArticle, RawArticle.id == ReportingUnit.representative_article_id)
+        .where(Claim.first_seen_at >= cutoff)
+    )
+    rows = (await session.execute(stmt)).all()
 
-        for claim_data in data.get("claims", []):
-            claim = Claim(
-                story_id=story_id,
-                text=claim_data["text"],
-                claim_type=ClaimType(claim_data.get("claim_type", "fact")),
-            )
-            session.add(claim)
-            await session.flush()  # get claim.id before adding evidence rows
-            results["claims_created"] += 1
+    by_claim: dict = defaultdict(list)
+    for claim_id, stance, confidence, topic_group_id, source_domain in rows:
+        by_claim[claim_id].append((stance, confidence, topic_group_id, source_domain))
 
-            for ev in claim_data.get("evidence", []):
-                try:
-                    evidence = ClaimEvidence(
-                        claim_id=claim.id,
-                        unit_id=uuid.UUID(ev["unit_id"]),
-                        stance=ClaimStance(ev.get("stance", "neutral")),
-                        confidence=int(ev.get("confidence", 50)),
-                    )
-                    session.add(evidence)
-                    results["evidence_created"] += 1
-                except (KeyError, ValueError) as e:
-                    # A malformed evidence row shouldn't drop the whole claim
-                    logger.warning(f"Skipping malformed evidence for claim {claim.id}: {e}")
+    # pair_stats[(source_domain, topic_group_id)] = {"agree": weighted, "disagree": weighted, "n": count}
+    pair_stats: dict = defaultdict(lambda: {"agree": 0.0, "disagree": 0.0, "n": 0})
 
-        await session.commit()
-    except Exception as e:
-        logger.warning(f"Claim extraction failed for story {story_id}: {e}", exc_info=True)
-        results["errors"].append(str(e))
+    for claim_id, evidence in by_claim.items():
+        non_neutral = [e for e in evidence if e[0] != ClaimStance.NEUTRAL]
+        if len(non_neutral) < 2:
+            continue  # no majority to measure agreement against
+        results["claims_considered"] += 1
+        support_w = sum(c for s, c, _, _ in non_neutral if s == ClaimStance.SUPPORTS)
+        dispute_w = sum(c for s, c, _, _ in non_neutral if s == ClaimStance.DISPUTES)
+        majority = ClaimStance.SUPPORTS if support_w >= dispute_w else ClaimStance.DISPUTES
+        for stance, confidence, topic_group_id, source_domain in non_neutral:
+            key = (source_domain, topic_group_id)
+            pair_stats[key]["n"] += 1
+            if stance == majority:
+                pair_stats[key]["agree"] += confidence
+            else:
+                pair_stats[key]["disagree"] += confidence
 
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    for (source_domain, topic_group_id), stats in pair_stats.items():
+        if stats["n"] < MIN_SAMPLE_SIZE:
+            continue  # thin-data floor -- no row rather than a noisy one
+        total = stats["agree"] + stats["disagree"]
+        score = round(100 * stats["agree"] / total) if total else 50
+
+        existing_stmt = select(SourceTopicReliability).where(
+            SourceTopicReliability.source_domain == source_domain,
+            SourceTopicReliability.topic_group_id == topic_group_id,
+            SourceTopicReliability.snapshot_date == today,
+        )
+        existing = (await session.execute(existing_stmt)).scalar_one_or_none()
+        if existing:
+            existing.score, existing.sample_size = score, stats["n"]
+        else:
+            session.add(SourceTopicReliability(
+                source_domain=source_domain, topic_group_id=topic_group_id,
+                score=score, sample_size=stats["n"], snapshot_date=today,
+            ))
+        results["pairs_scored"] += 1
+
+    await session.commit()
     return results
-
-
-async def extract_claims_for_recent_stories(
-    session_factory, hours_back: int = 168, max_stories: int = 100,
-) -> list[dict]:
-    """Batch entry point -- mirrors enrich_recent_stories() in
-    src/enrichment/pipeline.py. Only processes QUEUED stories (see P2-B goal:
-    don't spend budget on stories that never got past the gate)."""
-    ...  # follow enrich_recent_stories()'s existing query-and-loop pattern in
-    # src/enrichment/pipeline.py, filtering Story.status == Story.Status.QUEUED
-    # instead of whatever filter enrich_recent_stories uses -- read that
-    # function before writing this one, don't guess its structure
 ```
 
 ### Wiring
-
-- New script `scripts/run_claim_extraction.py`, modeled directly on
-  `scripts/run_weekly_enrichment.py` (same `init_db()` / `get_session_maker()`
-  / summary-dict / `GITHUB_OUTPUT` pattern).
-- Add a step to `.github/workflows/weekly-enrichment.yml` calling the new
-  script, OR a new dedicated workflow if enrichment and claim extraction
-  should run on different schedules — check the existing workflow's schedule
-  and comment on why before deciding; don't just bolt it on without checking
-  whether weekly enrichment's cadence actually fits claim extraction's needs.
+New script `scripts/compute_reliability.py`, same `init_db()` /
+`get_session_maker()` / summary-dict / `GITHUB_OUTPUT` pattern as
+`scripts/run_claim_extraction.py`. Add as a step in `weekly-enrichment.yml`'s
+`phase2` job (rename it, or add a `phase3` job — your call, keep the name
+honest about what it now covers). Zero LLM cost — no budget reason to run
+it on a different cadence than weekly.
 
 ### Acceptance
-
-New `tests/test_claim_extraction.py`, modeled on the existing
-`tests/test_viewpoint_clustering.py` (same mocking style for `get_llm_client`
-and the DB session). Cover: a story with enough units produces claims +
-evidence rows; a malformed LLM response (bad JSON, missing fields) doesn't
-crash the whole batch, just skips that story/claim and records it in
-`results["errors"]`; a story below the unit threshold produces zero claims
-without error. `tests/test_viewpoint_clustering.py` must still pass unchanged
-after the `_gather_unit_texts_for_story` extraction.
+New `tests/test_reliability_scoring.py` (name it distinctly from the
+existing `tests/test_reliability.py`, which covers the fact-checker/consensus
+code — don't collide). Cover: a source whose evidence agrees with the
+claim majority scores high; a source that consistently disagrees scores
+low; a `(source, topic)` pair below `MIN_SAMPLE_SIZE` gets no row; a claim
+with only 1 non-neutral evidence row is skipped (no majority to compare
+against); re-running same-day updates the existing row rather than
+duplicating (exercises the `UNIQUE` constraint).
 
 ---
 
-## P2-C — Topic groups: seed + assignment
+## P3-C — Dynamic gate: `admission_score` + `harm_level`
 
 ### Goal
+Generalize the static tier-1 gate (`src/verification/tiers.py::evaluate_tier1_gate`,
+~line 280) into `GRAND_PLAN.md` §3's scoring function:
+`admission_score = f(source_tier_baseline, corroboration_count,
+distinct_owner_count, virality_signal, harm_level)`.
 
-Give every story a topic-group assignment so `source_topic_reliability`
-(Phase 3) has something to key off of. Two parts: seed an initial hierarchy,
-then assign stories to it.
+**Locked decision (§7's open question):** `harm_level` is heuristic, not
+LLM-classified, for v1 — matches the $0 budget stance, no new prompt needed.
 
-### Seed hierarchy
-
-New script `scripts/seed_topic_groups.py` (one-time, idempotent via
-`ON CONFLICT DO NOTHING` matching the `event_layers` seed pattern in the
-globe migration). Start narrow -- this grows organically, don't over-design a
-deep taxonomy up front:
-
-```
-Geopolitics
-  Geopolitics > Middle East
-  Geopolitics > Europe
-  Geopolitics > East Asia
-Economy
-  Economy > Markets
-  Economy > Trade Policy
-Health
-Environment & Disaster
-Technology
-Domestic Politics (US)
+### `harm_level` heuristic
+New function in `src/verification/tiers.py`:
+```python
+async def compute_harm_level(session: AsyncSession, story: "Story") -> str:
+    """"high" iff the story has a Claim with claim_type == ClaimType.ALLEGATION
+    AND at least one id in story.primary_entities resolves to a
+    CanonicalEntity with entity_type == "PERSON". Query CanonicalEntity
+    directly (CanonicalEntity.id.in_(story.primary_entities)) rather than
+    re-deriving entity types from raw article.entities -- primary_entities
+    already stores canonical IDs post-canonicalization. Check whether
+    primary_entities holds str or UUID values before writing the .in_()
+    filter -- don't assume, read how it's compared elsewhere in stories.py.
+    Returns "low" otherwise."""
 ```
 
-### Assignment
+### `admission_score`
+Add `compute_admission_score()` alongside `evaluate_tier1_gate` —
+**don't delete or change the old function's call sites yet.** Wire it into
+`apply_tier1_gate()` behind a new `dynamic_gate_enabled: bool = False` in
+`src/shared/config.py`, default off. This lets the score be compared
+against the current boolean gate's real decisions before it's live.
 
-New function `assign_story_topic_groups(session, story_id)` in
-`src/verification/claims.py` (or a new `src/verification/topics.py` if
-`claims.py` is getting large -- agent's judgment, but pick one and be
-consistent). For v1, use `story.primary_entities` (already populated by
-`build_stories()`) against the topic group names with simple keyword/entity
-matching rather than another LLM call -- Phase 2's LLM budget is already
-spent on claim extraction; don't double up without a clear reason.
-Flag explicitly in the PR: this is a v1 heuristic, upgrading to
-LLM-classified or claim-informed assignment is a fine follow-up once
-`claims` data exists to inform it.
+```python
+async def compute_admission_score(
+    session: AsyncSession, story: "Story", tier1_unit_count: int, distinct_owners: int,
+) -> tuple[int, dict]:
+    """Returns (score 0-100, breakdown dict for gate_reason logging).
 
-### Acceptance
+    virality_signal: max(unit.article_count for units on this story where
+    "tier3" in (unit.source_tiers or {}) or "tier4" in (unit.source_tiers or {})),
+    0 if none. source_tiers is a JSON dict ({"tier1": 2, ...}), not a scalar
+    column -- check membership on the dict, don't compare it as an enum.
 
-Every `QUEUED` story gets at least one `story_topic_groups` row (falling back
-to a generic top-level group if nothing matches -- don't leave stories
-unassigned). New test file covering the keyword-matching logic against a
-handful of known entity sets.
+    harm_level from compute_harm_level() above: "high" raises the
+    corroboration bar (higher required distinct_owners/tier1_unit_count for
+    the same score) rather than blocking outright -- GRAND_PLAN §3 is
+    explicit harm_level scales the bar, it doesn't gate alone.
 
----
-
-## P2-D — Narrative-arc `entity_edges`
-
-### Goal
-
-Link a story to an earlier one covering the same ongoing situation, beyond
-the current 48h story-grouping window in `build_stories()`. This is the
-`SAME_EVENT_AS` / `PART_OF_NARRATIVE` edges from `GRAND_PLAN.md` §2.
-
-### Approach
-
-New function `link_narrative_arcs(session, story_id)` — for a newly-created
-or newly-gated story, look back further than 48h (start with 90 days) at
-other stories sharing entities from `story.primary_entities` above some
-overlap threshold. Reuse whatever entity-overlap logic `build_stories()`
-already has for its own 48h window rather than writing a second
-implementation — read `build_stories()` first. Write a
-`subject_type="story"/object_type="story"` `EntityEdge` row with
-`predicate=SAME_EVENT_AS` for a strong entity-overlap match, or
-`PART_OF_NARRATIVE` for a weaker one — pick a concrete threshold (e.g. entity
-Jaccard >= 0.5 for SAME_EVENT_AS, >= 0.2 for PART_OF_NARRATIVE) and state it
-in the PR description so it's an explicit, tunable constant, not a buried
-magic number.
+    Calibrate weights against evaluate_tier1_gate's existing pass/fail line
+    on real data before locking them in -- don't invent numbers from
+    scratch. State the final weights as a table in the PR description, same
+    as P2-D documented its Jaccard thresholds.
+    """
+```
 
 ### Acceptance
-
-New test file. Cover: a story with strong entity overlap to an older one
-gets a `SAME_EVENT_AS` edge; weak overlap gets `PART_OF_NARRATIVE`; no
-overlap gets no edge; a story doesn't get edged to itself.
+Extend `tests/test_tiers.py` (don't replace). Cover: `compute_harm_level`
+returns `"high"` for a story with an `ALLEGATION` claim + a `PERSON`
+canonical entity, `"low"` otherwise. `compute_admission_score` returns a
+breakdown dict naming all 5 factors. Run it against the same fixture
+stories `evaluate_tier1_gate` is already tested against and assert
+`score >= 50` iff the old boolean gate passed on those specific fixtures —
+this is a calibration check against known cases, not a formal guarantee.
 
 ---
 
 ## Order of work
 
-1. P2-A is done — skip it.
-2. P2-B, P2-C, P2-D can proceed in parallel (or sequentially in one branch,
-   your call) now that the schema is live on `main`.
-3. Run the full pytest suite after each task. Land as separate, revertable
-   PRs, same as Phase 1 and P2-A — and merge each one yourself once its
-   checks are green (see the merge policy note at the top).
-4. Before starting, read `src/enrichment/pipeline.py`'s `enrich_recent_stories`
-   and `src/verification/stories.py`'s `build_stories` in full — both are
-   referenced above as "reuse this pattern" and neither is reproduced in full
-   here; guessing their structure instead of reading it is how Phase 1's
-   mock-patching bug happened.
+1. P3-A first — schema is the dependency for B and C.
+2. P3-B and P3-C can proceed in parallel once P3-A is on `main`.
+3. Full `pytest` run after each task. Separate PRs, same convention as
+   Phase 1/2. Merge yourself once green (merge policy above).
+4. Before P3-C: read `src/verification/tiers.py`'s `evaluate_tier1_gate` and
+   `apply_tier1_gate` in full (~lines 280–388) — the dynamic gate must reuse
+   `apply_tier1_gate`'s existing batched unit query, not add a second
+   N+1 query pattern beside it.
+
+## Not in this batch (backlog for the next round)
+
+- **Wiring `fact_check_article()` into a scheduled job** so
+  `FactCheckRecord` becomes real data — an LLM call per claim, needs its
+  own budget-governor decision (same shape as claim extraction's). Once
+  live, `source_topic_reliability` could blend fact-check verdicts back in
+  alongside the claim-consensus signal from P3-B.
+- **Certification badge** (§3): natural follow-on once `admission_score`
+  exists to derive `unconfirmed → corroborated → primary-source-verified`
+  from — blocked on P3-C landing, not on any open design question.
+- **Evidence snapshotting** and **media forensics** (§3): both need an
+  infra decision `GRAND_PLAN.md` §7 leaves open (screenshot/image storage
+  on a $0 budget) — worth a short design pass before speccing as tasks.
+- **Phase 1a new source categories** (gov/legal docs, sensor feeds,
+  non-English tier-1, OSINT tier, leaked datasets, podcast transcripts):
+  none started. Ranked priority #1 in `GRAND_PLAN.md` §0, deliberately not
+  in this batch since Phase 3 was already flagged as next after Phase 2.
+- **Phase 4 globe expansion**: schema bones (`EventGeometry`/`EventLayer`/
+  `Event`) exist; historical playback, non-point layer types, and
+  sub-national geocoding are all still undone.

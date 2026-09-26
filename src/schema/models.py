@@ -645,3 +645,25 @@ class StoryTopicGroup(Base):
     topic_group_id = Column(UUID(as_uuid=True), ForeignKey("topic_groups.id", ondelete="CASCADE"), nullable=False)
     confidence = Column(Integer, nullable=True)  # 0-100, null if manually assigned
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class SourceTopicReliability(Base):
+    """Per-(source_domain, topic_group) reliability score.
+
+    Generalizes SourceReliabilitySnapshot (global per-source) to per-topic.
+    Populated by P3-B claim-consensus scoring job, not FactCheckRecord.
+    """
+    __tablename__ = "source_topic_reliability"
+    __table_args__ = (
+        UniqueConstraint("source_domain", "topic_group_id", "snapshot_date", name="uq_str_sd_tg"),
+        Index("ix_str_lookup", "source_domain", "topic_group_id"),
+        Index("ix_str_date", "snapshot_date"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_domain = Column(String(255), nullable=False)
+    topic_group_id = Column(UUID(as_uuid=True), ForeignKey("topic_groups.id", ondelete="CASCADE"), nullable=False)
+    score = Column(Integer, nullable=False)  # 0-100, same convention as SourceReliabilitySnapshot
+    sample_size = Column(Integer, nullable=False, default=0)
+    snapshot_date = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
