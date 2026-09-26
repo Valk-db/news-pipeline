@@ -30,8 +30,9 @@ impl MinHash {
         // For production, consider using a proper xxhash implementation
         let hash = Self::hash_token(token);
         for i in 0..self.num_perm {
-            // Use different seeds for each permutation
-            let perm_hash = hash.wrapping_add(i as u64 * 0x9e3779b97f4a7c15);
+            // Use different seeds for each permutation (use wrapping_mul to avoid overflow)
+            let seed = (i as u64).wrapping_mul(0x9e3779b97f4a7c15);
+            let perm_hash = hash.wrapping_add(seed);
             let perm_hash = Self::mix64(perm_hash);
             if perm_hash < self.hashvalues[i] {
                 self.hashvalues[i] = perm_hash;
@@ -84,7 +85,8 @@ impl MinHash {
 
 /// Generate k-shingles from text for MinHash
 pub fn shingle_text(text: &str, k: usize) -> HashSet<String> {
-    let words: Vec<&str> = text.to_lowercase().split_whitespace().collect();
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
     if words.len() < k {
         if words.is_empty() {
             return HashSet::new();
@@ -251,9 +253,9 @@ mod tests {
         assert_eq!(containment_from_jaccard(1.0, 10, 10), 1.0);
         // No overlap
         assert_eq!(containment_from_jaccard(0.0, 10, 10), 0.0);
-        // Partial
+        // Partial - Jaccard 0.5 with sizes 10, 20 gives containment = 1.0
         let c = containment_from_jaccard(0.5, 10, 20);
-        assert!(c > 0.0 && c < 1.0);
+        assert!((c - 1.0).abs() < 0.001);
     }
 
     #[test]

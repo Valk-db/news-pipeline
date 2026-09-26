@@ -212,22 +212,26 @@ pub struct BudgetStatus {
 }
 
 /// LLM Client with Groq primary, Cerebras fallback
+#[derive(Clone)]
 pub struct LLMClient {
-    settings: Settings,
+    settings: Arc<Settings>,
     client: Client,
     groq_base_url: String,
     cerebras_base_url: String,
-    budget: Mutex<RequestBudget>,
+    budget: Arc<Mutex<RequestBudget>>,
 }
 
 impl LLMClient {
     pub fn new(settings: Settings) -> Self {
+        let settings = Arc::new(settings);
         Self {
+            settings: Arc::clone(&settings),
+            client: Client::new(),
             groq_base_url: "https://api.groq.com/openai/v1".to_string(),
             cerebras_base_url: "https://api.cerebras.ai/v1".to_string(),
-            client: Client::new(),
-            budget: Mutex::new(RequestBudget::new(settings.groq_daily_request_budget as u32)),
-            settings,
+            budget: Arc::new(Mutex::new(RequestBudget::new(
+                settings.groq_daily_request_budget as u32
+            ))),
         }
     }
 

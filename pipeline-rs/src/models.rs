@@ -121,7 +121,7 @@ pub enum MediaType {
 }
 
 /// Fact check verdict enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "fact_check_verdict", rename_all = "lowercase")]
 pub enum FactCheckVerdict {
     True,
@@ -133,7 +133,7 @@ pub enum FactCheckVerdict {
 }
 
 /// Fact checker enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "fact_checker", rename_all = "lowercase")]
 pub enum FactChecker {
     ClaimBuster,
@@ -180,6 +180,18 @@ pub enum EdgePredicate {
     SameEventAs,
     PartOfNarrative,
     CausedBy,
+}
+
+impl std::fmt::Display for EdgePredicate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EdgePredicate::Corroborates => write!(f, "corroborates"),
+            EdgePredicate::Disputes => write!(f, "disputes"),
+            EdgePredicate::SameEventAs => write!(f, "same_event_as"),
+            EdgePredicate::PartOfNarrative => write!(f, "part_of_narrative"),
+            EdgePredicate::CausedBy => write!(f, "caused_by"),
+        }
+    }
 }
 
 /// RawArticle matching the raw_articles table

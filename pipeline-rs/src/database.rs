@@ -1,5 +1,8 @@
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{postgres::PgPoolOptions, PgPool as SqlxPgPool, Postgres};
 use crate::config::Settings;
+
+/// Type alias for the connection pool
+pub type PgPool = sqlx::Pool<Postgres>;
 
 /// Create a database connection pool configured for Supabase via Supavisor session mode
 pub async fn create_pool(settings: &Settings) -> Result<PgPool, sqlx::Error> {

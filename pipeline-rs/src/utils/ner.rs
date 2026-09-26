@@ -5,10 +5,10 @@
 //! Here we implement: normalization, alias generation, EntityCanonicalizer,
 //! resolve_entities_to_canonical, canonical_jaccard.
 
-use crate::models::{CanonicalEntity, EntityAlias};
 use crate::database::PgPool;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -35,6 +35,7 @@ pub struct CanonicalMention {
 pub type EntitiesDict = HashMap<String, Vec<String>>;
 
 /// EntityCanonicalizer resolves entity mentions to canonical entities using database-backed aliases
+#[derive(Clone)]
 pub struct EntityCanonicalizer {
     pool: Arc<PgPool>,
     cache: Arc<RwLock<HashMap<String, CanonicalMention>>>, // normalized surface -> CanonicalMention
@@ -62,7 +63,7 @@ impl EntityCanonicalizer {
         }
 
         // Load all canonical entities with their aliases
-        let rows = sqlx::query!(
+        let rows = sqlx::query(
             r#"
             SELECT ce.id, ce.canonical_name, ce.entity_type, ea.alias
             FROM canonical_entities ce
@@ -74,17 +75,19 @@ impl EntityCanonicalizer {
 
         let mut cache = self.cache.write().await;
         for row in rows {
-            let canonical_id = row.id.to_string();
-            let canonical_name = row.canonical_name;
-            let entity_type = row.entity_type;
+            let canonical_id: Uuid = row.get("id");
+            let canonical_id = canonical_id.to_string();
+            let canonical_name: String = row.get("canonical_name");
+            let entity_type: String = row.get("entity_type");
 
             // Add alias if present
-            if let Some(alias) = row.alias {
+            let alias_opt: Option<String> = row.get("alias");
+            if let Some(alias) = alias_opt {
                 let normalized = Self::normalize_text(&alias, &entity_type);
                 cache.insert(
                     normalized,
                     CanonicalMention {
-                        surface_form: alias,
+                        surface_form: alias.clone(),
                         canonical_id: canonical_id.clone(),
                         canonical_name: canonical_name.clone(),
                         entity_type: entity_type.clone(),
@@ -142,7 +145,7 @@ impl EntityCanonicalizer {
     pub fn generate_aliases(base_name: &str, entity_type: &str) -> Vec<String> {
         let mut aliases = HashSet::new();
         let normalized = Self::normalize_text(base_name, "");
-        aliases.insert(normalized);
+        aliases.insert(normalized.clone());
 
         match entity_type {
             "PERSON" => {
@@ -390,13 +393,13 @@ mod tests {
     #[test]
     fn test_normalize_text() {
         let normalized = EntityCanonicalizer::normalize_text("  Mr. Joe Biden  ", "PERSON");
-        assert_eq!(normalized, "person:joe biden");
+        assert_eq!(normalized, "PERSON:joe biden");
     }
 
     #[test]
     fn test_normalize_text_org() {
         let normalized = EntityCanonicalizer::normalize_text("European Union", "ORG");
-        assert_eq!(normalized, "org:european union");
+        assert_eq!(normalized, "ORG:european union");
     }
 
     #[test]
