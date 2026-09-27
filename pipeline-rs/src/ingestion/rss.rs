@@ -60,12 +60,12 @@ async fn fetch_feed(
                             return None;
                         }
                     };
-                    info!("Successfully fetched feed: {} (status: {})", feed_url, status_str);
-                    info!("Feed response preview (first 200 chars): {}", &text[..text.len().min(200)]);
+                    warn!("Successfully fetched feed: {} (status: {})", feed_url, status_str);
+                    warn!("Feed response preview (first 200 chars): {}", &text[..text.len().min(200)]);
                     let feed = parser::parse(text.as_bytes());
                     match feed {
                         Ok(f) => {
-                            info!("Parsed feed: {} entries", f.entries.len());
+                            warn!("Parsed feed: {} entries", f.entries.len());
                             return Some(f);
                         }
                         Err(e) => {
@@ -223,7 +223,7 @@ pub async fn ingest_rss_feeds(
 
     for (source_key, feed_url, source_info, feed) in fetched {
         if let Some(feed) = feed {
-            info!("Processing {} entries from {} ({})", feed.entries.len(), source_info.name, feed_url);
+            warn!("Processing {} entries from {} ({})", feed.entries.len(), source_info.name, feed_url);
             for entry in feed.entries.iter().take(max_per_feed).map(parse_feed_entry).flatten() {
                 let seen_urls = seen_urls.clone();
                 let source_info = source_info.clone();
