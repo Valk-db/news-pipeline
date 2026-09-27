@@ -77,3 +77,12 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           REDDIT_USER_AGENT: "news-pipeline/0.1 (CI test)"
+
+      - name: Run full pipeline (tier-1 only)
+        run: timeout 180 cargo run 2>&1 || true
+        working-directory: pipeline-rs
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_news
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          REDDIT_USER_AGENT: "news-pipeline/0.1 (CI test)"
