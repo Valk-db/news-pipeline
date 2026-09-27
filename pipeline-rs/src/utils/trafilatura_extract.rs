@@ -1,7 +1,9 @@
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use std::collections::HashSet;
+use std::io::Cursor;
 use url::{Url, form_urlencoded};
+use rust_trafilatura::{extract, Options};
 
 static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
@@ -116,36 +118,28 @@ pub async fn extract_article(url: &str, _source_key: Option<&str>) -> (Option<St
 
 /// Synchronous extraction from HTML - runs in thread pool
 fn extract_from_html(html: &str) -> (Option<String>, Option<String>) {
-    // Use trafilatura via command-line or native implementation
-    // For now, a simple placeholder - we'll add proper extraction when trafilatura crate is available
-    // This is a minimal implementation that extracts text between <p> tags as a fallback
+    let options = Options::default();
+    let cursor = Cursor::new(html.as_bytes());
 
-    // Try to use a simple HTML parser
-    use regex::Regex;
+    match extract(cursor, &options) {
+        Ok(result) => {
+            let body = result.content_text;
+            let body = if body.len() > 200 { Some(body.trim().to_string()) } else { None };
 
-    let title_re = Regex::new(r"(?s)<title[^>]*>(.*?)</title>").ok();
-    let title = title_re
-        .and_then(|re| re.captures(html))
-        .and_then(|cap| cap.get(1))
-        .map(|m| m.as_str().trim().to_string());
+            // Metadata title is String (not Option), so handle empty case
+            let title = if !result.metadata.title.is_empty() {
+                Some(result.metadata.title.trim().to_string())
+            } else {
+                None
+            };
 
-    // Extract text content - basic approach
-    let body = html
-        .replace("<p>", "\n")
-        .replace("</p>", "")
-        .replace("<br>", "\n")
-        .replace("<br/>", "\n")
-        .replace("<br />", "\n");
-
-    // Strip remaining HTML tags
-    let tag_re = Regex::new(r"<[^>]*>").ok();
-    let body = tag_re.map_or(body.clone(), |re| re.replace_all(&body, " ").to_string());
-
-    // Clean up whitespace
-    let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    let body = if body.len() > 200 { Some(body) } else { None };
-
-    (body, title)
+            (body, title)
+        }
+        Err(e) => {
+            tracing::warn!("trafilatura extraction failed: {}", e);
+            (None, None)
+        }
+    }
 }
 
 #[cfg(test)]

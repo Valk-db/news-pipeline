@@ -12,7 +12,7 @@ use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, warn};
+use tracing::{debug, warn, info};
 use uuid::Uuid;
 
 /// Entity labels we care about (OntoNotes style)
@@ -33,6 +33,9 @@ pub struct CanonicalMention {
 
 /// Extracted entities format: Dict<label, Vec<String>>
 pub type EntitiesDict = HashMap<String, Vec<String>>;
+
+// NER - BLOCKED: rust-bert 0.23.0 depends on ort ^1.16.3 which is yanked
+// Will re-enable when ort 1.16.3 is unyanked or rust-bert updates
 
 /// EntityCanonicalizer resolves entity mentions to canonical entities using database-backed aliases
 #[derive(Clone)]
@@ -377,11 +380,17 @@ pub fn canonical_jaccard(set_a: &HashSet<String>, set_b: &HashSet<String>) -> f6
     intersection as f64 / union as f64
 }
 
-/// Extract entities from text - PLACEHOLDER for T5
-/// In T5, this will call rust-bert or onnxruntime for actual NER
+/// Extract entities from text using rust-bert NER pipeline
+/// Maps rust-bert entity labels to OntoNotes-compatible labels:
+/// - PER -> PERSON
+/// - ORG -> ORG
+/// - LOC -> GPE (geopolitical entity)
+/// - MISC -> MISC (or dropped)
+///
+/// BLOCKED: rust-bert 0.23.0 depends on ort ^1.16.3 which is yanked.
+/// Returns empty dict with warning. Will be re-enabled when ort 1.16.3 is unyanked.
 pub async fn extract_entities_top_n(_text: &str, _top_n: Option<usize>) -> EntitiesDict {
-    // Placeholder - returns empty dict
-    // In T5, this will be implemented with rust-bert/onnxruntime
+    tracing::warn!("NER disabled: rust-bert depends on yanked ort ^1.16.3. Returning empty entities.");
     EntitiesDict::new()
 }
 
