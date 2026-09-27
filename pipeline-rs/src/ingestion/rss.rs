@@ -46,7 +46,9 @@ async fn fetch_feed(
     for attempt in 0..max_retries {
         match client.get(feed_url).timeout(timeout).send().await {
             Ok(response) => {
-                if response.status().is_success() {
+                let status = response.status();
+                let status_str = format!("{}", status);
+                if status.is_success() {
                     let text = match response.text().await {
                         Ok(t) => t,
                         Err(e) => {
@@ -58,8 +60,18 @@ async fn fetch_feed(
                             return None;
                         }
                     };
-                    info!("Successfully fetched feed: {}", feed_url);
-                    return parser::parse(text.as_bytes()).ok();
+                    info!("Successfully fetched feed: {} (status: {})", feed_url, status_str);
+                    let feed = parser::parse(text.as_bytes());
+                    match feed {
+                        Ok(f) => {
+                            info!("Parsed feed: {} entries", f.entries.len());
+                            return Some(f);
+                        }
+                        Err(e) => {
+                            error!("Failed to parse feed {}: {}", feed_url, e);
+                            return None;
+                        }
+                    }
                 }
 
                 let status = response.status().as_u16();
@@ -208,8 +220,9 @@ pub async fn ingest_rss_feeds(
     let extract_sem = Arc::new(Semaphore::new(15));
     let mut process_tasks = Vec::new();
 
-    for (source_key, _feed_url, source_info, feed) in fetched {
+    for (source_key, feed_url, source_info, feed) in fetched {
         if let Some(feed) = feed {
+            info!("Processing {} entries from {} ({})", feed.entries.len(), source_info.name, feed_url);
             for entry in feed.entries.iter().take(max_per_feed).map(parse_feed_entry).flatten() {
                 let seen_urls = seen_urls.clone();
                 let source_info = source_info.clone();
