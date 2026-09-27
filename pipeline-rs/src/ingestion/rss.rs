@@ -61,6 +61,7 @@ async fn fetch_feed(
                         }
                     };
                     info!("Successfully fetched feed: {} (status: {})", feed_url, status_str);
+                    info!("Feed response preview (first 200 chars): {}", &text[..text.len().min(200)]);
                     let feed = parser::parse(text.as_bytes());
                     match feed {
                         Ok(f) => {
