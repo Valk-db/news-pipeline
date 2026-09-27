@@ -49,6 +49,7 @@ async fn fetch_feed(
             Ok(response) => {
                 let status = response.status();
                 let status_str = format!("{}", status);
+                warn!("Feed {} returned HTTP {}", feed_url, status_str);
                 if status.is_success() {
                     let text = match response.text().await {
                         Ok(t) => t,
@@ -62,7 +63,7 @@ async fn fetch_feed(
                         }
                     };
                     warn!("Successfully fetched feed: {} (status: {})", feed_url, status_str);
-                    warn!("Feed response preview (first 200 chars): {}", &text[..text.len().min(200)]);
+                    warn!("Feed response preview (first 500 chars): {}", &text[..text.len().min(500)]);
                     let feed = parser::parse(text.as_bytes());
                     match feed {
                         Ok(f) => {
@@ -77,7 +78,6 @@ async fn fetch_feed(
                 }
 
                 let status = response.status().as_u16();
-                warn!("Feed {} returned HTTP {}", feed_url, status);
                 let should_retry = status >= 500 || status == 429;
 
                 if should_retry && attempt < max_retries - 1 {
