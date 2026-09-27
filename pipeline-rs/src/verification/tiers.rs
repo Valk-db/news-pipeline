@@ -17,11 +17,15 @@ pub async fn apply_dynamic_gate(
 
     // Get stories to evaluate
     let stories = if let Some(ids) = story_ids {
-        let placeholders = ids.iter().enumerate().map(|(i, _)| format!("${}", i + 1)).collect::<Vec<_>>().join(",");
-        let query_str = format!("SELECT * FROM stories WHERE id IN ({})", placeholders);
-        let query = sqlx::query(sqlx::AssertSqlSafe(query_str));
-        let stories = ids.iter().fold(query, |q, id| q.bind(id)).fetch_all(pool).await?;
-        stories
+        if ids.is_empty() {
+            Vec::new()
+        } else {
+            let placeholders = ids.iter().enumerate().map(|(i, _)| format!("${}", i + 1)).collect::<Vec<_>>().join(",");
+            let query_str = format!("SELECT * FROM stories WHERE id IN ({})", placeholders);
+            let query = sqlx::query(sqlx::AssertSqlSafe(query_str));
+            let stories = ids.iter().fold(query, |q, id| q.bind(id)).fetch_all(pool).await?;
+            stories
+        }
     } else {
         // Evaluate all PENDING stories
         sqlx::query("SELECT * FROM stories WHERE status = 'pending'")
