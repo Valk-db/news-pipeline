@@ -44,11 +44,13 @@ async fn fetch_feed(
     let retry_delay = Duration::from_secs_f64(settings.rss_retry_delay);
 
     for attempt in 0..max_retries {
+        eprintln!("[DEBUG] Attempting to fetch feed: {} (attempt {}/{})", feed_url, attempt + 1, max_retries);
         warn!("Attempting to fetch feed: {} (attempt {}/{})", feed_url, attempt + 1, max_retries);
         match client.get(feed_url).timeout(timeout).send().await {
             Ok(response) => {
                 let status = response.status();
                 let status_str = format!("{}", status);
+                eprintln!("[DEBUG] Feed {} returned HTTP {}", feed_url, status_str);
                 warn!("Feed {} returned HTTP {}", feed_url, status_str);
                 if status.is_success() {
                     let text = match response.text().await {
