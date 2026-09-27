@@ -173,14 +173,14 @@ pub fn tier1_sources() -> HashMap<String, SourceConfig> {
             SourceCategory::Broadcaster,
             vec![
                 "https://rss.dw.com/rdf/rss-en-all",
-                "https://rss.dw.com/rdf/rss-en-europe",
             ],
         )
         .with_geographic_focus("Global")
         .with_reliability(0.90)
         .with_bias("center")
         .with_owner_group("Deutsche Welle")
-        .with_priority(2),
+        .with_priority(2)
+        .with_disabled(),
     );
 
     sources.insert(
