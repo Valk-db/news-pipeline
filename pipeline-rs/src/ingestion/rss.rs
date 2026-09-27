@@ -115,9 +115,12 @@ async fn fetch_feed(
 
 /// Convert feed-rs entry to our FeedEntry
 fn parse_feed_entry(entry: &feed_rs::model::Entry) -> Option<FeedEntry> {
+    // Try to find alternate link first, then first link as fallback
     let link = entry.links.iter().find(|l| {
         l.rel.as_deref() == Some("alternate") || l.rel.as_deref() == Some("")
-    }).map(|l| l.href.clone())?;
+    })
+    .or_else(|| entry.links.first())
+    .map(|l| l.href.clone())?;
     let title = entry.title.as_ref()?.content.trim().to_string();
     let summary = entry.summary.as_ref().map(|s| s.content.clone());
     let published = entry.published.or(entry.updated).map(|dt| chrono::DateTime::<chrono::Utc>::from(dt));
