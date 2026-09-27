@@ -37,7 +37,7 @@ async fn fetch_feed(
     client: &Client,
     feed_url: &str,
     timeout: Duration,
-    _source_key: &str,
+    source_key: &str,
     settings: &Settings,
 ) -> Option<feed_rs::model::Feed> {
     let max_retries = settings.rss_max_retries;
@@ -73,6 +73,7 @@ async fn fetch_feed(
                             if f.entries.is_empty() {
                                 eprintln!("[DEBUG] WARNING: Feed has 0 entries!");
                             }
+                            crate::utils::ingest_stats::STATS.record(source_key, "feed_ok", 1);
                             return Some(f);
                         }
                         Err(e) => {
@@ -94,6 +95,7 @@ async fn fetch_feed(
                     tokio::time::sleep(retry_delay).await;
                 } else {
                     error!("Failed to fetch {} after {} attempt(s): HTTP {}", feed_url, attempt + 1, status);
+                    crate::utils::ingest_stats::STATS.record(source_key, "fetch_failed", 1);
                     return None;
                 }
             }
@@ -105,6 +107,7 @@ async fn fetch_feed(
                     tokio::time::sleep(retry_delay).await;
                 } else {
                     error!("Failed to fetch {} after {} attempts: {}", feed_url, max_retries, e);
+                    crate::utils::ingest_stats::STATS.record(source_key, "fetch_failed", 1);
                     return None;
                 }
             }
@@ -161,6 +164,7 @@ async fn process_feed_entry(
 
     if body_text.len() < 200 {
         eprintln!("[DEBUG] process_feed_entry: Body too short ({}) for URL: {}", body_text.len(), url);
+        crate::utils::ingest_stats::STATS.record(&source_info.domain, "extract_short", 1);
         return None;
     }
 
@@ -173,6 +177,9 @@ async fn process_feed_entry(
 
     // Compute content hash for exact dedup
     let content_hash = compute_content_hash(&body_text);
+
+    // Record successful extraction
+    crate::utils::ingest_stats::STATS.record(&source_info.domain, "ok", 1);
 
     // Build RawArticle
     Some(RawArticle {

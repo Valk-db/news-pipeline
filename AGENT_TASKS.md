@@ -1,36 +1,31 @@
-# AGENT_TASKS.md v26
+# AGENT_TASKS.md v29
 
-Supersedes v25. V1 confirmed independently (CI run verified directly against
-the GitHub Actions page, not just the report). W1/W2 hold. Infrastructure is
-proven — the remaining work is making T5 functionally real, not just compiling.
+Supersedes v28. P0 confirmed real and done. This batch: get an honest read on
+the model-loading failure (don't accept "no network access" without the real
+error text), and clean up the main.rs duplication while it's already being
+touched.
 
-## T5a — Wire rust-bert into extract_entities_top_n for real
+## P1a — Get the real error, don't assume the cause
 
-- Replace the empty-dict placeholder with an actual call into rust-bert's NER
-  pipeline.
-- Confirm which checkpoint it loads and whether it preserves GPE vs LOC
-  (flagged since v22) — run it against 5-10 real article bodies from the CI
-  dry-run output and paste the actual entity output, not just "it compiles."
+- Pull the actual `error!("Failed to load NER model: {}", e)` /
+  equivalent embedding-model line from the CI 36356719994 logs and paste it
+  verbatim. If it's a connection/DNS failure, "no network access" holds. If
+  it's a 404, a redirect, or an HTTP error against a specific URL, that's a
+  stale-URL problem in rust-bert's resource resolution, not a network block —
+  different fix (possibly overriding the resource URL manually, or checking
+  for a newer rust-bert release).
+- Once the real cause is known: fix it if fixable, or document precisely why
+  it isn't, before calling T5 functionally verified either way.
 
-## T5b — Wire embeddings for real
+## P1b — Fix main.rs's module duplication
 
-- Same standard: actual model producing an actual vector for a real article,
-  dimension confirmed (384 or whatever the chosen model outputs), not just a
-  successful `cargo build`.
+- `main.rs` declares its own `mod config; mod database; ...` tree duplicating
+  `lib.rs`. Change it to `use pipeline_rs::{config, database, ...};` (or
+  equivalent) so the binary depends on the library crate instead of
+  recompiling the same source separately. Confirm the test count drops back
+  to a single count (not lib+bin duplicated) and note whether build time
+  visibly improves.
 
-## T5c — Real extraction crate
-
-- Still open since v24: replace `extract_from_html`'s regex tag-stripper with
-  `trafilatura`, `readex`, `justext`, or `libreadability`. Run it against a
-  couple of real URLs from the CI output and compare the extracted text
-  against what the regex version produces — should visibly drop nav/ads/footer
-  content.
-
-## Housekeeping
-
-- Paste raw `cargo test` output (unedited) once, to settle the 42-vs-39
-  question definitively.
-- Remove `candle` from `Cargo.toml` if T5a/b end up not using it.
-
-Standard unchanged: "done" means real output from a real run, pasted as
-evidence, not a compile success.
+Once P1a's real cause is known, T5's actual functional verification (GPE/LOC
+correctness, real embedding output) from v28 is still the next thing after —
+not replaced by this batch.
