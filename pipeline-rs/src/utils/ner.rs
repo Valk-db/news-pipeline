@@ -12,7 +12,7 @@ use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, warn, info};
+use tracing::{debug, warn, info, error};
 use uuid::Uuid;
 
 // rust-bert NER using tch backend (libtorch)
@@ -43,7 +43,7 @@ pub type EntitiesDict = HashMap<String, Vec<String>>;
 use rust_bert::pipelines::sentence_embeddings::{SentenceEmbeddingsBuilder, SentenceEmbeddingsModelType};
 
 thread_local! {
-    static NER_MODEL: std::cell::RefCell<Option<NERModel>> = std::cell::RefCell::new(None);
+    static NER_MODEL: std::cell::RefCell<Result<NERModel, String>> = std::cell::RefCell::new(Err("Not loaded".to_string()));
     static EMBEDDING_MODEL: std::cell::RefCell<Option<rust_bert::pipelines::sentence_embeddings::SentenceEmbeddingsModel>> = std::cell::RefCell::new(None);
 }
 
@@ -52,25 +52,51 @@ async fn run_ner_prediction_async(text: &str) -> Result<Vec<Vec<Entity>>, Box<dy
     let text = text.to_string();
     tokio::task::spawn_blocking(move || {
         NER_MODEL.with(|cell| {
-            let mut model_opt = cell.borrow_mut();
-            if model_opt.is_none() {
-                info!("Loading rust-bert NER model (dslim/bert-base-NER)...");
-                let model = NERModel::new(Default::default())?;
-                info!("NER model loaded successfully");
-                *model_opt = Some(model);
+            // Check if model is already loaded or failed to load
+            let model_result = cell.borrow_mut();
+
+            match model_result.as_ref() {
+                Ok(model) => {
+                    // Model already loaded, use it
+                    let max_chars = 2000;
+                    let truncated = if text.len() > max_chars {
+                        &text[..max_chars]
+                    } else {
+                        &text
+                    };
+                    Ok(model.predict(&[truncated]))
+                }
+                Err(e) if e == "Not loaded" => {
+                    // First time - try to load
+                    drop(model_result); // Release borrow
+                    let mut model_opt = cell.borrow_mut();
+                    info!("Loading rust-bert NER model (dslim/bert-base-NER)...");
+                    match NERModel::new(Default::default()) {
+                        Ok(model) => {
+                            info!("NER model loaded successfully");
+                            let max_chars = 2000;
+                            let truncated = if text.len() > max_chars {
+                                &text[..max_chars]
+                            } else {
+                                &text
+                            };
+                            *model_opt = Ok(model);
+                            let model = model_opt.as_ref().unwrap();
+                            Ok(model.predict(&[truncated]))
+                        }
+                        Err(e) => {
+                            let err_msg = format!("Failed to load NER model: {}", e);
+                            error!("{}", err_msg);
+                            *model_opt = Err(err_msg.clone());
+                            Err(err_msg.into())
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Already failed to load before, don't retry
+                    Err(e.clone().into())
+                }
             }
-            let model = model_opt.as_ref().unwrap();
-
-            // Truncate text to model max length (512 tokens ~ ~2000 chars for English)
-            let max_chars = 2000;
-            let truncated = if text.len() > max_chars {
-                &text[..max_chars]
-            } else {
-                &text
-            };
-
-            // predict() returns Vec<Vec<Entity>> directly, not a Result
-            Ok(model.predict(&[truncated]))
         })
     }).await?
 }
