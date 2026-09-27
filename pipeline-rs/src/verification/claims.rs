@@ -325,7 +325,7 @@ pub async fn extract_claims_for_recent_stories(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::verification::utils::canonical_jaccard;
+    use crate::utils::ner::canonical_jaccard;
     use std::collections::HashSet;
 
     #[test]

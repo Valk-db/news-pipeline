@@ -1,5 +1,7 @@
-use crate::models::SourceTier;
 use std::collections::HashMap;
+
+/// Re-export SourceTier for consumers of this module
+pub use crate::models::SourceTier;
 
 /// Categories for organizing sources
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -611,6 +613,159 @@ pub fn get_tier1_rss_sources() -> Vec<crate::ingestion::rss::SourceConfig> {
             rss_urls: s.rss_urls,
         })
         .collect()
+}
+
+/// Ownership groups mapping for source domain clustering
+/// Maps domains to their parent ownership group for deduplication logic
+pub const OWNERSHIP_GROUPS: &[(&str, &str)] = &[
+    // Wire services
+    ("apnews.com", "AP"),
+    ("reuters.com", "Reuters"),
+    ("afp.com", "AFP"),
+    ("pa.media", "PA Media"),
+
+    // US TV rollups
+    ("sinclair.com", "Sinclair"),
+    ("nexstar.tv", "Nexstar"),
+    ("gray.tv", "Gray Television"),
+    ("tegna.com", "Tegna"),
+
+    // Newspaper chains
+    ("gannett.com", "Gannett"),
+    ("hearst.com", "Hearst"),
+    ("advance.net", "Advance Publications"),
+    ("mclatchy.com", "McClatchy"),
+    ("tribpub.com", "Tribune Publishing"),
+
+    // Entertainment (critical for celebrity vertical)
+    ("variety.com", "Penske"),
+    ("deadline.com", "Penske"),
+    ("hollywoodreporter.com", "Penske"),
+    ("rollingstone.com", "Penske"),
+    ("billboard.com", "Penske"),
+
+    // International broadcasters (tier-1)
+    ("dw.com", "DW"),
+    ("france24.com", "France24"),
+    ("aljazeera.com", "Al Jazeera"),
+    ("euronews.com", "Euronews"),
+    ("pbs.org", "PBS"),
+
+    // Tier-2 major papers (enabled in source_registry)
+    ("nytimes.com", "NYT"),
+    ("washingtonpost.com", "WaPo"),
+    ("wsj.com", "WSJ"),
+    ("ft.com", "Financial Times"),
+    ("economist.com", "Economist"),
+    ("foreignpolicy.com", "Foreign Policy"),
+    ("foreignaffairs.com", "Foreign Affairs"),
+    ("csis.org", "CSIS"),
+    ("who.int", "WHO"),
+    ("latimes.com", "LA Times"),
+    ("chicagotribune.com", "Chicago Tribune"),
+    ("bostonglobe.com", "Boston Globe"),
+    ("sfgate.com", "SFGate"),
+    ("seattletimes.com", "Seattle Times"),
+    ("denverpost.com", "Denver Post"),
+    ("miamiherald.com", "Miami Herald"),
+    ("ajc.com", "AJC"),
+    ("houstonchronicle.com", "Houston Chronicle"),
+    ("dallasnews.com", "Dallas News"),
+    ("phillyinquirer.com", "Philly Inquirer"),
+    ("startribune.com", "Star Tribune"),
+    ("oregonlive.com", "OregonLive"),
+    ("dispatch.com", "Dispatch"),
+    ("tennessean.com", "Tennessean"),
+    ("courier-journal.com", "Courier Journal"),
+    ("cincinnati.com", "Cincinnati Enquirer"),
+    ("jsonline.com", "Journal Sentinel"),
+    ("freep.com", "Free Press"),
+    ("azcentral.com", "AZCentral"),
+    ("reviewjournal.com", "Review Journal"),
+    ("rgj.com", "Reno Gazette"),
+    ("cjonline.com", "Topeka Capital-Journal"),
+    ("statesman.com", "Statesman"),
+    ("pressherald.com", "Portland Press Herald"),
+    ("burlingtonfreepress.com", "Burlington Free Press"),
+    ("dailycamera.com", "Daily Camera"),
+    ("coloradoan.com", "Coloradoan"),
+    ("journalnow.com", "Journal Now"),
+    ("greensboro.com", "Greensboro"),
+    ("fayobserver.com", "Fayetteville Observer"),
+    ("citizen-times.com", "Citizen Times"),
+    ("postandcourier.com", "Post and Courier"),
+    ("thestate.com", "The State"),
+    ("tallahassee.com", "Tallahassee"),
+    ("news-press.com", "News Press"),
+    ("naplesnews.com", "Naples News"),
+    ("pnj.com", "Pensacola News Journal"),
+    ("tcpalm.com", "TCPalm"),
+    ("floridatoday.com", "Florida Today"),
+    ("tampabay.com", "Tampa Bay Times"),
+    ("orlandosentinel.com", "Orlando Sentinel"),
+    ("sun-sentinel.com", "Sun Sentinel"),
+    ("palmbeachpost.com", "Palm Beach Post"),
+    ("tcpanews.com", "TCP News"),
+    ("kansascity.com", "Kansas City Star"),
+    ("stltoday.com", "STL Today"),
+    ("columbiatribune.com", "Columbia Tribune"),
+    ("springfieldnewssun.com", "Springfield News Sun"),
+    ("daytondailynews.com", "Dayton Daily News"),
+    ("wichitaeagle.com", "Wichita Eagle"),
+    ("kansas.com", "Kansas.com"),
+    ("omaha.com", "Omaha World-Herald"),
+    ("journalstar.com", "Journal Star"),
+    ("rapidcityjournal.com", "Rapid City Journal"),
+    ("argusleader.com", "Argus Leader"),
+    ("siouxcityjournal.com", "Sioux City Journal"),
+    ("thegazette.com", "The Gazette"),
+    ("qctimes.com", "Quad-City Times"),
+    ("desmoinesregister.com", "Des Moines Register"),
+    ("waterloocedarfallscourier.com", "Waterloo Cedar Falls Courier"),
+    ("globegazette.com", "Globe Gazette"),
+    ("messengernews.net", "Messenger News"),
+    ("carrollspaper.com", "Carroll Daily Times Herald"),
+    ("dailyjournal.net", "Daily Journal"),
+    ("timesdaily.com", "Times Daily"),
+    ("decaturdaily.com", "Decatur Daily"),
+    ("annistonstar.com", "Anniston Star"),
+    ("gadsdentimes.com", "Gadsden Times"),
+    ("dothaneagle.com", "Dothan Eagle"),
+    ("opelikaauburnnews.com", "Opelika-Auburn News"),
+    ("tuscaloosanews.com", "Tuscaloosa News"),
+    ("montgomeryadvertiser.com", "Montgomery Advertiser"),
+    ("timesrecordnews.com", "Times Record News"),
+    ("wacotrib.com", "Waco Tribune"),
+    ("tylerpaper.com", "Tyler Paper"),
+    ("longviewnewsjournal.com", "Longview News Journal"),
+
+    // Tier-1 international
+    ("bbc.com", "BBC"),
+    ("theguardian.com", "Guardian"),
+    ("npr.org", "NPR"),
+
+    // Tier-3 social
+    ("reddit.com", "Reddit"),
+    ("twitter.com", "X/Twitter"),
+    ("x.com", "X/Twitter"),
+    ("bsky.social", "Bluesky"),
+    ("threads.net", "Threads"),
+    ("mastodon.social", "Mastodon"),
+    ("facebook.com", "Meta"),
+    ("linkedin.com", "LinkedIn"),
+    ("youtube.com", "YouTube"),
+    ("tiktok.com", "TikTok"),
+    ("instagram.com", "Instagram"),
+];
+
+/// Get owner group for a domain (exact match + subdomain matching)
+pub fn get_owner_group(domain: &str) -> String {
+    for (known_domain, group) in OWNERSHIP_GROUPS {
+        if domain == *known_domain || domain.ends_with(&format!(".{}", known_domain)) {
+            return group.to_string();
+        }
+    }
+    "Independent".to_string()
 }
 
 #[cfg(test)]

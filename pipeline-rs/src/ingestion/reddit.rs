@@ -1,12 +1,15 @@
 use crate::config::Settings;
+use crate::ingestion::adapter::{SourceAdapter, SourceHealth};
 use crate::models::{RawArticle, SourceTier};
 use crate::utils::trafilatura_extract::{compute_content_hash, compute_url_hash, extract_article};
+use async_trait::async_trait;
 use feed_rs::parser;
 use reqwest::Client;
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 /// Target subreddits for geopolitics/news
 const TARGET_SUBREDDITS: &[&str] = &[
@@ -195,6 +198,76 @@ pub async fn ingest_reddit(
     }
 
     articles
+}
+
+/// Reddit Adapter implementing SourceAdapter trait
+#[derive(Debug)]
+pub struct RedditAdapter {
+    user_agent: String,
+    fetch_timeout: u64,
+    last_articles: Vec<RawArticle>,
+    fetch_called: bool,
+}
+
+impl RedditAdapter {
+    pub fn new(user_agent: String, fetch_timeout: u64) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(Self {
+            user_agent,
+            fetch_timeout,
+            last_articles: Vec::new(),
+            fetch_called: false,
+        })
+    }
+}
+
+#[async_trait]
+impl SourceAdapter for RedditAdapter {
+    fn name(&self) -> &str {
+        "reddit_tier3"
+    }
+
+    async fn fetch(&mut self) -> Result<Vec<RawArticle>, Box<dyn std::error::Error + Send + Sync>> {
+        let settings = crate::config::Settings {
+            rss_fetch_timeout: self.fetch_timeout as i64,
+            reddit_user_agent: self.user_agent.clone(),
+            ..Default::default()
+        };
+
+        let articles = ingest_reddit(None, 25, "day", &settings).await;
+        self.last_articles = articles.clone();
+        self.fetch_called = true;
+        Ok(articles)
+    }
+
+    async fn health_check(&self) -> SourceHealth {
+        if !self.fetch_called {
+            return SourceHealth {
+                status: "down".to_string(),
+                detail: "No fetch performed yet".to_string(),
+                failed: vec!["reddit.com".to_string()],
+                succeeded: Vec::new(),
+                skipped: Vec::new(),
+            };
+        }
+
+        if self.last_articles.is_empty() {
+            return SourceHealth {
+                status: "down".to_string(),
+                detail: "No articles fetched".to_string(),
+                failed: vec!["reddit.com".to_string()],
+                succeeded: Vec::new(),
+                skipped: Vec::new(),
+            };
+        }
+
+        SourceHealth {
+            status: "ok".to_string(),
+            detail: format!("Fetched {} articles", self.last_articles.len()),
+            succeeded: vec!["reddit.com".to_string()],
+            failed: Vec::new(),
+            skipped: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]

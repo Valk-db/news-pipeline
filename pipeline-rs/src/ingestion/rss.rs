@@ -1,6 +1,8 @@
 use crate::config::Settings;
+use crate::ingestion::adapter::{SourceAdapter, SourceHealth};
 use crate::models::{RawArticle, SourceTier};
 use crate::utils::trafilatura_extract::{compute_content_hash, compute_url_hash, extract_article};
+use async_trait::async_trait;
 use feed_rs::parser;
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
@@ -9,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 /// Source configuration for RSS feeds
 #[derive(Debug, Clone)]
@@ -183,12 +186,9 @@ pub async fn ingest_rss_feeds(
     // Fetch all feeds concurrently with bounded semaphore
     let fetch_sem = Arc::new(Semaphore::new(10));
 
-    let fetch_futures = feed_tasks.iter().map(|(source_key, feed_url, source_info)| {
+    let fetch_futures = feed_tasks.into_iter().map(|(source_key, feed_url, source_info)| {
         let client = client.clone();
         let sem = fetch_sem.clone();
-        let source_key = source_key.clone();
-        let feed_url = feed_url.clone();
-        let source_info = source_info.clone();
         let settings = settings.clone();
         let timeout = timeout;
 
@@ -307,6 +307,109 @@ pub fn get_tier1_sources() -> Vec<SourceConfig> {
             ],
         },
     ]
+}
+
+/// RSS Adapter implementing SourceAdapter trait
+#[derive(Debug)]
+pub struct RssAdapter {
+    configs: Vec<SourceConfig>,
+    tier: SourceTier,
+    fetch_timeout: u64,
+    max_retries: u32,
+    retry_delay: f64,
+    last_articles: Vec<RawArticle>,
+    last_stats: std::collections::HashMap<String, u64>,
+    fetch_called: bool,
+}
+
+impl RssAdapter {
+    pub fn new(
+        configs: Vec<SourceConfig>,
+        tier: SourceTier,
+        fetch_timeout: u64,
+        max_retries: u32,
+        retry_delay: f64,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(Self {
+            configs,
+            tier,
+            fetch_timeout,
+            max_retries,
+            retry_delay,
+            last_articles: Vec::new(),
+            last_stats: std::collections::HashMap::new(),
+            fetch_called: false,
+        })
+    }
+}
+
+#[async_trait]
+impl SourceAdapter for RssAdapter {
+    fn name(&self) -> &str {
+        match self.tier {
+            SourceTier::Tier1 => "rss_tier1",
+            SourceTier::Tier2 => "rss_tier2",
+            _ => "rss",
+        }
+    }
+
+    async fn fetch(&mut self) -> Result<Vec<RawArticle>, Box<dyn std::error::Error + Send + Sync>> {
+        let settings = crate::config::Settings {
+            rss_fetch_timeout: self.fetch_timeout as i64,
+            rss_max_retries: self.max_retries as i64,
+            rss_retry_delay: self.retry_delay,
+            ..Default::default()
+        };
+
+        let articles = ingest_rss_feeds(50, self.configs.clone(), &settings).await;
+        self.last_articles = articles.clone();
+        self.last_stats = crate::utils::ingest_stats::STATS.snapshot();
+        self.fetch_called = true;
+        Ok(articles)
+    }
+
+    async fn health_check(&self) -> SourceHealth {
+        if !self.fetch_called {
+            return SourceHealth {
+                status: "down".to_string(),
+                detail: "No fetch performed yet".to_string(),
+                failed: self.configs.iter().map(|c| c.domain.clone()).collect(),
+                succeeded: Vec::new(),
+                skipped: Vec::new(),
+            };
+        }
+
+        // Check per-domain success for tier-1
+        if self.tier == SourceTier::Tier1 {
+            let mut failed_domains = Vec::new();
+            for config in &self.configs {
+                let ok_count = self.last_stats.get(&format!("{}.ok", config.domain)).copied().unwrap_or(0);
+                if ok_count == 0 {
+                    failed_domains.push(config.domain.clone());
+                }
+            }
+
+            if !failed_domains.is_empty() {
+                return SourceHealth {
+                    status: "degraded".to_string(),
+                    detail: format!("Tier-1 domains with zero articles: {}", failed_domains.join(", ")),
+                    failed: failed_domains.clone(),
+                    succeeded: self.configs.iter().map(|c| c.domain.clone()).filter(|d| !failed_domains.contains(d)).collect(),
+                    skipped: Vec::new(),
+                };
+            }
+        }
+
+        // For tier-2 or if all tier-1 domains succeeded
+        let succeeded_domains: Vec<String> = self.last_articles.iter().map(|a| a.source_domain.clone()).collect();
+        SourceHealth {
+            status: "ok".to_string(),
+            detail: format!("Fetched {} articles", self.last_articles.len()),
+            succeeded: succeeded_domains,
+            failed: Vec::new(),
+            skipped: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]

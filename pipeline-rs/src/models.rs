@@ -244,6 +244,14 @@ pub struct Story {
     pub updated_at: DateTime<Utc>,
 }
 
+/// StoryUnitLink matching the story_unit_links table (many-to-many stories ↔ reporting_units)
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct StoryUnitLink {
+    pub id: i32,
+    pub story_id: Uuid,
+    pub unit_id: Uuid,
+}
+
 /// CuratedPost matching the curated_posts table
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct CuratedPost {

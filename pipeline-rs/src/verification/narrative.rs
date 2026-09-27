@@ -5,7 +5,7 @@
 
 use crate::database::PgPool;
 use crate::models::{EntityEdge, EdgePredicate, Story};
-use crate::verification::utils::entity_jaccard;
+use crate::utils::ner::{entity_set_jaccard, canonical_jaccard};
 use serde::Serialize;
 use sqlx::Row;
 use std::collections::HashSet;
@@ -94,7 +94,7 @@ pub async fn link_narrative_arcs(
     let older_stories = get_stories_with_entities(pool, cutoff, Some(story_id)).await;
 
     for (older_story_id, older_entities) in older_stories {
-        let jaccard = entity_jaccard(&target_entities, &older_entities);
+        let jaccard = entity_set_jaccard(&target_entities, &older_entities);
 
         let (predicate, confidence) = if jaccard >= SAME_EVENT_AS_THRESHOLD {
             (EdgePredicate::SameEventAs, (jaccard * 100.0).min(100.0) as i32)
@@ -268,6 +268,7 @@ pub async fn link_narrative_arcs_for_recent_stories(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::ner::entity_set_jaccard;
     use std::collections::HashSet;
 
     #[test]
@@ -283,7 +284,7 @@ mod tests {
         set_b.insert("2".to_string());
         set_b.insert("3".to_string());
 
-        let j = entity_jaccard(&set_a, &set_b);
+        let j = entity_set_jaccard(&set_a, &set_b);
         assert!(j >= SAME_EVENT_AS_THRESHOLD);
     }
 
@@ -297,7 +298,7 @@ mod tests {
         set_b.insert("1".to_string());
         set_b.insert("3".to_string());
 
-        let j = entity_jaccard(&set_a, &set_b);
+        let j = entity_set_jaccard(&set_a, &set_b);
         assert!(j >= PART_OF_NARRATIVE_THRESHOLD);
         assert!(j < SAME_EVENT_AS_THRESHOLD);
     }

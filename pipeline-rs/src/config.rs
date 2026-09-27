@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use dotenvy::dotenv;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct Settings {
     // Database
     pub database_url: String,

@@ -4,6 +4,7 @@ mod ingestion;
 mod llm;
 mod models;
 mod utils;
+mod verification;
 
 use config::Settings;
 use database::{create_pool, test_connection};
