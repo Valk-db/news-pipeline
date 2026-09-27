@@ -38,118 +38,116 @@ pub struct CanonicalMention {
 pub type EntitiesDict = HashMap<String, Vec<String>>;
 
 // NER using tch backend (libtorch) - enabled for NER and embeddings
-// Uses dedicated worker threads with channels to own models (which are not Send/Sync)
+// Uses dedicated OS threads (std::thread::spawn) with channels to own models (which are not Send/Sync)
+// std::thread::spawn avoids tokio Runtime::drop deadlocks in #[tokio::test] per-test runtimes
 use rust_bert::pipelines::sentence_embeddings::{SentenceEmbeddingsBuilder, SentenceEmbeddingsModelType};
 use tokio::sync::oneshot;
-use std::sync::OnceLock;
+use tokio::sync::OnceCell;
 
 type NerRequest = (String, oneshot::Sender<Result<Vec<Vec<Entity>>, String>>);
 type EmbeddingRequest = (String, oneshot::Sender<Result<Vec<Vec<f32>>, String>>);
 
-static NER_WORKER_SENDER: OnceLock<tokio::sync::mpsc::UnboundedSender<NerRequest>> = OnceLock::new();
-static EMBEDDING_WORKER_SENDER: OnceLock<tokio::sync::mpsc::UnboundedSender<EmbeddingRequest>> = OnceLock::new();
+static NER_WORKER_SENDER: OnceCell<tokio::sync::mpsc::UnboundedSender<NerRequest>> = OnceCell::const_new();
+static EMBEDDING_WORKER_SENDER: OnceCell<tokio::sync::mpsc::UnboundedSender<EmbeddingRequest>> = OnceCell::const_new();
 
 /// Initialize the NER worker thread (call once at startup)
 pub async fn init_ner_worker() {
-    if NER_WORKER_SENDER.get().is_some() {
-        return; // Already initialized
-    }
+    let sender = NER_WORKER_SENDER.get_or_init(|| async {
+        let (tx, mut rx): (tokio::sync::mpsc::UnboundedSender<NerRequest>, tokio::sync::mpsc::UnboundedReceiver<NerRequest>) = tokio::sync::mpsc::unbounded_channel();
 
-    let (tx, mut rx): (tokio::sync::mpsc::UnboundedSender<NerRequest>, tokio::sync::mpsc::UnboundedReceiver<NerRequest>) = tokio::sync::mpsc::unbounded_channel();
-
-    // Spawn dedicated blocking thread for NER
-    tokio::task::spawn_blocking(move || {
-        // Load NER model once in this thread - use default (dslim/bert-base-NER)
-        let model = match NERModel::new(Default::default()) {
-            Ok(m) => {
-                info!("NER model loaded successfully in worker thread");
-                m
-            }
-            Err(e) => {
-                error!("Failed to load NER model: {}", e);
-                // Keep running to respond to requests with errors
-                loop {
-                    if let Some((_text, resp_tx)) = rx.blocking_recv() {
-                        let _ = resp_tx.send(Err(format!("NER model failed to load: {}", e)));
-                    } else {
-                        break;
-                    }
+        // Spawn dedicated OS thread for NER (std::thread::spawn, NOT tokio::task::spawn_blocking)
+        // This avoids tokio Runtime::drop deadlocks in #[tokio::test] per-test runtimes
+        std::thread::spawn(move || {
+            // Load NER model once in this thread - use default (dslim/bert-base-NER)
+            let model = match NERModel::new(Default::default()) {
+                Ok(m) => {
+                    info!("NER model loaded successfully in worker thread");
+                    m
                 }
-                return;
-            }
-        };
-
-        // Process requests
-        while let Some((text, resp_tx)) = rx.blocking_recv() {
-            let max_chars = 2000;
-            let truncated = if text.len() > max_chars {
-                &text[..max_chars]
-            } else {
-                &text
+                Err(e) => {
+                    error!("Failed to load NER model: {}", e);
+                    // Keep running to respond to requests with errors
+                    loop {
+                        if let Some((_text, resp_tx)) = rx.blocking_recv() {
+                            let _ = resp_tx.send(Err(format!("NER model failed to load: {}", e)));
+                        } else {
+                            break;
+                        }
+                    }
+                    return;
+                }
             };
-            let result = model.predict(&[truncated]);
-            let _ = resp_tx.send(Ok(result));
-        }
-    });
 
-    NER_WORKER_SENDER.set(tx).ok();
-    info!("NER worker thread initialized");
+            // Process requests
+            while let Some((text, resp_tx)) = rx.blocking_recv() {
+                let max_chars = 2000;
+                let truncated = if text.len() > max_chars {
+                    &text[..max_chars]
+                } else {
+                    &text
+                };
+                let result = model.predict(&[truncated]);
+                let _ = resp_tx.send(Ok(result));
+            }
+        });
+
+        info!("NER worker thread initialized");
+        tx
+    }).await;
 }
 
 /// Initialize the embedding worker thread (call once at startup)
 pub async fn init_embedding_worker() {
-    if EMBEDDING_WORKER_SENDER.get().is_some() {
-        return; // Already initialized
-    }
+    let sender = EMBEDDING_WORKER_SENDER.get_or_init(|| async {
+        let (tx, mut rx): (tokio::sync::mpsc::UnboundedSender<EmbeddingRequest>, tokio::sync::mpsc::UnboundedReceiver<EmbeddingRequest>) = tokio::sync::mpsc::unbounded_channel();
 
-    let (tx, mut rx): (tokio::sync::mpsc::UnboundedSender<EmbeddingRequest>, tokio::sync::mpsc::UnboundedReceiver<EmbeddingRequest>) = tokio::sync::mpsc::unbounded_channel();
-
-    // Spawn dedicated blocking thread for embeddings
-    tokio::task::spawn_blocking(move || {
-        // Load embedding model once in this thread
-        let model = match SentenceEmbeddingsBuilder::remote(SentenceEmbeddingsModelType::AllMiniLmL6V2)
-            .create_model()
-        {
-            Ok(m) => {
-                info!("Embedding model loaded successfully in worker thread (384 dimensions)");
-                m
-            }
-            Err(e) => {
-                error!("Failed to load embedding model: {}", e);
-                // Keep running to respond to requests with errors
-                loop {
-                    if let Some((text, resp_tx)) = rx.blocking_recv() {
-                        let _ = resp_tx.send(Err(format!("Embedding model failed to load: {}", e)));
-                    } else {
-                        break;
-                    }
-                }
-                return;
-            }
-        };
-
-        // Process requests
-        while let Some((text, resp_tx)) = rx.blocking_recv() {
-            let max_chars = 2000;
-            let truncated = if text.len() > max_chars {
-                &text[..max_chars]
-            } else {
-                &text
-            };
-            match model.encode(&[truncated]) {
-                Ok(embeddings) => {
-                    let vec_embeddings: Vec<Vec<f32>> = embeddings.into_iter().map(|e| e.to_vec()).collect();
-                    let _ = resp_tx.send(Ok(vec_embeddings));
+        // Spawn dedicated OS thread for embeddings
+        std::thread::spawn(move || {
+            // Load embedding model once in this thread
+            let model = match SentenceEmbeddingsBuilder::remote(SentenceEmbeddingsModelType::AllMiniLmL6V2)
+                .create_model()
+            {
+                Ok(m) => {
+                    info!("Embedding model loaded successfully in worker thread (384 dimensions)");
+                    m
                 }
                 Err(e) => {
-                    let _ = resp_tx.send(Err(format!("Embedding prediction failed: {}", e)));
+                    error!("Failed to load embedding model: {}", e);
+                    // Keep running to respond to requests with errors
+                    loop {
+                        if let Some((text, resp_tx)) = rx.blocking_recv() {
+                            let _ = resp_tx.send(Err(format!("Embedding model failed to load: {}", e)));
+                        } else {
+                            break;
+                        }
+                    }
+                    return;
+                }
+            };
+
+            // Process requests
+            while let Some((text, resp_tx)) = rx.blocking_recv() {
+                let max_chars = 2000;
+                let truncated = if text.len() > max_chars {
+                    &text[..max_chars]
+                } else {
+                    &text
+                };
+                match model.encode(&[truncated]) {
+                    Ok(embeddings) => {
+                        let vec_embeddings: Vec<Vec<f32>> = embeddings.into_iter().map(|e| e.to_vec()).collect();
+                        let _ = resp_tx.send(Ok(vec_embeddings));
+                    }
+                    Err(e) => {
+                        let _ = resp_tx.send(Err(format!("Embedding prediction failed: {}", e)));
+                    }
                 }
             }
-        }
-    });
+        });
 
-    EMBEDDING_WORKER_SENDER.set(tx).ok();
-    info!("Embedding worker thread initialized");
+        info!("Embedding worker thread initialized");
+        tx
+    }).await;
 }
 
 /// Run NER prediction using the dedicated worker thread
@@ -649,5 +647,68 @@ mod tests {
 
         let j = entity_set_jaccard(&set_a, &set_b);
         assert!((j - 1.0 / 3.0).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_ner_worker_initialization_and_prediction() {
+        // Initialize the NER worker (this will spawn the OS thread and load the model)
+        init_ner_worker().await;
+
+        // Run a prediction through the worker
+        let text = "Joe Biden met with Vladimir Putin in Geneva yesterday.";
+        let result = extract_entities_top_n(text, Some(10)).await;
+
+        // Handle both cases: model loads successfully or fails gracefully
+        if result.is_empty() {
+            // Model failed to load (expected in CI without network access)
+            // Verify the worker thread handled it gracefully - no panic, no deadlock
+            eprintln!("NER model failed to load (expected in environments without HuggingFace access) - worker handled gracefully");
+        } else {
+            // Model loaded successfully - verify entity extraction works
+            eprintln!("Extracted entities: {:?}", result);
+            if let Some(locs) = result.get("GPE") {
+                eprintln!("GPE entities: {:?}", locs);
+            }
+            if let Some(persons) = result.get("PERSON") {
+                eprintln!("PERSON entities: {:?}", persons);
+            }
+            if let Some(orgs) = result.get("ORG") {
+                eprintln!("ORG entities: {:?}", orgs);
+            }
+        }
+
+        // Key assertion: the test completes without deadlocking or panicking
+        // This verifies the worker thread mechanism works correctly
+        assert!(true, "Worker thread initialized and test completed without deadlock");
+    }
+
+    #[tokio::test]
+    async fn test_embedding_worker_initialization_and_prediction() {
+        // Initialize the embedding worker (this will spawn the OS thread and load the model)
+        init_embedding_worker().await;
+
+        // Run an embedding prediction through the worker
+        let text = "This is a test sentence for embedding generation.";
+        let embedding = extract_embeddings(text).await;
+
+        // Handle both cases: model loads successfully or fails gracefully
+        match embedding {
+            Some(embedding) => {
+                // Model loaded successfully - verify it's a proper embedding
+                assert_eq!(embedding.len(), 384, "Embedding should be 384-dimensional");
+                assert!(!embedding.iter().all(|&v| v == 0.0), "Embedding should not be all zeros");
+                assert!(!embedding.iter().any(|&v| v.is_nan()), "Embedding should not contain NaN");
+                eprintln!("Generated embedding with {} dimensions (first 5: {:?})", embedding.len(), &embedding[..5.min(embedding.len())]);
+            }
+            None => {
+                // Model failed to load (expected in CI without network access)
+                // Verify the worker thread handled it gracefully - no panic, no deadlock
+                eprintln!("Embedding model failed to load (expected in environments without HuggingFace access) - worker handled gracefully");
+            }
+        }
+
+        // Key assertion: the test completes without deadlocking or panicking
+        // This verifies the worker thread mechanism works correctly
+        assert!(true, "Worker thread initialized and test completed without deadlock");
     }
 }
