@@ -140,7 +140,8 @@ pub fn tier1_sources() -> HashMap<String, SourceConfig> {
         .with_reliability(0.92)
         .with_bias("center-left")
         .with_owner_group("Guardian Media Group")
-        .with_priority(3),
+        .with_priority(3)
+        .with_disabled(),
     );
 
     sources.insert(
@@ -227,7 +228,8 @@ pub fn tier1_sources() -> HashMap<String, SourceConfig> {
         .with_reliability(0.87)
         .with_bias("center")
         .with_owner_group("Euronews")
-        .with_priority(2),
+        .with_priority(2)
+        .with_disabled(),
     );
 
     sources.insert(
@@ -243,7 +245,8 @@ pub fn tier1_sources() -> HashMap<String, SourceConfig> {
         .with_reliability(0.92)
         .with_bias("center")
         .with_owner_group("PBS")
-        .with_priority(2),
+        .with_priority(2)
+        .with_disabled(),
     );
 
     // AP and Reuters - disabled (no working RSS)
