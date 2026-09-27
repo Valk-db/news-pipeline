@@ -150,10 +150,14 @@ async fn process_feed_entry(
     }
 
     // Extract article body
+    eprintln!("[DEBUG] process_feed_entry: Calling extract_article for URL: {}", url);
     let (body_text, extracted_title) = extract_article(url, Some(source_key)).await;
+    eprintln!("[DEBUG] process_feed_entry: extract_article returned body={:?}, title={:?}", body_text.as_ref().map(|b| b.len()), extracted_title);
     let body_text = body_text?;
+    eprintln!("[DEBUG] process_feed_entry: body_text len = {}", body_text.len());
 
     if body_text.len() < 200 {
+        eprintln!("[DEBUG] process_feed_entry: Body too short ({}) for URL: {}", body_text.len(), url);
         return None;
     }
 
