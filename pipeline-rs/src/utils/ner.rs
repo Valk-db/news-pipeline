@@ -38,100 +38,150 @@ pub struct CanonicalMention {
 pub type EntitiesDict = HashMap<String, Vec<String>>;
 
 // NER using tch backend (libtorch) - enabled for NER and embeddings
-// Uses thread_local to avoid Send/Sync issues with tch backend
-// Wrapped in spawn_blocking to avoid "Cannot drop a runtime in a context where blocking is not allowed"
+// Uses dedicated worker threads with channels to own models (which are not Send/Sync)
 use rust_bert::pipelines::sentence_embeddings::{SentenceEmbeddingsBuilder, SentenceEmbeddingsModelType};
+use tokio::sync::oneshot;
+use std::sync::OnceLock;
 
-thread_local! {
-    static NER_MODEL: std::cell::RefCell<Result<NERModel, String>> = std::cell::RefCell::new(Err("Not loaded".to_string()));
-    static EMBEDDING_MODEL: std::cell::RefCell<Option<rust_bert::pipelines::sentence_embeddings::SentenceEmbeddingsModel>> = std::cell::RefCell::new(None);
-}
+type NerRequest = (String, oneshot::Sender<Result<Vec<Vec<Entity>>, String>>);
+type EmbeddingRequest = (String, oneshot::Sender<Result<Vec<Vec<f32>>, String>>);
 
-/// Run NER prediction in a blocking thread to avoid runtime drop issues
-async fn run_ner_prediction_async(text: &str) -> Result<Vec<Vec<Entity>>, Box<dyn std::error::Error + Send + Sync>> {
-    let text = text.to_string();
+static NER_WORKER_SENDER: OnceLock<tokio::sync::mpsc::UnboundedSender<NerRequest>> = OnceLock::new();
+static EMBEDDING_WORKER_SENDER: OnceLock<tokio::sync::mpsc::UnboundedSender<EmbeddingRequest>> = OnceLock::new();
+
+/// Initialize the NER worker thread (call once at startup)
+pub async fn init_ner_worker() {
+    if NER_WORKER_SENDER.get().is_some() {
+        return; // Already initialized
+    }
+
+    let (tx, mut rx): (tokio::sync::mpsc::UnboundedSender<NerRequest>, tokio::sync::mpsc::UnboundedReceiver<NerRequest>) = tokio::sync::mpsc::unbounded_channel();
+
+    // Spawn dedicated blocking thread for NER
     tokio::task::spawn_blocking(move || {
-        NER_MODEL.with(|cell| {
-            // Check if model is already loaded or failed to load
-            let model_result = cell.borrow_mut();
-
-            match model_result.as_ref() {
-                Ok(model) => {
-                    // Model already loaded, use it
-                    let max_chars = 2000;
-                    let truncated = if text.len() > max_chars {
-                        &text[..max_chars]
+        // Load NER model once in this thread
+        let model = match NERModel::new(Default::default()) {
+            Ok(m) => {
+                info!("NER model loaded successfully in worker thread");
+                m
+            }
+            Err(e) => {
+                error!("Failed to load NER model: {}", e);
+                // Keep running to respond to requests with errors
+                loop {
+                    if let Some((text, resp_tx)) = rx.blocking_recv() {
+                        let _ = resp_tx.send(Err(format!("NER model failed to load: {}", e)));
                     } else {
-                        &text
-                    };
-                    Ok(model.predict(&[truncated]))
-                }
-                Err(e) if e == "Not loaded" => {
-                    // First time - try to load
-                    drop(model_result); // Release borrow
-                    let mut model_opt = cell.borrow_mut();
-                    info!("Loading rust-bert NER model (dslim/bert-base-NER)...");
-                    match NERModel::new(Default::default()) {
-                        Ok(model) => {
-                            info!("NER model loaded successfully");
-                            let max_chars = 2000;
-                            let truncated = if text.len() > max_chars {
-                                &text[..max_chars]
-                            } else {
-                                &text
-                            };
-                            *model_opt = Ok(model);
-                            let model = model_opt.as_ref().unwrap();
-                            Ok(model.predict(&[truncated]))
-                        }
-                        Err(e) => {
-                            let err_msg = format!("Failed to load NER model: {}", e);
-                            error!("{}", err_msg);
-                            *model_opt = Err(err_msg.clone());
-                            Err(err_msg.into())
-                        }
+                        break;
                     }
                 }
-                Err(e) => {
-                    // Already failed to load before, don't retry
-                    Err(e.clone().into())
-                }
+                return;
             }
-        })
-    }).await?
-}
+        };
 
-/// Run sentence embedding prediction using rust-bert
-/// Uses thread_local to avoid Send/Sync issues with tch backend
-/// Wrapped in spawn_blocking to avoid runtime drop issues
-async fn run_embedding_prediction_async(text: &str) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
-    let text = text.to_string();
-    tokio::task::spawn_blocking(move || {
-        EMBEDDING_MODEL.with(|cell| {
-            let mut model_opt = cell.borrow_mut();
-            if model_opt.is_none() {
-                info!("Loading rust-bert embedding model (AllMiniLmL6V2)...");
-                let model = SentenceEmbeddingsBuilder::remote(SentenceEmbeddingsModelType::AllMiniLmL6V2)
-                    .create_model()?;
-                info!("Embedding model loaded successfully (384 dimensions)");
-                *model_opt = Some(model);
-            }
-            let model = model_opt.as_ref().unwrap();
-
-            // Truncate text to model max length
+        // Process requests
+        while let Some((text, resp_tx)) = rx.blocking_recv() {
             let max_chars = 2000;
             let truncated = if text.len() > max_chars {
                 &text[..max_chars]
             } else {
                 &text
             };
+            let result = model.predict(&[truncated]);
+            let _ = resp_tx.send(Ok(result));
+        }
+    });
 
-            // encode() returns Result<Vec<Embedding>, RustBertError> where Embedding is Vec<f32>
-            let embeddings = model.encode(&[truncated])?;
-            let vec_embeddings: Vec<Vec<f32>> = embeddings.into_iter().map(|e| e.to_vec()).collect();
-            Ok(vec_embeddings)
-        })
-    }).await?
+    NER_WORKER_SENDER.set(tx).ok();
+    info!("NER worker thread initialized");
+}
+
+/// Initialize the embedding worker thread (call once at startup)
+pub async fn init_embedding_worker() {
+    if EMBEDDING_WORKER_SENDER.get().is_some() {
+        return; // Already initialized
+    }
+
+    let (tx, mut rx): (tokio::sync::mpsc::UnboundedSender<EmbeddingRequest>, tokio::sync::mpsc::UnboundedReceiver<EmbeddingRequest>) = tokio::sync::mpsc::unbounded_channel();
+
+    // Spawn dedicated blocking thread for embeddings
+    tokio::task::spawn_blocking(move || {
+        // Load embedding model once in this thread
+        let model = match SentenceEmbeddingsBuilder::remote(SentenceEmbeddingsModelType::AllMiniLmL6V2)
+            .create_model()
+        {
+            Ok(m) => {
+                info!("Embedding model loaded successfully in worker thread (384 dimensions)");
+                m
+            }
+            Err(e) => {
+                error!("Failed to load embedding model: {}", e);
+                // Keep running to respond to requests with errors
+                loop {
+                    if let Some((text, resp_tx)) = rx.blocking_recv() {
+                        let _ = resp_tx.send(Err(format!("Embedding model failed to load: {}", e)));
+                    } else {
+                        break;
+                    }
+                }
+                return;
+            }
+        };
+
+        // Process requests
+        while let Some((text, resp_tx)) = rx.blocking_recv() {
+            let max_chars = 2000;
+            let truncated = if text.len() > max_chars {
+                &text[..max_chars]
+            } else {
+                &text
+            };
+            match model.encode(&[truncated]) {
+                Ok(embeddings) => {
+                    let vec_embeddings: Vec<Vec<f32>> = embeddings.into_iter().map(|e| e.to_vec()).collect();
+                    let _ = resp_tx.send(Ok(vec_embeddings));
+                }
+                Err(e) => {
+                    let _ = resp_tx.send(Err(format!("Embedding prediction failed: {}", e)));
+                }
+            }
+        }
+    });
+
+    EMBEDDING_WORKER_SENDER.set(tx).ok();
+    info!("Embedding worker thread initialized");
+}
+
+/// Run NER prediction using the dedicated worker thread
+async fn run_ner_prediction_async(text: &str) -> Result<Vec<Vec<Entity>>, Box<dyn std::error::Error + Send + Sync>> {
+    init_ner_worker().await;
+
+    let sender = NER_WORKER_SENDER.get().unwrap();
+    let (resp_tx, resp_rx) = oneshot::channel();
+
+    sender.send((text.to_string(), resp_tx)).map_err(|e| format!("Failed to send NER request: {}", e))?;
+
+    match resp_rx.await {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(e)) => Err(e.into()),
+        Err(e) => Err(format!("NER worker channel closed: {}", e).into()),
+    }
+}
+
+/// Run embedding prediction using the dedicated worker thread
+async fn run_embedding_prediction_async(text: &str) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
+    init_embedding_worker().await;
+
+    let sender = EMBEDDING_WORKER_SENDER.get().unwrap();
+    let (resp_tx, resp_rx) = oneshot::channel();
+
+    sender.send((text.to_string(), resp_tx)).map_err(|e| format!("Failed to send embedding request: {}", e))?;
+
+    match resp_rx.await {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(e)) => Err(e.into()),
+        Err(e) => Err(format!("Embedding worker channel closed: {}", e).into()),
+    }
 }
 
 /// EntityCanonicalizer resolves entity mentions to canonical entities using database-backed aliases
