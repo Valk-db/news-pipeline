@@ -58,8 +58,32 @@ pub async fn init_ner_worker() {
         // Spawn dedicated OS thread for NER (std::thread::spawn, NOT tokio::task::spawn_blocking)
         // This avoids tokio Runtime::drop deadlocks in #[tokio::test] per-test runtimes
         std::thread::spawn(move || {
-            // Load NER model once in this thread - use default (dslim/bert-base-NER)
-            let model = match NERModel::new(Default::default()) {
+            // Load NER model once in this thread - explicitly use dslim/bert-base-NER to avoid
+            // rust-bert's default of dbmdz/bert-large-cased-finetuned-conll03-english which has URL parsing issues
+            use rust_bert::pipelines::common::{ModelType, ModelResource};
+            use rust_bert::pipelines::token_classification::{TokenClassificationConfig, LabelAggregationOption};
+            use rust_bert::resources::RemoteResource;
+            use tch::Device;
+            let model = match NERModel::new(TokenClassificationConfig::new(
+                ModelType::Bert,
+                ModelResource::Torch(Box::new(RemoteResource::new(
+                    "https://huggingface.co/dslim/bert-base-NER/resolve/main/pytorch_model.bin",
+                    "dslim/bert-base-NER",
+                ))),
+                Box::new(RemoteResource::new(
+                    "https://huggingface.co/dslim/bert-base-NER/resolve/main/config.json",
+                    "dslim/bert-base-NER",
+                )),
+                Box::new(RemoteResource::new(
+                    "https://huggingface.co/dslim/bert-base-NER/resolve/main/vocab.txt",
+                    "dslim/bert-base-NER",
+                )),
+                None, // merges_resource not needed for BERT
+                false, // lower_case
+                false, // strip_accents
+                false, // add_prefix_space
+                LabelAggregationOption::First,
+            )) {
                 Ok(m) => {
                     info!("NER model loaded successfully in worker thread");
                     m

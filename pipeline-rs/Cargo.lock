@@ -2205,6 +2205,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "sqlx",
+ "tch",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

@@ -1,15 +1,7 @@
-mod config;
-mod database;
-mod ingestion;
-mod llm;
-mod models;
-mod utils;
-mod verification;
-
-use config::Settings;
-use database::{create_pool, test_connection};
-use ingestion::{get_tier1_rss_sources, ingest_reddit, ingest_rss_feeds, run_ingestion};
-use verification::{units::build_reporting_units, stories::build_stories, tiers::apply_dynamic_gate};
+use pipeline_rs::config::Settings;
+use pipeline_rs::database::{create_pool, test_connection};
+use pipeline_rs::ingestion::run_ingestion;
+use pipeline_rs::verification::{units::build_reporting_units, stories::build_stories, tiers::apply_dynamic_gate};
 use sqlx::Row;
 
 #[tokio::main]
@@ -52,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Run ingestion for real (tier-1 only to start)
     println!("\n--- Phase 1: Real ingestion (tier-1) ---");
-    let ingestion_result = run_ingestion(&pool, &settings, false, Some(vec![models::SourceTier::Tier1])).await?;
+    let ingestion_result = run_ingestion(&pool, &settings, false, Some(vec![pipeline_rs::models::SourceTier::Tier1])).await?;
     println!("Ingestion result: {}", serde_json::to_string_pretty(&ingestion_result)?);
 
     // Build reporting units
