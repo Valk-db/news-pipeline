@@ -39,7 +39,6 @@ pub type EntitiesDict = HashMap<String, Vec<String>>;
 
 // NER using tch backend (libtorch) - enabled for NER and embeddings
 // Uses thread_local to avoid Send/Sync issues with tch backend
-use rust_bert::pipelines::ner::{NERModel, Entity};
 
 thread_local! {
     static NER_MODEL: std::cell::RefCell<Option<NERModel>> = std::cell::RefCell::new(None);
@@ -64,7 +63,8 @@ fn run_ner_prediction(text: &str) -> Result<Vec<Vec<Entity>>, Box<dyn std::error
             text
         };
 
-        model.predict(&[truncated]).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        // predict() returns Vec<Vec<Entity>> directly, not a Result
+        Ok(model.predict(&[truncated]))
     })
 }
 
