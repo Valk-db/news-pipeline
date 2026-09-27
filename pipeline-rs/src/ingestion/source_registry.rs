@@ -196,7 +196,8 @@ pub fn tier1_sources() -> HashMap<String, SourceConfig> {
         .with_reliability(0.88)
         .with_bias("center")
         .with_owner_group("France Médias Monde")
-        .with_priority(2),
+        .with_priority(2)
+        .with_disabled(),
     );
 
     sources.insert(
@@ -212,7 +213,8 @@ pub fn tier1_sources() -> HashMap<String, SourceConfig> {
         .with_reliability(0.85)
         .with_bias("center")
         .with_owner_group("Al Jazeera Media Network")
-        .with_priority(2),
+        .with_priority(2)
+        .with_disabled(),
     );
 
     sources.insert(
