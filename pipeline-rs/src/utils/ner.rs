@@ -15,6 +15,9 @@ use tokio::sync::RwLock;
 use tracing::{debug, warn, info};
 use uuid::Uuid;
 
+// rust-bert NER using tch backend (libtorch)
+use rust_bert::pipelines::ner::{NERModel, Entity};
+
 /// Entity labels we care about (OntoNotes style)
 pub const ENTITY_LABELS: &[&str] = &["PERSON", "ORG", "GPE", "LOC", "EVENT", "PRODUCT"];
 
@@ -34,8 +37,36 @@ pub struct CanonicalMention {
 /// Extracted entities format: Dict<label, Vec<String>>
 pub type EntitiesDict = HashMap<String, Vec<String>>;
 
-// NER - BLOCKED: rust-bert 0.23.0 depends on ort ^1.16.3 which is yanked
-// Will re-enable when ort 1.16.3 is unyanked or rust-bert updates
+// NER using tch backend (libtorch) - enabled for NER and embeddings
+// Uses thread_local to avoid Send/Sync issues with tch backend
+use rust_bert::pipelines::ner::{NERModel, Entity};
+
+thread_local! {
+    static NER_MODEL: std::cell::RefCell<Option<NERModel>> = std::cell::RefCell::new(None);
+}
+
+fn run_ner_prediction(text: &str) -> Result<Vec<Vec<Entity>>, Box<dyn std::error::Error + Send + Sync>> {
+    NER_MODEL.with(|cell| {
+        let mut model_opt = cell.borrow_mut();
+        if model_opt.is_none() {
+            info!("Loading rust-bert NER model (dslim/bert-base-NER)...");
+            let model = NERModel::new(Default::default())?;
+            info!("NER model loaded successfully");
+            *model_opt = Some(model);
+        }
+        let model = model_opt.as_ref().unwrap();
+
+        // Truncate text to model max length (512 tokens ~ ~2000 chars for English)
+        let max_chars = 2000;
+        let truncated = if text.len() > max_chars {
+            &text[..max_chars]
+        } else {
+            text
+        };
+
+        model.predict(&[truncated]).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+    })
+}
 
 /// EntityCanonicalizer resolves entity mentions to canonical entities using database-backed aliases
 #[derive(Clone)]
@@ -386,12 +417,45 @@ pub fn canonical_jaccard(set_a: &HashSet<String>, set_b: &HashSet<String>) -> f6
 /// - ORG -> ORG
 /// - LOC -> GPE (geopolitical entity)
 /// - MISC -> MISC (or dropped)
-///
-/// BLOCKED: rust-bert 0.23.0 depends on ort ^1.16.3 which is yanked.
-/// Returns empty dict with warning. Will be re-enabled when ort 1.16.3 is unyanked.
-pub async fn extract_entities_top_n(_text: &str, _top_n: Option<usize>) -> EntitiesDict {
-    tracing::warn!("NER disabled: rust-bert depends on yanked ort ^1.16.3. Returning empty entities.");
-    EntitiesDict::new()
+pub async fn extract_entities_top_n(text: &str, _top_n: Option<usize>) -> EntitiesDict {
+    let entities = match run_ner_prediction(text) {
+        Ok(entities) => entities,
+        Err(e) => {
+            tracing::warn!("NER prediction failed: {}", e);
+            return EntitiesDict::new();
+        }
+    };
+
+    let mut result: EntitiesDict = HashMap::new();
+
+    for entity in entities.into_iter().flatten() {
+        // Map rust-bert labels to OntoNotes labels
+        let label = match entity.label.as_str() {
+            "PER" => "PERSON",
+            "ORG" => "ORG",
+            "LOC" => "GPE",  // Location -> Geopolitical Entity
+            "MISC" => "MISC",
+            _ => continue,
+        };
+
+        let surface = entity.word.trim().to_string();
+        if surface.is_empty() {
+            continue;
+        }
+
+        result.entry(label.to_string())
+            .or_default()
+            .push(surface);
+    }
+
+    // Deduplicate within each label
+    for entities in result.values_mut() {
+        entities.sort();
+        entities.dedup();
+    }
+
+    tracing::info!("Extracted entities: {:?}", result);
+    result
 }
 
 #[cfg(test)]
