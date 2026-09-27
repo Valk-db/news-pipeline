@@ -44,6 +44,7 @@ async fn fetch_feed(
     let retry_delay = Duration::from_secs_f64(settings.rss_retry_delay);
 
     for attempt in 0..max_retries {
+        warn!("Attempting to fetch feed: {} (attempt {}/{})", feed_url, attempt + 1, max_retries);
         match client.get(feed_url).timeout(timeout).send().await {
             Ok(response) => {
                 let status = response.status();
@@ -76,6 +77,7 @@ async fn fetch_feed(
                 }
 
                 let status = response.status().as_u16();
+                warn!("Feed {} returned HTTP {}", feed_url, status);
                 let should_retry = status >= 500 || status == 429;
 
                 if should_retry && attempt < max_retries - 1 {
@@ -91,11 +93,9 @@ async fn fetch_feed(
             }
             Err(e) => {
                 // Network errors (connection refused, DNS, timeout, etc.) - retry
+                warn!("Network error fetching {} (attempt {}/{}): {}", feed_url, attempt + 1, max_retries, e);
                 if attempt < max_retries - 1 {
-                    warn!(
-                        "Failed to fetch {} (attempt {}/{}): {}, retrying in {:?}...",
-                        feed_url, attempt + 1, max_retries, e, retry_delay
-                    );
+                    warn!("Retrying in {:?}...", retry_delay);
                     tokio::time::sleep(retry_delay).await;
                 } else {
                     error!("Failed to fetch {} after {} attempts: {}", feed_url, max_retries, e);
