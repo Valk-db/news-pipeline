@@ -89,16 +89,19 @@ pub fn compute_url_hash(url: &str) -> String {
 /// Extract article body text and title from URL (async)
 /// Returns (body_text, title) or (None, None) on failure
 pub async fn extract_article(url: &str, _source_key: Option<&str>) -> (Option<String>, Option<String>) {
+    eprintln!("[DEBUG] extract_article: Fetching URL: {}", url);
     // Fetch HTML
     let response = match HTTP_CLIENT.get(url).send().await {
         Ok(resp) => resp,
         Err(e) => {
+            eprintln!("[DEBUG] extract_article: Failed to fetch {}: {}", url, e);
             tracing::warn!("Failed to fetch {}: {}", url, e);
             return (None, None);
         }
     };
 
     if !response.status().is_success() {
+        eprintln!("[DEBUG] extract_article: HTTP {} fetching {}", response.status(), url);
         tracing::warn!("HTTP {} fetching {}", response.status(), url);
         return (None, None);
     }
@@ -106,14 +109,18 @@ pub async fn extract_article(url: &str, _source_key: Option<&str>) -> (Option<St
     let html = match response.text().await {
         Ok(text) => text,
         Err(e) => {
+            eprintln!("[DEBUG] extract_article: Failed to read response body for {}: {}", url, e);
             tracing::warn!("Failed to read response body for {}: {}", url, e);
             return (None, None);
         }
     };
 
+    eprintln!("[DEBUG] extract_article: Got HTML ({} bytes), extracting...", html.len());
     // Extract using trafilatura via CLI or native Rust crate
     // For now, use a simple approach - we'll need to add trafilatura crate
-    extract_from_html(&html)
+    let (body, title) = extract_from_html(&html);
+    eprintln!("[DEBUG] extract_article: Extracted body={:?}, title={:?}", body.as_ref().map(|b| b.len()), title);
+    (body, title)
 }
 
 /// Synchronous extraction from HTML - runs in thread pool
