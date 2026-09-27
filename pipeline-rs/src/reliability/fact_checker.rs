@@ -70,6 +70,10 @@ impl FactChecker {
             results.push(result);
         }
 
+        // Note: embeddings-based similarity fallback not yet implemented.
+        // This would require sentence-embeddings pipeline (rust-bert or candle)
+        // to compute claim similarity against previously verified claims in vector space.
+
         // Aggregate results
         let final_result = self.aggregate_results(results);
 

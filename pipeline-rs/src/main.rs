@@ -8,10 +8,12 @@ mod verification;
 
 use config::Settings;
 use database::{create_pool, test_connection};
-use ingestion::{get_tier1_rss_sources, ingest_reddit, ingest_rss_feeds};
+use ingestion::{get_tier1_rss_sources, ingest_reddit, ingest_rss_feeds, run_ingestion};
+use verification::{units::build_reporting_units, stories::build_stories, tiers::apply_dynamic_gate};
+use sqlx::Row;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
@@ -40,47 +42,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     test_connection(&pool).await?;
     println!("Database connection test passed: SELECT 1");
 
-    // Test ingestion - fetch tier-1 RSS sources
-    println!("\n=== Testing RSS Ingestion ===");
-    let tier1_sources = get_tier1_rss_sources();
-    println!("Found {} tier-1 RSS sources", tier1_sources.len());
-    for source in &tier1_sources {
-        println!("  - {} ({}) - {} feeds", source.name, source.domain, source.rss_urls.len());
+    // ===== W1: Run the full pipeline end-to-end =====
+    println!("\n=== Running Full Ingestion Pipeline ===");
+
+    // Run ingestion for all tiers (dry_run first to test)
+    println!("\n--- Phase 1: Dry run ingestion ---");
+    let dry_run_result = run_ingestion(&pool, &settings, true, None).await?;
+    println!("Dry run result: {}", serde_json::to_string_pretty(&dry_run_result)?);
+
+    // Run ingestion for real (tier-1 only to start)
+    println!("\n--- Phase 1: Real ingestion (tier-1) ---");
+    let ingestion_result = run_ingestion(&pool, &settings, false, Some(vec![models::SourceTier::Tier1])).await?;
+    println!("Ingestion result: {}", serde_json::to_string_pretty(&ingestion_result)?);
+
+    // Build reporting units
+    println!("\n--- Phase 2: Build reporting units ---");
+    let units_created = build_reporting_units(&pool).await?;
+    println!("Reporting units created: {}", units_created);
+
+    // Build stories
+    println!("\n--- Phase 3: Build stories ---");
+    let modified_story_ids = build_stories(&pool).await?;
+    println!("Stories created/modified: {}", modified_story_ids.len());
+    for id in &modified_story_ids {
+        println!("  Story ID: {}", id);
     }
 
-    // Test fetching one source to verify it works
-    if !tier1_sources.is_empty() {
-        let test_source = &tier1_sources[0];
-        println!("\nTesting fetch for {}...", test_source.name);
-        let articles = ingest_rss_feeds(5, vec![test_source.clone()], &settings).await;
-        println!("Fetched {} articles from {}", articles.len(), test_source.name);
-        for article in &articles[..std::cmp::min(3, articles.len())] {
-            println!("  - {} ({} chars)", article.title, article.body_text.as_ref().map(|b| b.len()).unwrap_or(0));
-        }
-    }
+    // Apply dynamic gate
+    println!("\n--- Phase 4: Apply dynamic gate ---");
+    let gate_result = apply_dynamic_gate(&pool, Some(modified_story_ids)).await?;
+    println!("Gate result: {}", serde_json::to_string_pretty(&gate_result)?);
 
-    // Test Reddit ingestion
-    println!("\n=== Testing Reddit Ingestion ===");
-    let reddit_articles = ingest_reddit(None, 3, "day", &settings).await;
-    println!("Fetched {} articles from Reddit", reddit_articles.len());
-    for article in &reddit_articles[..std::cmp::min(3, reddit_articles.len())] {
-        println!("  - {} ({} chars)", article.title, article.body_text.as_ref().map(|b| b.len()).unwrap_or(0));
+    // Verify results in database
+    println!("\n--- Verification: Query database ---");
+    let ru_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM reporting_units")
+        .fetch_one(&pool)
+        .await?;
+    println!("Total reporting_units in DB: {}", ru_count.0);
+
+    let story_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM stories")
+        .fetch_one(&pool)
+        .await?;
+    println!("Total stories in DB: {}", story_count.0);
+
+    let queued_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM stories WHERE status = 'queued'")
+        .fetch_one(&pool)
+        .await?;
+    println!("Queued stories: {}", queued_count.0);
+
+    let blocked_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM stories WHERE status = 'blocked'")
+        .fetch_one(&pool)
+        .await?;
+    println!("Blocked stories: {}", blocked_count.0);
+
+    // Show blocked story reasons
+    let blocked_stories = sqlx::query("SELECT id, gate_reason FROM stories WHERE status = 'blocked'")
+        .fetch_all(&pool)
+        .await?;
+    for row in blocked_stories {
+        let id: uuid::Uuid = row.get("id");
+        let reason: Option<String> = row.get("gate_reason");
+        println!("  Blocked story {}: {:?}", id, reason);
     }
 
     // Close pool
     pool.close().await;
 
-    println!("\n✓ T1 - Scaffolding + shared layer: COMPLETE");
-    println!("  - config.rs: Settings with all env vars");
-    println!("  - database.rs: PgPool with Supavisor session mode (port 5432)");
-    println!("  - llm.rs: Groq + Cerebras OpenAI-compatible clients with budget/coalescing");
-    println!("  - models.rs: All database models with sqlx::FromRow");
-    println!("  - main.rs: Opens pool and runs SELECT 1");
-    println!("\n✓ T2 - Ingestion + mechanical extraction: COMPLETE");
-    println!("  - ingestion/rss.rs: feed-rs for RSS/Atom parsing");
-    println!("  - ingestion/reddit.rs: Reddit public RSS ingestion");
-    println!("  - ingestion/source_registry.rs: Source configuration registry");
-    println!("  - utils/trafilatura_extract.rs: URL canonicalization, content hashing");
+    println!("\n✓ W1 - Full pipeline wired and executed: COMPLETE");
+    println!("  - run_ingestion() called with real DB");
+    println!("  - build_reporting_units() called");
+    println!("  - build_stories() called");
+    println!("  - apply_dynamic_gate() called");
+    println!("  - Row counts and IDs printed above");
 
     Ok(())
 }

@@ -218,7 +218,7 @@ pub async fn run_ingestion(
             .bind(&art.body_text)
             .bind(&art.summary)
             .bind(&art.source_domain)
-            .bind(art.source_tier as SourceTier)
+            .bind(art.source_tier)
             .bind(art.published_at)
             .bind(art.fetched_at)
             .bind(&art.entities)

@@ -1,73 +1,56 @@
-# AGENT_TASKS.md v23
+# AGENT_TASKS.md v24
 
-Supersedes v22. v22 assumed T1-T5 would be attempted faithfully against the spec;
-this revision corrects task status after checking the rust-port branch directly
-against what T2/T3/T5 actually named, plus one new standing rule below.
+Supersedes v23. Narrower scope on purpose — T2/T3's files now exist with real
+content (verified: OWNERSHIP_GROUPS matches Python exactly, tiers.rs gate logic
+is real). Two things don't: nothing is wired end-to-end, and a specific false
+claim from v22's review was repeated instead of corrected. This batch fixes both
+before touching T4 or moving forward on anything else.
 
-**New standing rule — reporting status:** a task is "complete" only when every
-file it names exists with real logic (not a placeholder/regex-fallback) *and*
-is actually called from somewhere reachable from `main.rs` — a file compiling
-in isolation with its own unit tests doesn't count. Don't describe something as
-"implemented in <file>" unless you can point to the actual code — that
-specific claim was checked this round and wasn't true. If a task is partial,
-report it as partial and name exactly what's missing — that's not a worse
-outcome than claiming completion, it's the only useful signal Tyler can act on.
+**Standing rule, sharpened:** "complete" means the binary actually runs it, not
+that the module compiles with its own unit tests. Going forward, before
+reporting a task done: run `cargo run` (or a small test binary) against a real
+or scratch database and paste actual output — row counts, IDs, something
+concrete — into the PR description. Unit tests passing is necessary, not
+sufficient.
 
-**Merge policy, branch (`rust-port`), and everything in the Infra section:**
-unchanged from v22 — still correct, not revisited here.
+**Also:** don't restate a claim from a prior review as fact without checking it
+again first. If the last review said X wasn't there, verify it's there now
+before saying so — a repeated claim isn't more true for having been said twice.
 
 ---
 
-## T1 — unchanged, holds up
+## W1 — Wire the pipeline together
 
-Confirmed real: `config.rs`, `database.rs`, `llm.rs`, `models.rs`, and `main.rs`
-actually exercises the pool + `SELECT 1`. Nothing further needed here.
+- `main.rs` (or a new `bin/run_pipeline.rs`, your call) should actually call
+  `ingestion::run_ingestion(...)`, then feed its output into
+  `verification::units`, `verification::stories`, `verification::tiers::apply_dynamic_gate`,
+  in that order — mirroring whatever order `scripts/` currently invokes the
+  Python equivalents in.
+- Run it against a scratch Supabase project (or a local Postgres with the same
+  schema) with a handful of real RSS sources. Confirm rows actually land in
+  `reporting_units` / `stories` and the gate actually blocks/queues something.
+- This is the actual definition of done for T2/T3 — not "files exist and their
+  own tests pass."
 
-## T2 — finish the missing three files
+## W2 — Fix the fact_checker.rs claim, for real this time
 
-`rss.rs`, `reddit.rs`, `source_registry.rs` exist and look real. Still missing,
-as originally scoped:
-- `adapter.py` → `adapter.rs`
-- `tiered_scheduler.py` → `tiered_scheduler.rs`
-- `run.py` → `run.rs` (the actual ingestion entry point / orchestration)
+- Either implement the embeddings API-fallback path in `fact_checker.rs` for
+  real, or remove the claim entirely and say plainly it doesn't exist yet.
+  Don't repeat the sentence again without one of those two things being true.
 
-## T3 — write the missing grouping/tiering logic, dedupe the Jaccard math
+## T5 — actually attempt it (still not done)
 
-`ner.rs`'s canonicalization layer is done and good. Still missing:
-- `tiers.py`, `topics.py`, `cleanup.py`, `stories.py`, `units.py` — the actual
-  grouping/tiering logic that *calls* `get_primary_entity_set` /
-  `entity_set_jaccard` / `canonical_jaccard` on real ingested articles. Until
-  these exist, the canonicalization layer isn't reachable from anything.
-- `verification/utils.rs` duplicates `entity_jaccard`/`canonical_jaccard` that
-  already live in `utils/ner.rs` under different names. Delete the duplicate,
-  have `stories.rs`/`units.rs` import the one in `ner.rs`.
+- `Cargo.toml` still has only unused `candle`. Add `rust-bert` and attempt its
+  NER pipeline for real (either `tch` or `ort` backend) — if both genuinely
+  fail to build, paste the actual `cargo build` error into the PR description.
+  A commit message repeating "couldn't be used due to yanked ort dependencies"
+  without that error attached isn't verifiable and won't be taken as sufficient
+  this round.
+- Same standard for embeddings (`rust-bert`'s sentence-embeddings pipeline) and
+  extraction (`trafilatura`, `readex`, `justext`, or `libreadability` — none
+  are in `Cargo.toml` yet; the current `extract_from_html` regex tag-stripper
+  needs to be replaced, not left as-is).
+- Remove `candle` from `Cargo.toml` if it ends up unused after this.
 
-## T4 — spot-check, not re-done
-
-Files exist. Before treating this as settled: confirm `claims.rs`/`narrative.rs`
-are actually called from something reachable from `main.rs`, not just compiling
-with their own tests, same standard as everything else here.
-
-## T5 — actually attempt it this time
-
-1. **NER** — `extract_entities_top_n` is currently an empty-dict placeholder.
-   Attempt `rust-bert`'s NER pipeline for real, either backend (`tch` or `ort`).
-   If both backends genuinely fail to build, that's a legitimate outcome — but
-   it needs to be a real build attempt with the actual error output kept in
-   the PR description, not a placeholder function with a comment. Still watch
-   for the GPE-vs-LOC / OntoNotes label issue flagged in v22.
-2. **Embeddings** — nothing exists yet despite the last report. Attempt
-   `rust-bert`'s sentence-embeddings pipeline for `all-MiniLM-L6-v2` (or
-   nearest available preset) for real. `candle` is already in `Cargo.toml` but
-   unused — either wire it to something or remove it.
-3. **Extraction** — `extract_article` currently strips HTML tags with a
-   regex, which is materially worse than doing nothing here since it will
-   silently pull in nav/ads/footers as "article text." Add one of `trafilatura`,
-   `readex`, `justext`, or `libreadability` to `Cargo.toml` and wire it in for
-   real, then spot-check against a handful of real URLs from your actual RSS
-   sources before calling it done.
-
-For all three: if a real attempt hits a genuine blocker (crate yanked, C++
-toolchain issue), document the exact error and what was tried in the PR
-description as before — that part of the process was fine. The problem last
-round wasn't documenting a blocker, it was marking the task complete anyway.
+Do not proceed to T4/Reliability integration until W1 and W2 are done and
+verifiable — not until they're reported done.
