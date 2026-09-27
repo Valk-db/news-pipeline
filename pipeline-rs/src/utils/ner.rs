@@ -39,9 +39,11 @@ pub type EntitiesDict = HashMap<String, Vec<String>>;
 
 // NER using tch backend (libtorch) - enabled for NER and embeddings
 // Uses thread_local to avoid Send/Sync issues with tch backend
+use rust_bert::pipelines::sentence_embeddings::{SentenceEmbeddingsBuilder, SentenceEmbeddingsModelType};
 
 thread_local! {
     static NER_MODEL: std::cell::RefCell<Option<NERModel>> = std::cell::RefCell::new(None);
+    static EMBEDDING_MODEL: std::cell::RefCell<Option<rust_bert::pipelines::sentence_embeddings::SentenceEmbeddingsModel>> = std::cell::RefCell::new(None);
 }
 
 fn run_ner_prediction(text: &str) -> Result<Vec<Vec<Entity>>, Box<dyn std::error::Error + Send + Sync>> {
@@ -65,6 +67,35 @@ fn run_ner_prediction(text: &str) -> Result<Vec<Vec<Entity>>, Box<dyn std::error
 
         // predict() returns Vec<Vec<Entity>> directly, not a Result
         Ok(model.predict(&[truncated]))
+    })
+}
+
+/// Run sentence embedding prediction using rust-bert
+/// Uses thread_local to avoid Send/Sync issues with tch backend
+fn run_embedding_prediction(text: &str) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
+    EMBEDDING_MODEL.with(|cell| {
+        let mut model_opt = cell.borrow_mut();
+        if model_opt.is_none() {
+            info!("Loading rust-bert embedding model (AllMiniLmL6V2)...");
+            let model = SentenceEmbeddingsBuilder::remote(SentenceEmbeddingsModelType::AllMiniLmL6V2)
+                .create_model()?;
+            info!("Embedding model loaded successfully (384 dimensions)");
+            *model_opt = Some(model);
+        }
+        let model = model_opt.as_ref().unwrap();
+
+        // Truncate text to model max length
+        let max_chars = 2000;
+        let truncated = if text.len() > max_chars {
+            &text[..max_chars]
+        } else {
+            text
+        };
+
+        // encode() returns Result<Vec<Embedding>, RustBertError> where Embedding is Vec<f32>
+        let embeddings = model.encode(&[truncated])?;
+        let vec_embeddings: Vec<Vec<f32>> = embeddings.into_iter().map(|e| e.to_vec()).collect();
+        Ok(vec_embeddings)
     })
 }
 
@@ -456,6 +487,26 @@ pub async fn extract_entities_top_n(text: &str, _top_n: Option<usize>) -> Entiti
 
     tracing::info!("Extracted entities: {:?}", result);
     result
+}
+
+/// Extract embeddings from text using rust-bert sentence embeddings
+/// Returns 384-dimensional vector for AllMiniLmL6V2 model
+pub async fn extract_embeddings(text: &str) -> Option<Vec<f32>> {
+    match run_embedding_prediction(text) {
+        Ok(embeddings) => {
+            if let Some(embedding) = embeddings.into_iter().next() {
+                tracing::info!("Generated embedding with {} dimensions", embedding.len());
+                Some(embedding)
+            } else {
+                tracing::warn!("No embedding generated for text");
+                None
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Embedding prediction failed: {}", e);
+            None
+        }
+    }
 }
 
 #[cfg(test)]
