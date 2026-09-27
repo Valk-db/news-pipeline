@@ -125,13 +125,19 @@ pub async fn extract_article(url: &str, _source_key: Option<&str>) -> (Option<St
 
 /// Synchronous extraction from HTML - runs in thread pool
 fn extract_from_html(html: &str) -> (Option<String>, Option<String>) {
+    eprintln!("[DEBUG] extract_from_html: HTML length = {}", html.len());
     let options = Options::default();
     let cursor = Cursor::new(html.as_bytes());
 
     match extract(cursor, &options) {
         Ok(result) => {
+            eprintln!("[DEBUG] extract_from_html: trafilatura result - content_text.len={}, metadata.title='{}'",
+                result.content_text.len(), result.metadata.title);
             let body = result.content_text;
-            let body = if body.len() > 200 { Some(body.trim().to_string()) } else { None };
+            let body = if body.len() > 200 { Some(body.trim().to_string()) } else {
+                eprintln!("[DEBUG] extract_from_html: Body too short ({})", body.len());
+                None
+            };
 
             // Metadata title is String (not Option), so handle empty case
             let title = if !result.metadata.title.is_empty() {
@@ -140,9 +146,11 @@ fn extract_from_html(html: &str) -> (Option<String>, Option<String>) {
                 None
             };
 
+            eprintln!("[DEBUG] extract_from_html: Returning body={:?}, title={:?}", body.as_ref().map(|b| b.len()), title);
             (body, title)
         }
         Err(e) => {
+            eprintln!("[DEBUG] extract_from_html: trafilatura extraction failed: {}", e);
             tracing::warn!("trafilatura extraction failed: {}", e);
             (None, None)
         }
