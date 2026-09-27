@@ -64,15 +64,19 @@ async fn fetch_feed(
                             return None;
                         }
                     };
-                    warn!("Successfully fetched feed: {} (status: {})", feed_url, status_str);
-                    warn!("Feed response preview (first 500 chars): {}", &text[..text.len().min(500)]);
+                    eprintln!("[DEBUG] Successfully fetched feed: {} (status: {})", feed_url, status_str);
+                    eprintln!("[DEBUG] Feed response preview (first 500 chars): {}", &text[..text.len().min(500)]);
                     let feed = parser::parse(text.as_bytes());
                     match feed {
                         Ok(f) => {
-                            warn!("Parsed feed: {} entries", f.entries.len());
+                            eprintln!("[DEBUG] Parsed feed: {} entries", f.entries.len());
+                            if f.entries.is_empty() {
+                                eprintln!("[DEBUG] WARNING: Feed has 0 entries!");
+                            }
                             return Some(f);
                         }
                         Err(e) => {
+                            eprintln!("[DEBUG] Failed to parse feed {}: {}", feed_url, e);
                             error!("Failed to parse feed {}: {}", feed_url, e);
                             return None;
                         }
