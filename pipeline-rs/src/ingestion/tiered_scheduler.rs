@@ -134,9 +134,45 @@ mod tests {
     use super::*;
     use crate::models::SourceTier;
 
+    fn test_settings() -> Settings {
+        Settings {
+            database_url: "postgresql://test".to_string(),
+            groq_api_key: "test".to_string(),
+            groq_model: "test".to_string(),
+            cerebras_api_key: "test".to_string(),
+            cerebras_model: "test".to_string(),
+            reddit_user_agent: "test".to_string(),
+            youtube_api_key: String::new(),
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            rss_fetch_timeout: 30,
+            max_articles_per_feed: 50,
+            gdelt_throttle_seconds: 5.0,
+            gdelt_circuit_breaker_threshold: 3,
+            article_cache_hours: 24,
+            gdelt_enabled: true,
+            rss_max_retries: 3,
+            rss_retry_delay: 5.0,
+            gdelt_max_retries: 7,
+            gdelt_base_delay: 10.0,
+            groq_daily_request_budget: 900,
+            tier1_schedule: "0 * * * *".to_string(),
+            tier2_schedule: "0 */4 * * *".to_string(),
+            tier3_schedule: "0 6 * * *".to_string(),
+            tier4_schedule: "0 */6 * * *".to_string(),
+            curation_user: String::new(),
+            curation_password: String::new(),
+            containment_threshold: 0.9,
+            min_reporting_units_per_story: 2,
+            top_n_entities: 3,
+            cron_schedule: "0 6,18 * * *".to_string(),
+            dynamic_gate_enabled: false,
+        }
+    }
+
     #[test]
     fn test_should_run_tier_first_run() {
-        let settings = Settings::from_env().unwrap();
+        let settings = test_settings();
         let scheduler = TieredScheduler::new(settings);
         assert!(scheduler.should_run_tier(SourceTier::Tier1, None));
         assert!(scheduler.should_run_tier(SourceTier::Tier2, None));
@@ -146,7 +182,7 @@ mod tests {
 
     #[test]
     fn test_tier1_hourly() {
-        let settings = Settings::from_env().unwrap();
+        let settings = test_settings();
         let scheduler = TieredScheduler::new(settings);
         let now = Utc::now();
         let hour_ago = now - chrono::Duration::hours(1);
@@ -161,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_tier2_every_4_hours() {
-        let settings = Settings::from_env().unwrap();
+        let settings = test_settings();
         let scheduler = TieredScheduler::new(settings);
         let now = Utc::now();
         let four_hours_ago = now - chrono::Duration::hours(4);
