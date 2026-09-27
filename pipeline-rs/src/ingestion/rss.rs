@@ -233,6 +233,7 @@ pub async fn ingest_rss_feeds(
 
     for (source_key, feed_url, source_info, feed) in fetched {
         if let Some(feed) = feed {
+            eprintln!("[DEBUG] Processing {} entries from {} ({})", feed.entries.len(), source_info.name, feed_url);
             warn!("Processing {} entries from {} ({})", feed.entries.len(), source_info.name, feed_url);
             for (i, entry) in feed.entries.iter().enumerate() {
                 if i >= max_per_feed {
@@ -240,10 +241,13 @@ pub async fn ingest_rss_feeds(
                 }
                 let title = entry.title.as_ref().map(|t| t.content.as_str()).unwrap_or("");
                 let link = entry.links.iter().find(|l| l.rel.as_deref() == Some("alternate") || l.rel.as_deref() == Some("")).map(|l| l.href.as_str()).unwrap_or("");
+                eprintln!("[DEBUG]   Entry {}: title='{}', link='{}'", i, title, link);
                 warn!("  Entry {}: title='{}', link='{}'", i, title, link);
                 if let Some(parsed) = parse_feed_entry(entry) {
+                    eprintln!("[DEBUG]   Parsed: title='{}', link='{}'", parsed.title, parsed.link);
                     warn!("    Parsed: title='{}', link='{}'", parsed.title, parsed.link);
                 } else {
+                    eprintln!("[DEBUG]   Failed to parse entry");
                     warn!("    Failed to parse entry");
                 }
             }
