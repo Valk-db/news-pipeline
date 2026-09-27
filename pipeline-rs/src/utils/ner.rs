@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 // rust-bert NER using tch backend (libtorch)
 use rust_bert::pipelines::ner::{NERModel, Entity};
+use rust_bert::resources::RemoteResource;
 
 /// Entity labels we care about (OntoNotes style)
 pub const ENTITY_LABELS: &[&str] = &["PERSON", "ORG", "GPE", "LOC", "EVENT", "PRODUCT"];
@@ -59,7 +60,7 @@ pub async fn init_ner_worker() {
 
     // Spawn dedicated blocking thread for NER
     tokio::task::spawn_blocking(move || {
-        // Load NER model once in this thread
+        // Load NER model once in this thread - use default which loads dslim/bert-base-NER
         let model = match NERModel::new(Default::default()) {
             Ok(m) => {
                 info!("NER model loaded successfully in worker thread");
@@ -69,7 +70,7 @@ pub async fn init_ner_worker() {
                 error!("Failed to load NER model: {}", e);
                 // Keep running to respond to requests with errors
                 loop {
-                    if let Some((text, resp_tx)) = rx.blocking_recv() {
+                    if let Some((_text, resp_tx)) = rx.blocking_recv() {
                         let _ = resp_tx.send(Err(format!("NER model failed to load: {}", e)));
                     } else {
                         break;
