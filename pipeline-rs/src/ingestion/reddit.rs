@@ -1,6 +1,7 @@
 use crate::config::Settings;
 use crate::ingestion::adapter::{SourceAdapter, SourceHealth};
 use crate::models::{RawArticle, SourceTier};
+use crate::utils::ner::extract_entities_top_n;
 use crate::utils::trafilatura_extract::{compute_content_hash, compute_url_hash, extract_article};
 use async_trait::async_trait;
 use feed_rs::parser;
@@ -140,6 +141,11 @@ async fn process_entry(
     // Add to seen hashes
     seen_hashes.insert(url_hash.clone());
 
+    // Extract entities using rust-bert NER
+    let top_n = settings.top_n_entities.try_into().unwrap_or(10);
+    let entities_dict = extract_entities_top_n(&body_text, Some(top_n)).await;
+    let entities = Some(serde_json::to_value(&entities_dict).unwrap_or(serde_json::json!({})));
+
     // Build RawArticle (Tier 3 for Reddit - unverified social)
     Some(RawArticle {
         id: uuid::Uuid::new_v4(),
@@ -152,7 +158,7 @@ async fn process_entry(
         source_tier: SourceTier::Tier3,
         published_at,
         fetched_at: chrono::Utc::now(),
-        entities: None,
+        entities,
         minhash_signature: None,
         content_hash: Some(content_hash),
         reporting_unit_id: None,
