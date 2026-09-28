@@ -904,12 +904,14 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
+enrichment = [
+    { name = "sentence-transformers" },
+]
 pipeline = [
     { name = "beautifulsoup4" },
     { name = "datasketch" },
     { name = "feedparser" },
     { name = "numpy" },
-    { name = "sentence-transformers" },
     { name = "spacy" },
     { name = "trafilatura" },
 ]
@@ -936,7 +938,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
-    { name = "sentence-transformers", marker = "extra == 'pipeline'", specifier = ">=3.0" },
+    { name = "sentence-transformers", marker = "extra == 'enrichment'", specifier = ">=3.0" },
     { name = "slowapi", specifier = ">=0.1" },
     { name = "spacy", marker = "extra == 'pipeline'", specifier = ">=3.7" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
@@ -944,7 +946,7 @@ requires-dist = [
     { name = "trafilatura", marker = "extra == 'pipeline'", specifier = ">=1.6" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
-provides-extras = ["pipeline", "dev"]
+provides-extras = ["pipeline", "enrichment", "dev"]
 
 [[package]]
 name = "numpy"

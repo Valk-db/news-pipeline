@@ -2,8 +2,8 @@ name: Weekly Enrichment & Reliability
 
 on:
   schedule:
-    # Run weekly on Sunday at 02:00 UTC
-    - cron: '0 2 * * 0'
+    # Run weekly on Sunday at 02:23 UTC (off-peak minute to avoid cron delay)
+    - cron: '23 2 * * 0'
   workflow_dispatch:  # Allow manual trigger
 
 concurrency:
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   enrichment:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
 
     steps:
@@ -28,15 +28,12 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen --extra pipeline
-
-      - name: Download spaCy model
-        run: uv run python -m spacy download en_core_web_sm
+        run: uv sync --frozen --extra pipeline --extra enrichment
 
       - name: Run enrichment pipeline
         id: enrichment
@@ -51,13 +48,13 @@ jobs:
 
       - name: Check for zero enrichment results
         if: always()
+        env:
+          ENRICHMENT_SUMMARY: ${{ steps.enrichment.outputs.ENRICHMENT_SUMMARY }}
         run: |
-          SUMMARY='${{ steps.enrichment.outputs.ENRICHMENT_SUMMARY }}'
-
-          if [[ "$SUMMARY" != "" ]]; then
-            STORIES=$(echo "$SUMMARY" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('stories_processed', 0))")
-            MEDIA=$(echo "$SUMMARY" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('total_media_assets', 0))")
-            EMBEDDINGS=$(echo "$SUMMARY" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('total_embeddings_generated', 0))")
+          if [[ -n "$ENRICHMENT_SUMMARY" ]]; then
+            STORIES=$(echo "$ENRICHMENT_SUMMARY" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('stories_processed', 0))")
+            MEDIA=$(echo "$ENRICHMENT_SUMMARY" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('total_media_assets', 0))")
+            EMBEDDINGS=$(echo "$ENRICHMENT_SUMMARY" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('total_embeddings_generated', 0))")
 
             if [[ "$STORIES" -gt 0 ]] && [[ "$MEDIA" -eq 0 ]] && [[ "$EMBEDDINGS" -eq 0 ]]; then
               echo "::warning title=Zero enrichment output::Enrichment processed $STORIES stories but produced 0 media assets and 0 embeddings. This indicates a silent failure in the enrichment pipeline."
@@ -66,7 +63,7 @@ jobs:
 
   # Phase 2: Claim extraction, topic assignment, narrative arcs
   phase2:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     needs: enrichment
 
@@ -80,15 +77,12 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen --extra pipeline
-
-      - name: Download spaCy model
-        run: uv run python -m spacy download en_core_web_sm
+        run: uv sync --frozen --extra pipeline --extra enrichment
 
       - name: Seed topic groups (idempotent)
         env:
@@ -116,7 +110,7 @@ jobs:
               print(f'Assigned topic groups to {len(results)} stories')
               for r in results:
                   if r.get('created'):
-                      print(f'  {r[\"story_id\"]}: {r[\"topic_group\"]} (conf={r[\"confidence\"]})')
+                      print(f'  {r["story_id"]}: {r["topic_group"]} (conf={r["confidence"]})')
 
           asyncio.run(main())
           "
@@ -148,10 +142,10 @@ jobs:
               session_factory = get_session_maker()
               results = await link_narrative_arcs_for_recent_stories(session_factory, hours_back=168, max_stories=100)
               print(f'Linked narrative arcs for {len(results)} stories')
-              created = [r for r in results if r.get(\"created\")]
+              created = [r for r in results if r.get("created")]
               print(f'  Created {len(created)} new edges')
               for r in created:
-                  print(f'  {r[\"subject_id\"]} -> {r[\"object_id\"]} ({r[\"predicate\"]}, conf={r[\"confidence\"]})')
+                  print(f'  {r["subject_id"]} -> {r["object_id"]} ({r["predicate"]}, conf={r["confidence"]})')
 
           asyncio.run(main())
           "
@@ -164,7 +158,7 @@ jobs:
         run: uv run python -m scripts.compute_reliability
 
   reliability:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     needs: enrichment
 
@@ -178,15 +172,12 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen --extra pipeline
-
-      - name: Download spaCy model
-        run: uv run python -m spacy download en_core_web_sm
+        run: uv sync --frozen --extra pipeline --extra enrichment
 
       - name: Run reliability snapshots
         env:
@@ -197,7 +188,7 @@ jobs:
         run: uv run python -m scripts.run_weekly_reliability
 
   globe-backfill:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     needs: enrichment
 
@@ -211,15 +202,12 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen --extra pipeline
-
-      - name: Download spaCy model
-        run: uv run python -m spacy download en_core_web_sm
+        run: uv sync --frozen --extra pipeline --extra enrichment
 
       - name: Run globe events backfill
         env:

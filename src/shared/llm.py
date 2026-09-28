@@ -97,6 +97,9 @@ class LLMClient:
         self.groq_client: Optional[AsyncGroq] = None
         self.cerebras_client: Optional[AsyncCerebras] = None
         self._budget = RequestBudget(self.settings.groq_daily_request_budget)
+        # Track which providers have already emitted auth failure warnings this run
+        self._groq_auth_warned = False
+        self._cerebras_auth_warned = False
         self._init_clients()
 
     def _init_clients(self):
@@ -115,6 +118,16 @@ class LLMClient:
             status_code = getattr(exception.response, "status_code", 0)
             return status_code >= 500 or status_code == 429
         return False
+
+    @staticmethod
+    def _is_auth_error(exception: BaseException) -> bool:
+        """Check if error is an auth failure (401/403)."""
+        if isinstance(exception, HTTPStatusError):
+            status_code = getattr(exception.response, "status_code", 0)
+            return status_code in (401, 403)
+        # Also check for auth error in exception message (Groq SDK may raise different types)
+        error_msg = str(exception).lower()
+        return "invalid api key" in error_msg or "unauthorized" in error_msg or "forbidden" in error_msg
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -234,6 +247,12 @@ OUTPUT: Just the post text, nothing else."""
             except BudgetExhausted as e:
                 logger.warning("Groq budget exhausted: %s", e)
             except Exception as e:
+                # P0-5: Handle auth failures uniformly - fall through to Cerebras
+                if self._is_auth_error(e) and not self._groq_auth_warned:
+                    import os
+                    if os.getenv("GITHUB_ACTIONS"):
+                        print(f"::warning title=LLM provider auth failed::Groq authentication failed (401/403): {e}")
+                    self._groq_auth_warned = True
                 logger.warning("Groq failed: %s", e)
 
         # Fallback to Cerebras
@@ -251,6 +270,11 @@ OUTPUT: Just the post text, nothing else."""
                     return caption
                 logger.warning("Cerebras caption validation failed: %s", error)
             except Exception as e:
+                if self._is_auth_error(e) and not self._cerebras_auth_warned:
+                    import os
+                    if os.getenv("GITHUB_ACTIONS"):
+                        print(f"::warning title=LLM provider auth failed::Cerebras authentication failed (401/403): {e}")
+                    self._cerebras_auth_warned = True
                 logger.warning("Cerebras failed: %s", e)
 
         # Budget exhausted and no Cerebras fallback - record skip
@@ -298,6 +322,14 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                 logger.warning("Groq budget exhausted: %s", e)
             except (json.JSONDecodeError, KeyError, ValueError) as e:
                 logger.warning("classify_relevance Groq parse failed: %s", e)
+            except Exception as e:
+                # P0-5: Handle auth failures uniformly - fall through to Cerebras
+                if self._is_auth_error(e) and not self._groq_auth_warned:
+                    import os
+                    if os.getenv("GITHUB_ACTIONS"):
+                        print(f"::warning title=LLM provider auth failed::Groq authentication failed (401/403): {e}")
+                    self._groq_auth_warned = True
+                logger.warning("classify_relevance Groq failed: %s", e)
 
         if self.cerebras_client:
             try:
@@ -312,6 +344,11 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                 data = self._parse_json_response(content)
                 return float(data.get("score", 0))
             except Exception as e:
+                if self._is_auth_error(e) and not self._cerebras_auth_warned:
+                    import os
+                    if os.getenv("GITHUB_ACTIONS"):
+                        print(f"::warning title=LLM provider auth failed::Cerebras authentication failed (401/403): {e}")
+                    self._cerebras_auth_warned = True
                 logger.warning("classify_relevance Cerebras failed: %s", e)
 
         # Budget exhausted and no Cerebras fallback - record skip
@@ -359,6 +396,12 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
             except BudgetExhausted as e:
                 logger.warning(f"Groq budget exhausted: {e}")
             except Exception as e:
+                # P0-5: Handle auth failures uniformly - fall through to Cerebras
+                if self._is_auth_error(e) and not self._groq_auth_warned:
+                    import os
+                    if os.getenv("GITHUB_ACTIONS"):
+                        print(f"::warning title=LLM provider auth failed::Groq authentication failed (401/403): {e}")
+                    self._groq_auth_warned = True
                 logger.warning(f"Groq chat completion failed: {e}")
 
         # Fallback to Cerebras
@@ -371,6 +414,11 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     temperature=temperature,
                 )
             except Exception as e:
+                if self._is_auth_error(e) and not self._cerebras_auth_warned:
+                    import os
+                    if os.getenv("GITHUB_ACTIONS"):
+                        print(f"::warning title=LLM provider auth failed::Cerebras authentication failed (401/403): {e}")
+                    self._cerebras_auth_warned = True
                 logger.warning(f"Cerebras chat completion failed: {e}")
 
         raise LLMError("No LLM provider available")

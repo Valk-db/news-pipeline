@@ -205,8 +205,8 @@ async def process_feed_entry(
     if extracted_title and len(extracted_title) > len(title):
         title = extracted_title
 
-    # Extract entities (cap driven by settings.top_n_entities)
-    entities = extract_entities_top_n(body_text, top_n=settings.top_n_entities)
+    # Extract entities (cap driven by settings.top_n_entities) - run in thread to avoid blocking event loop
+    entities = await asyncio.to_thread(extract_entities_top_n, body_text, top_n=settings.top_n_entities)
 
     # Compute content hash for exact dedup
     content_hash = compute_content_hash(body_text)
@@ -313,6 +313,9 @@ async def ingest_rss_feeds(
                 async with seen_lock:
                     if not url or url_hash in seen_urls:
                         continue
+
+                    # P0-4: Record entries_in_feed for every entry with a URL, BEFORE already_known checks
+                    STATS.record(source_key, "entries_in_feed")
 
                     # Check against known URL hashes from DB (P1-1: dedup before extraction)
                     if known_url_hashes and url_hash in known_url_hashes:

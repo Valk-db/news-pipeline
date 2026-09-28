@@ -49,9 +49,9 @@ def classify_tier1_sources_broken(stats_snapshot: Dict, tier1_sources: Dict) -> 
     Classify each enabled tier-1 source as BROKEN or OK.
 
     A source is BROKEN if:
-    1. entries_seen > 0 and ok + already_known == 0 (extraction ran but nothing succeeded)
+    1. entries_in_feed > 0 and ok + already_known == 0 (extraction ran but nothing succeeded)
     2. All feeds failed (feed_failed:* present and no feed_ok)
-    3. Feeds OK but zero entries seen while other tier-1 sources have entries
+    3. Feeds OK but zero entries_in_feed while other tier-1 sources have entries_in_feed > 0
 
     Returns:
         (list of broken source domains, dict with per-source breakdown)
@@ -59,15 +59,16 @@ def classify_tier1_sources_broken(stats_snapshot: Dict, tier1_sources: Dict) -> 
     broken_sources = []
     breakdown = {}
 
-    # First, collect which tier-1 sources have entries_seen > 0
+    # First, collect which tier-1 sources have entries_in_feed > 0
     sources_with_entries = set()
     for source_key, source_config in tier1_sources.items():
-        entries_seen = stats_snapshot.get(f"{source_config.domain}.entries_seen", 0)
-        if entries_seen > 0:
+        entries_in_feed = stats_snapshot.get(f"{source_config.domain}.entries_in_feed", 0)
+        if entries_in_feed > 0:
             sources_with_entries.add(source_config.domain)
 
     for source_key, source_config in tier1_sources.items():
         domain = source_config.domain
+        entries_in_feed = stats_snapshot.get(f"{domain}.entries_in_feed", 0)
         entries_seen = stats_snapshot.get(f"{domain}.entries_seen", 0)
         ok_count = stats_snapshot.get(f"{domain}.ok", 0)
         already_known = stats_snapshot.get(f"{domain}.already_known", 0)
@@ -84,22 +85,23 @@ def classify_tier1_sources_broken(stats_snapshot: Dict, tier1_sources: Dict) -> 
         is_broken = False
         reason = ""
 
-        # Condition 1: entries_seen > 0 but ok + already_known == 0
-        if entries_seen > 0 and (ok_count + already_known) == 0:
+        # Condition 1: entries_in_feed > 0 but ok + already_known == 0
+        if entries_in_feed > 0 and (ok_count + already_known) == 0:
             is_broken = True
-            reason = f"entries_seen={entries_seen} but ok+already_known=0 (extraction failed for all)"
+            reason = f"entries_in_feed={entries_in_feed} but ok+already_known=0 (extraction failed for all)"
 
         # Condition 2: All feeds failed (feed_failed present, no feed_ok)
         elif feed_failed > 0 and feed_ok == 0:
             is_broken = True
             reason = f"all feeds failed (feed_failed={feed_failed}, feed_ok=0)"
 
-        # Condition 3: Feeds OK but zero entries while other tier-1 sources have entries
-        elif feed_ok > 0 and entries_seen == 0 and sources_with_entries:
+        # Condition 3: Feeds OK but zero entries_in_feed while other tier-1 sources have entries_in_feed > 0
+        elif feed_ok > 0 and entries_in_feed == 0 and sources_with_entries:
             is_broken = True
-            reason = "feeds OK but zero entries seen while other tier-1 sources have entries"
+            reason = "feeds OK but zero entries_in_feed while other tier-1 sources have entries_in_feed > 0"
 
         breakdown[domain] = {
+            "entries_in_feed": entries_in_feed,
             "entries_seen": entries_seen,
             "ok": ok_count,
             "already_known": already_known,

@@ -319,10 +319,12 @@ async def run_report(hours: int = 48):
                         u1 = pair["unit1"]
                         u2 = pair["unit2"]
                         print(f"    {i+1}. Jaccard={pair['entity_jaccard']:.3f}, title_sim={pair['title_sim']:.3f}")
-                        print(f"       {u1['owner_group']} ({u1['source_domain']}): {u1['title'][:80]}")
-                        print(f"       {u2['owner_group']} ({u2['source_domain']}): {u2['title'][:80]}")
-                        print(f"       Entities1: {sorted(u1['entities'])[:10]}")
-                        print(f"       Entities2: {sorted(u2['entities'])[:10]}")
+                        def sanitize(s):
+                            return str(s).encode('ascii', 'replace').decode('ascii')
+                        print(f"       {sanitize(u1['owner_group'])} ({sanitize(u1['source_domain'])}): {sanitize(u1['title'][:80])}")
+                        print(f"       {sanitize(u2['owner_group'])} ({sanitize(u2['source_domain'])}): {sanitize(u2['title'][:80])}")
+                        print(f"       Entities1: {sorted(sanitize(e) for e in u1['entities'])[:10]}")
+                        print(f"       Entities2: {sorted(sanitize(e) for e in u2['entities'])[:10]}")
 
         # ============================================================
         # 5. Union-growth check for stories with >=3 units

@@ -173,7 +173,7 @@ async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) 
         return {}
 
     from src.schema.models import Story
-    from sqlalchemy import select
+    from sqlalchemy import select, func
 
     # Get stories with their linked units and source tiers
     stmt = (
@@ -197,6 +197,15 @@ async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) 
 
         if total_units < 3:
             # Not enough units for viewpoint clustering
+            continue
+
+        # P2.3: Idempotency guard - skip if this parent already has viewpoint children
+        # This prevents duplicate PENDING children on re-runs
+        existing_children_stmt = select(func.count(Story.id)).where(Story.viewpoint_cluster_id == story.id)
+        result = await session.execute(existing_children_stmt)
+        existing_count = result.scalar() or 0
+        if existing_count > 0:
+            logger.info(f"Skipping viewpoint clustering for story {story.id} — already has {existing_count} child stories")
             continue
 
         # Use shared helper to gather unit texts

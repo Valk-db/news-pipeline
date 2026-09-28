@@ -84,8 +84,8 @@ async def process_entry(entry, source_key: str = "reddit") -> RawArticle | None:
     elif "updated_parsed" in entry and entry.updated_parsed:
         published_at = datetime(*entry.updated_parsed[:6], tzinfo=UTC)
 
-    # Entities (cap driven by settings.top_n_entities)
-    entities = extract_entities_top_n(body_text, top_n=settings.top_n_entities)
+    # Entities (cap driven by settings.top_n_entities) - run in thread to avoid blocking event loop
+    entities = await asyncio.to_thread(extract_entities_top_n, body_text, top_n=settings.top_n_entities)
 
     # Content hash
     content_hash = compute_content_hash(body_text)
