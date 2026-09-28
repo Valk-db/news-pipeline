@@ -8,6 +8,9 @@ does today.
 from src.ingestion.adapter import SourceHealth
 from src.ingestion import rss
 from src.ingestion.source_registry import get_enabled_sources_by_tier, SourceTier
+from src.shared.database import get_session
+from src.schema.models import RawArticle
+from sqlalchemy import select
 
 
 class RssAdapter:
@@ -23,7 +26,21 @@ class RssAdapter:
     async def fetch(self) -> list:
         """Fetch articles from RSS feeds for the configured tier."""
         sources = get_enabled_sources_by_tier(self.tier)
-        articles = await rss.ingest_rss_feeds(max_per_feed=50, sources=sources)
+
+        # P1-1: Fetch known URL hashes from DB to dedup before extraction
+        known_url_hashes = set()
+        async with get_session() as session:
+            # Get URL hashes from last 30 days (covers recent runs)
+            from datetime import datetime, timezone, timedelta
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            stmt = select(RawArticle.url_hash).where(
+                RawArticle.source_tier == self.tier,
+                RawArticle.fetched_at >= cutoff,
+            )
+            result = await session.execute(stmt)
+            known_url_hashes = set(result.scalars().all())
+
+        articles = await rss.ingest_rss_feeds(max_per_feed=50, sources=sources, known_url_hashes=known_url_hashes)
         self._last_fetch_articles = articles
         # Track per-domain success/failure from stats
         from src.utils.ingest_stats import STATS

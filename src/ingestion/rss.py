@@ -11,7 +11,7 @@ if `ingest_rss_feeds(sources=None)` is called explicitly (legacy path).
 import feedparser
 import httpx
 import logging
-from typing import List, Optional
+from typing import List, Optional, Callable, Awaitable
 from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
 from src.utils.ner import extract_entities_top_n
@@ -218,13 +218,23 @@ async def process_feed_entry(
     return article
 
 
-async def ingest_rss_feeds(max_per_feed: int = 50, sources: dict | None = None) -> List[RawArticle]:
+async def ingest_rss_feeds(
+    max_per_feed: int = 50,
+    sources: dict | None = None,
+    known_url_hashes: set[str] | None = None,
+    filter_known: Optional[Callable[[set[str]], Awaitable[set[str]]]] = None,
+) -> List[RawArticle]:
     """Ingest all configured RSS feeds.
 
     Args:
         max_per_feed: Maximum articles per feed
         sources: Optional dict of SourceConfig objects from source_registry.
                  If None, uses TIER1_FEEDS (backward compatibility).
+        known_url_hashes: Optional set of URL hashes already known in DB.
+                          If provided, entries with these hashes are skipped before extraction.
+        filter_known: Optional async callable(filter_known(hashes: set[str]) -> set[str])
+                      that returns the subset of hashes already in DB. Used when
+                      known_url_hashes is not provided upfront. Allows testing without DB.
     """
     settings = get_settings()
     timeout = settings.rss_fetch_timeout
@@ -282,6 +292,17 @@ async def ingest_rss_feeds(max_per_feed: int = 50, sources: dict | None = None) 
                 async with seen_lock:
                     if not url or url_hash in seen_urls:
                         continue
+
+                    # Check against known URL hashes from DB (P1-1: dedup before extraction)
+                    if known_url_hashes and url_hash in known_url_hashes:
+                        STATS.record(source_key, "already_known")
+                        continue
+                    if filter_known and url_hash:
+                        known = await filter_known({url_hash})
+                        if url_hash in known:
+                            STATS.record(source_key, "already_known")
+                            continue
+
                     seen_urls.add(url_hash)
 
                 async with extract_sem:

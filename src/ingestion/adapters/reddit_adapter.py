@@ -1,6 +1,9 @@
 """Reddit adapter wrapping ingest_reddit() from reddit.py."""
 from src.ingestion.adapter import SourceHealth
 from src.ingestion import reddit
+from src.shared.database import get_session
+from src.schema.models import RawArticle
+from sqlalchemy import select
 
 
 class RedditAdapter:
@@ -13,7 +16,19 @@ class RedditAdapter:
 
     async def fetch(self) -> list:
         """Fetch articles from Reddit."""
-        articles = await reddit.ingest_reddit(limit_per_sub=25)
+        # P1-1: Fetch known URL hashes from DB to dedup before extraction
+        known_url_hashes = set()
+        async with get_session() as session:
+            from datetime import datetime, timezone, timedelta
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            stmt = select(RawArticle.url_hash).where(
+                RawArticle.source_tier == "tier3",  # Reddit is tier-3
+                RawArticle.fetched_at >= cutoff,
+            )
+            result = await session.execute(stmt)
+            known_url_hashes = set(result.scalars().all())
+
+        articles = await reddit.ingest_reddit(limit_per_sub=25, known_url_hashes=known_url_hashes)
         self._last_articles = articles
         return articles
 

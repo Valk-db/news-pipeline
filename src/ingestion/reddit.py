@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime
+from typing import Callable, Awaitable, Optional
 
 import httpx
 from bs4 import BeautifulSoup
@@ -109,9 +110,19 @@ async def process_entry(entry, source_key: str = "reddit") -> RawArticle | None:
 async def ingest_reddit(
     subreddits: list[str] | None = None,
     limit_per_sub: int = 25,
-    time_filter: str = "day"
+    time_filter: str = "day",
+    known_url_hashes: set[str] | None = None,
+    filter_known: Optional[Callable[[set[str]], Awaitable[set[str]]]] = None,
 ) -> list[RawArticle]:
-    """Ingest top submissions from target subreddits via public RSS (no auth)."""
+    """Ingest top submissions from target subreddits via public RSS (no auth).
+
+    Args:
+        subreddits: List of subreddit names to fetch from
+        limit_per_sub: Maximum entries per subreddit
+        time_filter: Time filter for Reddit top feed (day, week, month)
+        known_url_hashes: Optional set of URL hashes already known in DB.
+        filter_known: Optional async callable(filter_known(hashes: set[str]) -> set[str])
+    """
     settings = get_settings()
     timeout = settings.rss_fetch_timeout
 
@@ -129,17 +140,34 @@ async def ingest_reddit(
             if i > 0:
                 await asyncio.sleep(REDDIT_FETCH_DELAY_SECONDS)
 
-            # Reddit's top.rss feed is pre-sorted by score (descending), so taking
-            # the first `limit_per_sub` entries acts as an implicit quality filter.
-            # Old PRAW code used `submission.score >= 10`; RSS exposes no score field.
             feed_url = f"https://www.reddit.com/r/{sub_name}/top.rss?t={time_filter}&limit={limit_per_sub}"
             feed = await fetch_feed(client, feed_url, timeout=timeout, source_key="reddit")
             if not feed or not feed.entries:
                 continue
 
             for entry in feed.entries[:limit_per_sub]:
+                comments_url: str = entry.get("link", "")  # type: ignore[assignment]
+                url = extract_outbound_url(entry, comments_url)
+                if not url or url.lower().endswith(NON_ARTICLE_EXTENSIONS):
+                    continue
+
+                url_hash = compute_url_hash(url)
+
+                # Check against known URL hashes from DB (P1-1: dedup before extraction)
+                if known_url_hashes and url_hash in known_url_hashes:
+                    STATS.record("reddit", "already_known")
+                    continue
+                if filter_known:
+                    known = await filter_known({url_hash})
+                    if url_hash in known:
+                        STATS.record("reddit", "already_known")
+                        continue
+
+                if url_hash in seen_hashes:
+                    continue
+
                 article = await process_entry(entry, source_key="reddit")
-                if article and article.url_hash not in seen_hashes:
+                if article:
                     articles.append(article)
                     seen_hashes.add(article.url_hash)
 
