@@ -67,15 +67,15 @@ pub async fn init_ner_worker() {
             let model = match NERModel::new(TokenClassificationConfig::new(
                 ModelType::Bert,
                 ModelResource::Torch(Box::new(RemoteResource::new(
-                    "http://huggingface.co/dslim/bert-base-NER/resolve/main/pytorch_model.bin",
+                    "https://huggingface.co/dslim/bert-base-NER/resolve/main/pytorch_model.bin",
                     "dslim/bert-base-NER",
                 ))),
                 Box::new(RemoteResource::new(
-                    "http://huggingface.co/dslim/bert-base-NER/resolve/main/config.json",
+                    "https://huggingface.co/dslim/bert-base-NER/resolve/main/config.json",
                     "dslim/bert-base-NER",
                 )),
                 Box::new(RemoteResource::new(
-                    "http://huggingface.co/dslim/bert-base-NER/resolve/main/vocab.txt",
+                    "https://huggingface.co/dslim/bert-base-NER/resolve/main/vocab.txt",
                     "dslim/bert-base-NER",
                 )),
                 None, // merges_resource not needed for BERT
