@@ -35,9 +35,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra pipeline
 
-      - name: Download spaCy model
-        run: uv run python -m spacy download en_core_web_sm
-
       - name: Schema drift check
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

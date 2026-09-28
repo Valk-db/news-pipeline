@@ -412,12 +412,20 @@ def test_tier_definitions():
     from src.verification.tiers import classify_source_tier
 
     assert "bbc.com" in TIER1_DOMAINS
-    assert "nytimes.com" in TIER2_DOMAINS
+    # Tier-2 disabled domains (2026-09-28): nytimes, wapo, wsj, ft, economist, latimes
+    # Only verified working RSS feeds remain in TIER2_DOMAINS
+    assert "foreignpolicy.com" in TIER2_DOMAINS
+    assert "foreignaffairs.com" in TIER2_DOMAINS
+    assert "csis.org" in TIER2_DOMAINS
+    assert "who.int" in TIER2_DOMAINS
+    assert "chicagotribune.com" in TIER2_DOMAINS
     assert "reddit.com" in TIER3_DOMAINS
     assert "substack.com" in TIER4_DOMAINS
 
     assert classify_source_tier("bbc.com") == SourceTier.TIER1
-    assert classify_source_tier("nytimes.com") == SourceTier.TIER2
+    # Disabled tier-2 domains now default to TIER3
+    assert classify_source_tier("nytimes.com") == SourceTier.TIER3
+    assert classify_source_tier("foreignpolicy.com") == SourceTier.TIER2
     assert classify_source_tier("reddit.com") == SourceTier.TIER3
     assert classify_source_tier("substack.com") == SourceTier.TIER4
     assert classify_source_tier("unknown.com") == SourceTier.TIER3  # Default
@@ -453,14 +461,30 @@ def test_source_registry():
     assert len(enabled_tier1) > 0
     assert all(s.enabled for s in enabled_tier1.values())
 
+    enabled_tier2 = get_enabled_sources_by_tier(SourceTier.TIER2)
+    # Only foreignpolicy, foreignaffairs, csis, who, chicagotribune are enabled tier-2
+    assert len(enabled_tier2) == 5
+    assert all(s.enabled for s in enabled_tier2.values())
+    assert "foreignpolicy.com" in enabled_tier2
+    assert "foreignaffairs.com" in enabled_tier2
+    assert "csis.org" in enabled_tier2
+    assert "who.int" in enabled_tier2
+    assert "chicagotribune.com" in enabled_tier2
+
     # Test getting specific source
     bbc = get_source_config("bbc.com")
     assert bbc is not None
     assert bbc.domain == "bbc.com"
     assert bbc.tier == SourceTier.TIER1
 
+    # Disabled tier-2 sources should have enabled=False
+    for domain in ["nytimes.com", "washingtonpost.com", "wsj.com", "ft.com", "economist.com", "latimes.com"]:
+        src = get_source_config(domain)
+        assert src is not None, f"{domain} should exist in registry"
+        assert src.enabled is False, f"{domain} should be disabled"
+
     # Test ALL_SOURCES has all tiers
-    assert len(ALL_SOURCES) > 20
+    assert len(ALL_SOURCES) > 15
     tiers_present = set(s.tier for s in ALL_SOURCES.values())
     assert SourceTier.TIER1 in tiers_present
     assert SourceTier.TIER2 in tiers_present

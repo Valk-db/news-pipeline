@@ -144,8 +144,9 @@ async def ingest_reddit(
                 await asyncio.sleep(REDDIT_FETCH_DELAY_SECONDS)
 
             feed_url = f"https://www.reddit.com/r/{sub_name}/top.rss?t={time_filter}&limit={limit_per_sub}"
-            feed = await fetch_feed(client, feed_url, timeout=timeout, source_key="reddit")
+            feed = await fetch_feed(client, feed_url, timeout=timeout, source_key=f"reddit.{sub_name}")
             if not feed or not feed.entries:
+                STATS.record(f"reddit.{sub_name}", "feed_failed:empty_feed")
                 continue
 
             for entry in feed.entries[:limit_per_sub]:
@@ -158,18 +159,18 @@ async def ingest_reddit(
 
                 # Check against known URL hashes from DB (P1-1: dedup before extraction)
                 if known_url_hashes and url_hash in known_url_hashes:
-                    STATS.record("reddit", "already_known")
+                    STATS.record(f"reddit.{sub_name}", "already_known")
                     continue
                 if filter_known:
                     known = await filter_known({url_hash})
                     if url_hash in known:
-                        STATS.record("reddit", "already_known")
+                        STATS.record(f"reddit.{sub_name}", "already_known")
                         continue
 
                 if url_hash in seen_hashes:
                     continue
 
-                article = await process_entry(entry, source_key="reddit")
+                article = await process_entry(entry, source_key=f"reddit.{sub_name}")
                 if article:
                     articles.append(article)
                     seen_hashes.add(article.url_hash)

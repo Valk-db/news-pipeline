@@ -211,6 +211,7 @@ TIER1_SOURCES = {
 
 # Tier-2 Sources (National/Regional reputable outlets)
 TIER2_SOURCES = {
+    # Disabled (2026-09-28): 0 ok articles across 2-3 daily-ingest runs; circuit breaker trips every run
     "nytimes.com": SourceConfig(
         domain="nytimes.com",
         name="The New York Times",
@@ -226,7 +227,9 @@ TIER2_SOURCES = {
         bias_rating="center-left",
         owner_group="New York Times Company",
         fetch_priority=2,
+        enabled=False,
     ),
+    # Disabled (2026-09-28): 0 ok articles across 2 daily-ingest runs; circuit breaker trips every run
     "washingtonpost.com": SourceConfig(
         domain="washingtonpost.com",
         name="The Washington Post",
@@ -242,7 +245,9 @@ TIER2_SOURCES = {
         bias_rating="center-left",
         owner_group="Nash Holdings",
         fetch_priority=2,
+        enabled=False,
     ),
+    # Disabled (2026-09-28): 0 ok articles across 2 daily-ingest runs; circuit breaker trips every run
     "wsj.com": SourceConfig(
         domain="wsj.com",
         name="The Wall Street Journal",
@@ -258,7 +263,9 @@ TIER2_SOURCES = {
         bias_rating="center-right",
         owner_group="News Corp",
         fetch_priority=2,
+        enabled=False,
     ),
+    # Disabled (2026-09-28): 0 ok articles across 3 daily-ingest runs; circuit breaker trips every run
     "ft.com": SourceConfig(
         domain="ft.com",
         name="Financial Times",
@@ -274,7 +281,9 @@ TIER2_SOURCES = {
         bias_rating="center",
         owner_group="Nikkei",
         fetch_priority=2,
+        enabled=False,
     ),
+    # Disabled (2026-09-28): 0 ok articles across 3 daily-ingest runs; circuit breaker trips every run
     "economist.com": SourceConfig(
         domain="economist.com",
         name="The Economist",
@@ -289,6 +298,7 @@ TIER2_SOURCES = {
         bias_rating="center",
         owner_group="Economist Group",
         fetch_priority=2,
+        enabled=False,
     ),
     "foreignpolicy.com": SourceConfig(
         domain="foreignpolicy.com",
@@ -399,6 +409,7 @@ TIER2_SOURCES = {
         fetch_priority=1,
     ),
     # Major US regional papers
+    # Disabled (2026-09-28): 0 ok articles across 2 daily-ingest runs; feed_failed:http_403
     "latimes.com": SourceConfig(
         domain="latimes.com",
         name="Los Angeles Times",
@@ -413,6 +424,7 @@ TIER2_SOURCES = {
         bias_rating="center-left",
         owner_group="Patrick Soon-Shiong",
         fetch_priority=1,
+        enabled=False,
     ),
     "chicagotribune.com": SourceConfig(
         domain="chicagotribune.com",

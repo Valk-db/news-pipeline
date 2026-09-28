@@ -35,9 +35,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra pipeline --extra enrichment
 
-      - name: Download spaCy model
-        run: uv run python -m spacy download en_core_web_sm
-
+      
       - name: Run enrichment pipeline
         id: enrichment
         env:
@@ -87,9 +85,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra pipeline --extra enrichment
 
-      - name: Download spaCy model
-        run: uv run python -m spacy download en_core_web_sm
-
+      
       - name: Seed topic groups (idempotent)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -185,9 +181,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra pipeline --extra enrichment
 
-      - name: Download spaCy model
-        run: uv run python -m spacy download en_core_web_sm
-
+      
       - name: Run reliability snapshots
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -218,9 +212,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra pipeline --extra enrichment
 
-      - name: Download spaCy model
-        run: uv run python -m spacy download en_core_web_sm
-
+      
       - name: Run globe events backfill
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

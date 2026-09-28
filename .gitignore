@@ -50,5 +50,8 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Output artifacts
+*_output.txt
+
 # Rust
 target/
