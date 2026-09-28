@@ -69,7 +69,10 @@ async def process_entry(entry, source_key: str = "reddit") -> RawArticle | None:
 
     # Extract article body
     body_text, extracted_title = await extract_article(url, source_key=source_key)
-    if not body_text or len(body_text) < 200:
+    if not body_text:
+        # Extraction failed (403, timeout, empty, etc.) - already recorded by extract_article
+        return None
+    if len(body_text) < 200:  # Actually too short, not an extraction failure
         STATS.record(source_key, "too_short")
         return None
 

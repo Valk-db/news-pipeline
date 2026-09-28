@@ -95,12 +95,15 @@ cloudflared tunnel --url http://localhost:8000
 ## Pipeline Flow
 
 ### Ingestion (Twice Daily)
-1. **Tier-1 RSS** (8 sources): BBC, Guardian, NPR, DW, France24, Al Jazeera, Euronews, PBS NewsHour
+1. **Tier-1 RSS** (8 sources): BBC, Guardian, NPR (4 feeds), DW, France24, Al Jazeera, Euronews, PBS NewsHour
    - AP/Reuters removed 2026-09-21: 403/401 from GitHub runners
 2. **Tier-2 RSS** (11 enabled): NYT, FT, Economist, Foreign Policy, Foreign Affairs, CSIS, WHO, LA Times, Chicago Tribune, Boston Globe, SFGate
    - 3 sources disabled (no working RSS): Brookings, Chatham House, UN
 3. **GDELT DOC API**: Disabled (`GDELT_ENABLED=false`); code default enabled but redundant with RSS
 4. **Reddit** (Tier-3): Top posts from r/worldnews, r/geopolitics, etc. (public `.rss` feeds, no credentials — anon-rate-limited, throttled to 1 subreddit/3s)
+5. **Bluesky** (Tier-3): Public firehose via RSS (disabled by default, no auth)
+
+See `src/ingestion/source_registry.py` for the complete, up-to-date source registry with all RSS URLs, tiers, and enable/disable status.
 
 ### Verification
 1. **Extract**: trafilatura → body text

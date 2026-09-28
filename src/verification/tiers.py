@@ -80,8 +80,9 @@ async def recompute_story_counters(session: AsyncSession, story_ids: List[uuid.U
 
 # Tier-1 sources (verified editorial standards)
 # Note: classify_source_tier() below is only consulted by scripts/print_tier_reference.py;
-# the live RSS ingestion path (src/ingestion/rss.py TIER1_FEEDS) assigns tier directly and
-# does not read this set. Kept in sync with TIER1_FEEDS anyway to avoid the two drifting.
+# the live RSS ingestion path (src/ingestion/rss.py) reads SourceConfig.tier from
+# source_registry.py and does not read this set. Kept in sync with source_registry
+# to avoid the two drifting.
 # apnews.com/reuters.com are listed as tier-1 by classification but currently have no
 # active ingestion path (RSS pulled 2026-09-21, GDELT disabled) -- see AGENT_TASKS.md.
 TIER1_DOMAINS = {

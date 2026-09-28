@@ -80,7 +80,7 @@ async def run_ingest_with_mocks(sources: dict, feeds: dict):
         mock_extract.return_value = (make_sufficient_body_text(), "Extracted Title")
         mock_fetch_fn.side_effect = mock_fetch
 
-        articles = await ingest_rss_feeds(max_per_feed=50, sources=sources)
+        articles = await ingest_rss_feeds(sources=sources, max_per_feed=50)
         return articles
 
 

@@ -34,6 +34,7 @@ pipeline = [
     "datasketch>=1.6",
     "spacy>=3.7",
     "numpy>=1.26",
+    "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 # Weekly enrichment + verification jobs (embedding, sentence-transformers, torch).
 # Install with: uv sync --extra enrichment

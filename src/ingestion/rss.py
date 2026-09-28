@@ -1,11 +1,9 @@
-"""RSS feed ingestion for tier-1 news sources.
+"""RSS feed ingestion for tier-1 and tier-2 news sources.
 
-NOTE: TIER1_FEEDS below is DEPRECATED and kept only as a documented fallback.
-The single source of truth for all sources (all tiers) is now
+The single source of truth for all sources (all tiers) is
 `src.ingestion.source_registry` — see `get_enabled_sources_by_tier()`.
 
-Production ingestion always uses source_registry; this dict is only used
-if `ingest_rss_feeds(sources=None)` is called explicitly (legacy path).
+Production ingestion always uses source_registry.
 """
 
 import feedparser
@@ -16,93 +14,12 @@ from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
 from src.utils.ner import extract_entities_top_n
 from src.utils.ingest_stats import STATS
-from src.schema.models import RawArticle, SourceTier
+from src.schema.models import RawArticle
 from src.shared.config import get_settings
 import asyncio
 
 
 logger = logging.getLogger(__name__)
-
-
-# DEPRECATED: This dict is NOT used in production (run.py uses source_registry).
-# Kept only as a fallback for direct calls to ingest_rss_feeds(sources=None).
-# If you update this, ALSO update source_registry.py to keep them in sync.
-# See AGENT_TASKS.md P1 for details.
-TIER1_FEEDS = {
-    # 2026-09-21: publisher returns 403 (AP) / 401 (Reuters) to GitHub runners; no official RSS
-    "bbc": {
-        "name": "BBC News",
-        "domain": "bbc.com",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://feeds.bbci.co.uk/news/world/rss.xml",
-            "https://feeds.bbci.co.uk/news/uk/rss.xml",
-            "https://feeds.bbci.co.uk/news/politics/rss.xml",
-        ],
-    },
-    "guardian": {
-        "name": "The Guardian",
-        "domain": "theguardian.com",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://www.theguardian.com/world/rss",
-            "https://www.theguardian.com/politics/rss",
-            "https://www.theguardian.com/us-news/rss",
-        ],
-    },
-    "dw": {
-        "name": "Deutsche Welle",
-        "domain": "dw.com",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://rss.dw.com/rdf/rss-en-all",
-        ],
-    },
-    "france24": {
-        "name": "France 24",
-        "domain": "france24.com",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://www.france24.com/en/rss",
-        ],
-    },
-    "npr": {
-        "name": "NPR",
-        "domain": "npr.org",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://feeds.npr.org/1001/rss.xml",  # News
-            "https://feeds.npr.org/1003/rss.xml",  # World
-            "https://feeds.npr.org/1014/rss.xml",  # Politics (verified working 2026-09-24)
-        ],
-    },
-    # 2026-09-24: added for tier-1 owner-group diversity (see units.py OWNERSHIP_GROUPS);
-    # all three confirmed live and returning valid RSS at addition time.
-    "aljazeera": {
-        "name": "Al Jazeera English",
-        "domain": "aljazeera.com",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://www.aljazeera.com/xml/rss/all.xml",
-        ],
-    },
-    "euronews": {
-        "name": "Euronews",
-        "domain": "euronews.com",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://www.euronews.com/rss",
-        ],
-    },
-    "pbs": {
-        "name": "PBS NewsHour",
-        "domain": "pbs.org",
-        "tier": SourceTier.TIER1,
-        "feeds": [
-            "https://www.pbs.org/newshour/feeds/rss/headlines",
-        ],
-    },
-}
 
 
 async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30, source_key: str = "") -> Optional[feedparser.FeedParserDict]:
@@ -197,7 +114,10 @@ async def process_feed_entry(
 
     # Extract article body
     body_text, extracted_title = await extract_article(url, source_key=source_key)  # type: ignore[arg-type]
-    if not body_text or len(body_text) < 200:  # Too short, likely not a real article
+    if not body_text:
+        # Extraction failed (403, timeout, empty, etc.) - already recorded by extract_article
+        return None
+    if len(body_text) < 200:  # Actually too short, not an extraction failure
         STATS.record(source_key, "too_short")
         return None
 
@@ -230,8 +150,8 @@ async def process_feed_entry(
 
 
 async def ingest_rss_feeds(
+    sources: dict,
     max_per_feed: int = 50,
-    sources: dict | None = None,
     known_url_hashes: set[str] | None = None,
     filter_known: Optional[Callable[[set[str]], Awaitable[set[str]]]] = None,
 ) -> List[RawArticle]:
@@ -239,8 +159,7 @@ async def ingest_rss_feeds(
 
     Args:
         max_per_feed: Maximum articles per feed
-        sources: Optional dict of SourceConfig objects from source_registry.
-                 If None, uses TIER1_FEEDS (backward compatibility).
+        sources: Dict of SourceConfig objects from source_registry (required).
         known_url_hashes: Optional set of URL hashes already known in DB.
                           If provided, entries with these hashes are skipped before extraction.
         filter_known: Optional async callable(filter_known(hashes: set[str]) -> set[str])
@@ -255,10 +174,6 @@ async def ingest_rss_feeds(
     # P1-5: Per-domain circuit breaker state (reset each run)
     # domain -> {"attempts": int, "ok": int, "circuit_open": bool}
     domain_circuit_state: dict[str, dict] = {}
-
-    # Use provided sources or default to TIER1_FEEDS
-    if sources is None:
-        sources = TIER1_FEEDS
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         # Build list of (source_key, feed_url, source_info_dict) tuples
@@ -346,12 +261,15 @@ async def ingest_rss_feeds(
 
                     # Check if circuit should open: >=8 attempts and success rate < 10%
                     if state["attempts"] >= 8 and state["ok"] / state["attempts"] < 0.10:
-                        state["circuit_open"] = True
-                        STATS.record(source_key, "circuit_open")
-                        logger.warning(
-                            "Circuit breaker OPEN for domain %s after %d attempts, %d ok (%.1f%% success rate)",
-                            domain, state["attempts"], state["ok"], state["ok"] / state["attempts"] * 100
-                        )
+                        if not state["circuit_open"]:
+                            # First time opening - record trip as its own stat
+                            state["circuit_open"] = True
+                            STATS.record(source_key, "circuit_tripped")
+                            logger.warning(
+                                "Circuit breaker OPEN for domain %s after %d attempts, %d ok (%.1f%% success rate)",
+                                domain, state["attempts"], state["ok"], state["ok"] / state["attempts"] * 100
+                            )
+                        # Already open, subsequent skips are recorded as circuit_open (above)
 
                     if article:
                         local_articles.append(article)

@@ -85,9 +85,10 @@ TIER1_SOURCES = {
         tier=SourceTier.TIER1,
         category=SourceCategory.BROADCASTER,
         rss_urls=[
-            "https://feeds.npr.org/1001/rss.xml",
-            "https://feeds.npr.org/1003/rss.xml",
-            "https://feeds.npr.org/1004/rss.xml",
+            "https://feeds.npr.org/1001/rss.xml",  # News
+            "https://feeds.npr.org/1003/rss.xml",  # National
+            "https://feeds.npr.org/1004/rss.xml",  # World
+            "https://feeds.npr.org/1014/rss.xml",  # Politics (verified 2026-09-28)
         ],
         geographic_focus="US",
         language="en",
