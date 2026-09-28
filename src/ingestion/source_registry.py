@@ -148,7 +148,7 @@ TIER1_SOURCES = {
         tier=SourceTier.TIER1,
         category=SourceCategory.BROADCASTER,
         rss_urls=[
-            "https://www.euronews.com/rss?level=theme&name=world",
+            "https://www.euronews.com/rss",  # 2026-09-28: corrected from /rss?level=theme&name=world (404)
         ],
         geographic_focus="EU",
         language="en",
@@ -163,7 +163,7 @@ TIER1_SOURCES = {
         tier=SourceTier.TIER1,
         category=SourceCategory.BROADCASTER,
         rss_urls=[
-            "https://www.pbs.org/newshour/feeds/rss.xml",
+            "https://www.pbs.org/newshour/feeds/rss/headlines",  # 2026-09-28: corrected from /rss.xml (404)
         ],
         geographic_focus="US",
         language="en",
@@ -404,7 +404,7 @@ TIER2_SOURCES = {
         tier=SourceTier.TIER2,
         category=SourceCategory.NEWSPAPER,
         rss_urls=[
-            "https://www.latimes.com/world-nation/rss2.0.xml",
+            "https://www.latimes.com/rss2.0.xml",  # 2026-09-28: corrected from /world-nation/rss2.0.xml (404)
         ],
         geographic_focus="US",
         language="en",
@@ -434,7 +434,7 @@ TIER2_SOURCES = {
         tier=SourceTier.TIER2,
         category=SourceCategory.NEWSPAPER,
         rss_urls=[
-            "https://www.bostonglobe.com/arc/outboundfeeds/rss/category/news/nation/",
+            "https://www.bostonglobe.com/rss/",  # 2026-09-28: corrected from /arc/outboundfeeds/... (404); desktop 200
         ],
         geographic_focus="US",
         language="en",
@@ -442,6 +442,7 @@ TIER2_SOURCES = {
         bias_rating="center-left",
         owner_group="Boston Globe Media Partners",
         fetch_priority=1,
+        enabled=False,  # 2026-09-28: desktop 200 but runner may differ; disable until verified in CI
     ),
 }
 
