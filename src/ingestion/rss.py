@@ -110,6 +110,7 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
 
     Retries on 5xx, 429, timeouts, and network errors.
     Other 4xx (401/403/404) are NOT retried - recorded after ONE attempt.
+    On 429, honors Retry-After header (capped at 60s).
     """
     settings = get_settings()
     max_retries = settings.rss_max_retries
@@ -126,8 +127,18 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
             # Retry only on 5xx or 429
             should_retry = status >= 500 or status == 429
             if should_retry and attempt < max_retries - 1:
-                logger.warning("Failed to fetch %s (attempt %d/%d): %s, retrying in %ds...", feed_url, attempt + 1, max_retries, e, retry_delay)
-                await asyncio.sleep(retry_delay)
+                # P1-6: Honor Retry-After header on 429, cap at 60s
+                wait_time = retry_delay
+                if status == 429:
+                    retry_after = e.response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait_time = min(int(retry_after), 60)
+                        except ValueError:
+                            # Retry-After might be HTTP-date, fall back to default
+                            pass
+                logger.warning("Failed to fetch %s (attempt %d/%d): %s, retrying in %ds...", feed_url, attempt + 1, max_retries, e, wait_time)
+                await asyncio.sleep(wait_time)
             else:
                 logger.error("Failed to fetch %s after %d attempt(s): %s", feed_url, attempt + 1, e)
                 STATS.record(source_key, f"feed_failed:http_{status}")
@@ -241,6 +252,10 @@ async def ingest_rss_feeds(
     seen_urls = set()
     articles = []
 
+    # P1-5: Per-domain circuit breaker state (reset each run)
+    # domain -> {"attempts": int, "ok": int, "circuit_open": bool}
+    domain_circuit_state: dict[str, dict] = {}
+
     # Use provided sources or default to TIER1_FEEDS
     if sources is None:
         sources = TIER1_FEEDS
@@ -283,6 +298,12 @@ async def ingest_rss_feeds(
             if not feed or not feed.entries:
                 return []
 
+            domain = source_info_dict["domain"]
+
+            # Initialize circuit state for this domain
+            if domain not in domain_circuit_state:
+                domain_circuit_state[domain] = {"attempts": 0, "ok": 0, "circuit_open": False}
+
             local_articles = []
             for entry in feed.entries[:max_per_feed]:
                 url = entry.get("link", "")
@@ -303,10 +324,32 @@ async def ingest_rss_feeds(
                             STATS.record(source_key, "already_known")
                             continue
 
+                    # P1-5: Check circuit breaker for this domain
+                    state = domain_circuit_state[domain]
+                    if state["circuit_open"]:
+                        STATS.record(source_key, "circuit_open")
+                        continue
+
                     seen_urls.add(url_hash)
 
                 async with extract_sem:
                     article = await process_feed_entry(entry, source_info_dict, source_key)
+
+                    # P1-5: Update circuit breaker state after extraction attempt
+                    state = domain_circuit_state[domain]
+                    state["attempts"] += 1
+                    if article:
+                        state["ok"] += 1
+
+                    # Check if circuit should open: >=8 attempts and success rate < 10%
+                    if state["attempts"] >= 8 and state["ok"] / state["attempts"] < 0.10:
+                        state["circuit_open"] = True
+                        STATS.record(source_key, "circuit_open")
+                        logger.warning(
+                            "Circuit breaker OPEN for domain %s after %d attempts, %d ok (%.1f%% success rate)",
+                            domain, state["attempts"], state["ok"], state["ok"] / state["attempts"] * 100
+                        )
+
                     if article:
                         local_articles.append(article)
 
