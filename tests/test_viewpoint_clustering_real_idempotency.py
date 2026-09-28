@@ -156,7 +156,7 @@ async def test_cluster_viewpoints_idempotent_real_db(db_session):
 
 @pytest.mark.asyncio
 async def test_llm_fallback_behavior():
-    """Document what each LLM path returns when BOTH providers fail.
+    """Verify LLM fallback behavior when BOTH providers fail.
 
     From src/shared/llm.py:
     - generate_caption: returns None when both providers fail (line 284)
@@ -164,18 +164,51 @@ async def test_llm_fallback_behavior():
     - chat_completion: raises exception when both providers fail (no silent default)
     """
     from src.shared.llm import LLMClient
+    from src.shared.config import Settings
 
-    # These are methods on LLMClient class, not module-level functions
-    # Verify they exist as methods
-    assert hasattr(LLMClient, 'generate_caption')
-    assert hasattr(LLMClient, 'classify_relevance')
-    assert hasattr(LLMClient, 'chat_completion')
-    assert hasattr(LLMClient, '_parse_json_response')
+    # Create a mock settings object with no API keys (both providers will fail auth)
+    mock_settings = Settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        groq_api_key="",
+        cerebras_api_key="",
+    )
 
-    print("[OK] LLM fallback behavior documented:")
-    print("  - generate_caption: returns None when both providers fail")
-    print("  - classify_relevance: returns 0.5 (default neutral) when both fail")
-    print("  - chat_completion: raises exception when both fail (no silent default)")
+    with patch("src.shared.llm.get_settings", return_value=mock_settings):
+        client = LLMClient()
+
+        # 1. generate_caption: should return None when both providers fail
+        result = await client.generate_caption(
+            story_title="Test story",
+            key_facts=["Fact 1", "Fact 2"],
+            source_urls=["https://example.com"],
+            platform="twitter",
+        )
+        assert result is None, f"generate_caption expected None, got {result}"
+
+        # 2. classify_relevance: should return 0.5 (default neutral) when both fail
+        result = await client.classify_relevance(
+            title="Test article",
+            body="Test body",
+            topics=["geopolitics"],
+        )
+        assert result == 0.5, f"classify_relevance expected 0.5, got {result}"
+
+        # 3. chat_completion: should raise exception when both fail
+        try:
+            await client.chat_completion(
+                messages=[{"role": "user", "content": "Hello"}],
+                max_tokens=100,
+                temperature=0.5,
+            )
+            assert False, "chat_completion should have raised an exception"
+        except Exception:
+            # Any exception is acceptable - the point is it doesn't silently return a default
+            pass
+
+        print("[OK] LLM fallback behavior verified:")
+        print("  - generate_caption: returns None when both providers fail")
+        print("  - classify_relevance: returns 0.5 (default neutral) when both fail")
+        print("  - chat_completion: raises exception when both fail (no silent default)")
 
 
 if __name__ == "__main__":

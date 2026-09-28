@@ -300,6 +300,7 @@ TIER2_SOURCES = {
         fetch_priority=2,
         enabled=False,
     ),
+    # Kept (2026-09-28): ok=1 in runs 36452503330, 36379797179; ok=0 in 36466623099 (already_known=25)
     "foreignpolicy.com": SourceConfig(
         domain="foreignpolicy.com",
         name="Foreign Policy",
@@ -330,6 +331,7 @@ TIER2_SOURCES = {
         owner_group="Council on Foreign Relations",
         fetch_priority=1,
     ),
+    # Disabled (2026-09-28): 0 ok across runs 36452503330 (already_known=10), 36466623099 (already_known=10), 36379797179 (already_known=10)
     "csis.org": SourceConfig(
         domain="csis.org",
         name="CSIS",
@@ -344,6 +346,7 @@ TIER2_SOURCES = {
         bias_rating="center",
         owner_group="CSIS",
         fetch_priority=1,
+        enabled=False,
     ),
     # "brookings.edu": SourceConfig(
 #         domain="brookings.edu",
@@ -393,6 +396,7 @@ TIER2_SOURCES = {
 #         fetch_priority=1,
 #         enabled=False,  # Disabled: CloudFront blocks RSS
 #     ),
+    # Disabled (2026-09-28): 0 ok across runs 36452503330 (already_known=25), 36466623099 (already_known=25), 36379797179 (already_known=25)
     "who.int": SourceConfig(
         domain="who.int",
         name="World Health Organization",
@@ -407,6 +411,7 @@ TIER2_SOURCES = {
         bias_rating="center",
         owner_group="WHO",
         fetch_priority=1,
+        enabled=False,
     ),
     # Major US regional papers
     # Disabled (2026-09-28): 0 ok across runs 36452503330 (feed_failed:403=1) and 36379797179 (feed_failed:403=1)
@@ -426,7 +431,7 @@ TIER2_SOURCES = {
         fetch_priority=1,
         enabled=False,
     ),
-    # Kept (2026-09-28): feed_ok=1 in runs 36452503330, 36379797179
+    # Disabled (2026-09-28): 0 ok across runs 36452503330 (entries_in_feed=0), 36466623099 (entries_in_feed=0), 36379797179 (entries_in_feed=0)
     "chicagotribune.com": SourceConfig(
         domain="chicagotribune.com",
         name="Chicago Tribune",
@@ -441,6 +446,7 @@ TIER2_SOURCES = {
         bias_rating="center",
         owner_group="Tribune Publishing",
         fetch_priority=1,
+        enabled=False,
     ),
     "bostonglobe.com": SourceConfig(
         domain="bostonglobe.com",

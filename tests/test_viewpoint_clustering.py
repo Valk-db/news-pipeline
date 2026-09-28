@@ -462,14 +462,12 @@ def test_source_registry():
     assert all(s.enabled for s in enabled_tier1.values())
 
     enabled_tier2 = get_enabled_sources_by_tier(SourceTier.TIER2)
-    # Only foreignpolicy, foreignaffairs, csis, who, chicagotribune are enabled tier-2
-    assert len(enabled_tier2) == 5
+    # Only foreignpolicy and foreignaffairs are enabled tier-2 (ok>0 in 2+ runs)
+    # csis.org, who.int, chicagotribune.com disabled: 0 ok across 3 runs
+    assert len(enabled_tier2) == 2
     assert all(s.enabled for s in enabled_tier2.values())
     assert "foreignpolicy.com" in enabled_tier2
     assert "foreignaffairs.com" in enabled_tier2
-    assert "csis.org" in enabled_tier2
-    assert "who.int" in enabled_tier2
-    assert "chicagotribune.com" in enabled_tier2
 
     # Test getting specific source
     bbc = get_source_config("bbc.com")
@@ -478,7 +476,7 @@ def test_source_registry():
     assert bbc.tier == SourceTier.TIER1
 
     # Disabled tier-2 sources should have enabled=False
-    for domain in ["nytimes.com", "washingtonpost.com", "wsj.com", "ft.com", "economist.com", "latimes.com"]:
+    for domain in ["nytimes.com", "washingtonpost.com", "wsj.com", "ft.com", "economist.com", "latimes.com", "csis.org", "who.int", "chicagotribune.com"]:
         src = get_source_config(domain)
         assert src is not None, f"{domain} should exist in registry"
         assert src.enabled is False, f"{domain} should be disabled"
