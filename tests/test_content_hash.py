@@ -359,7 +359,6 @@ class TestIngestionSourcesHaveContentHash:
             article = await process_feed_entry(
                 mock_entry,
                 {"domain": "bbc.com", "tier": SourceTier.TIER1},
-                set(),
                 "bbc"
             )
 
@@ -385,7 +384,6 @@ class TestIngestionSourcesHaveContentHash:
                     await process_feed_entry(
                         mock_entry,
                         {"domain": "bbc.com", "tier": SourceTier.TIER1},
-                        set(),
                         "bbc",
                     )
                 assert mock_entities.call_args.kwargs["top_n"] == 1

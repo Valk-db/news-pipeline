@@ -154,34 +154,38 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
 async def process_feed_entry(
     entry: feedparser.FeedParserDict,
     source_info: dict,
-    seen_urls: set,
     source_key: str,
 ) -> Optional[RawArticle]:
-    """Process a single feed entry into a RawArticle."""
+    """Process a single feed entry into a RawArticle.
+
+    Note: URL deduplication is handled by the caller (_bounded_process) which
+    reserves url_hash in seen_urls under a lock before calling this function.
+    This function does not check seen_urls.
+    """
     settings = get_settings()
     url = entry.get("link", "")
-    if not url or url in seen_urls:
+    if not url:
         return None
 
-    url_hash = compute_url_hash(url)
-    if url_hash in seen_urls:
-        return None
+    url_hash = compute_url_hash(url)  # type: ignore[arg-type]
 
-    title = entry.get("title", "").strip()
+    title = entry.get("title", "")
+    if isinstance(title, str):
+        title = title.strip()
     if not title:
         return None
 
     # Parse published date
     published_at = None
     if "published_parsed" in entry and entry.published_parsed:
-        published_at = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+        published_at = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)  # type: ignore[arg-type]
     elif "updated_parsed" in entry and entry.updated_parsed:
-        published_at = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
+        published_at = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)  # type: ignore[arg-type]
 
     STATS.record(source_key, "entries_seen")
 
     # Extract article body
-    body_text, extracted_title = await extract_article(url, source_key=source_key)
+    body_text, extracted_title = await extract_article(url, source_key=source_key)  # type: ignore[arg-type]
     if not body_text or len(body_text) < 200:  # Too short, likely not a real article
         STATS.record(source_key, "too_short")
         return None
@@ -202,7 +206,7 @@ async def process_feed_entry(
         url_hash=url_hash,
         title=title,
         body_text=body_text,
-        summary=entry.get("summary", "")[:500] if entry.get("summary") else None,
+        summary=(entry.get("summary", "")[:500] if entry.get("summary") else None),  # type: ignore[index]
         source_domain=source_info["domain"],
         source_tier=source_info["tier"],
         published_at=published_at,
@@ -281,7 +285,7 @@ async def ingest_rss_feeds(max_per_feed: int = 50, sources: dict | None = None) 
                     seen_urls.add(url_hash)
 
                 async with extract_sem:
-                    article = await process_feed_entry(entry, source_info_dict, seen_urls, source_key)
+                    article = await process_feed_entry(entry, source_info_dict, source_key)
                     if article:
                         local_articles.append(article)
 
