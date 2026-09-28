@@ -3,14 +3,16 @@
 
 import asyncio
 import os
-from dotenv import load_dotenv
-load_dotenv()
+from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import select, func, and_
+from dotenv import load_dotenv
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+
 from src.schema.models import Story, ReportingUnit, RawArticle, StoryUnitLink
-from datetime import datetime, timezone, timedelta
+
+load_dotenv()
 
 async def what_if_simulation():
     database_url = os.getenv('DATABASE_URL')
