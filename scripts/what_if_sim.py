@@ -7,11 +7,11 @@ from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
 from dotenv import load_dotenv
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-from src.schema.models import Story, ReportingUnit, RawArticle, StoryUnitLink
+from src.schema.models import ReportingUnit, RawArticle, StoryUnitLink
 
 load_dotenv()
 
