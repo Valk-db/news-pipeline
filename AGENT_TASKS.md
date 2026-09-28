@@ -1,31 +1,23 @@
-# AGENT_TASKS.md v29
+# AGENT_TASKS.md v30
 
-Supersedes v28. P0 confirmed real and done. This batch: get an honest read on
-the model-loading failure (don't accept "no network access" without the real
-error text), and clean up the main.rs duplication while it's already being
-touched.
+Supersedes v29. main.rs dedup confirmed good (test count now clean at 44). The
+http:// change needs to be reverted for a real fix — not accepted as-is.
 
-## P1a — Get the real error, don't assume the cause
+## P1a-retry — Fix the actual TLS gap, revert the http:// workaround
 
-- Pull the actual `error!("Failed to load NER model: {}", e)` /
-  equivalent embedding-model line from the CI 36356719994 logs and paste it
-  verbatim. If it's a connection/DNS failure, "no network access" holds. If
-  it's a 404, a redirect, or an HTTP error against a specific URL, that's a
-  stale-URL problem in rust-bert's resource resolution, not a network block —
-  different fix (possibly overriding the resource URL manually, or checking
-  for a newer rust-bert release).
-- Once the real cause is known: fix it if fixable, or document precisely why
-  it isn't, before calling T5 functionally verified either way.
+- Revert the model resource URLs back to https://.
+- Find where `cached-path` (rust-bert's resource-fetching dependency) pulls
+  in its HTTP client, and confirm which reqwest TLS feature (if any) reaches
+  it through feature unification. Explicitly enable one (`rustls-tls` is
+  usually the lower-friction choice, no system OpenSSL dependency) in
+  pipeline-rs's own Cargo.toml if it isn't already flowing through.
+- Confirm the fix by actually pasting the success-branch output —
+  `eprintln!("Extracted entities: {:?}", result)` — from a real CI run, not
+  just "tests passed." If it still fails, paste whatever the new error is;
+  don't route around it with another URL/protocol workaround.
 
-## P1b — Fix main.rs's module duplication
+## Only after that: T5 functional verification (still the real ask from v22)
 
-- `main.rs` declares its own `mod config; mod database; ...` tree duplicating
-  `lib.rs`. Change it to `use pipeline_rs::{config, database, ...};` (or
-  equivalent) so the binary depends on the library crate instead of
-  recompiling the same source separately. Confirm the test count drops back
-  to a single count (not lib+bin duplicated) and note whether build time
-  visibly improves.
-
-Once P1a's real cause is known, T5's actual functional verification (GPE/LOC
-correctness, real embedding output) from v28 is still the next thing after —
-not replaced by this batch.
+- GPE vs LOC distinction on real articles, real embedding output — same as
+  every prior round has asked. This can't be checked until the model
+  actually loads.
