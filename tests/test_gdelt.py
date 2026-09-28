@@ -395,6 +395,18 @@ class TestRunIngestionIntegration:
                             "failed": ["bbc.com", "theguardian.com"],
                             "succeeded": ["apnews.com", "reuters.com"],
                             "skipped": []
+                        },
+                        "extraction_stats": {
+                            "apnews.com.ok": 5,
+                            "reuters.com.ok": 5,
+                            "bbc.com.ok": 0,
+                            "theguardian.com.ok": 0,
+                            "npr.org.ok": 5,
+                            "dw.com.ok": 5,
+                            "france24.com.ok": 5,
+                            "aljazeera.com.ok": 5,
+                            "euronews.com.ok": 5,
+                            "pbs.org.ok": 5,
                         }
                     }
                 }

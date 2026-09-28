@@ -36,7 +36,12 @@ class TestExitGuard:
                     "ingestion": {
                         "total_fetched": 10,
                         "total_new": 0,
-                        "extraction_stats": {}
+                        "extraction_stats": {
+                            "bbc.com.ok": 5,
+                            "theguardian.com.ok": 5,
+                        },
+                        "tier1_critical_down": [],
+                        "gdelt_health": {"failed": [], "succeeded": [], "skipped": []}
                     }
                 }
             }

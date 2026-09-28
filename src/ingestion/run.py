@@ -4,6 +4,7 @@ import asyncio
 import sys
 import os
 from datetime import datetime, timezone
+from typing import List, Dict, Tuple
 from src.ingestion.gdelt import GDELT_TIER1_CRITICAL_DOMAINS
 from src.ingestion.source_registry import SourceTier
 from src.ingestion.adapters.rss_adapter import RssAdapter
@@ -41,6 +42,77 @@ def dedupe_articles(all_articles, existing_url_hashes, existing_content_hashes):
         batch_url_hashes.add(a.url_hash)
         new_articles.append(a)
     return new_articles, url_dup, content_dup
+
+
+def classify_tier1_sources_broken(stats_snapshot: Dict, tier1_sources: Dict) -> Tuple[List[str], Dict[str, Dict]]:
+    """
+    Classify each enabled tier-1 source as BROKEN or OK.
+
+    A source is BROKEN if:
+    1. entries_seen > 0 and ok + already_known == 0 (extraction ran but nothing succeeded)
+    2. All feeds failed (feed_failed:* present and no feed_ok)
+    3. Feeds OK but zero entries seen while other tier-1 sources have entries
+
+    Returns:
+        (list of broken source domains, dict with per-source breakdown)
+    """
+    broken_sources = []
+    breakdown = {}
+
+    # First, collect which tier-1 sources have entries_seen > 0
+    sources_with_entries = set()
+    for source_key, source_config in tier1_sources.items():
+        entries_seen = stats_snapshot.get(f"{source_config.domain}.entries_seen", 0)
+        if entries_seen > 0:
+            sources_with_entries.add(source_config.domain)
+
+    for source_key, source_config in tier1_sources.items():
+        domain = source_config.domain
+        entries_seen = stats_snapshot.get(f"{domain}.entries_seen", 0)
+        ok_count = stats_snapshot.get(f"{domain}.ok", 0)
+        already_known = stats_snapshot.get(f"{domain}.already_known", 0)
+
+        # Count feed failures and successes
+        feed_ok = 0
+        feed_failed = 0
+        for key, value in stats_snapshot.items():
+            if key.startswith(f"{domain}.feed_ok"):
+                feed_ok += value
+            elif key.startswith(f"{domain}.feed_failed"):
+                feed_failed += value
+
+        is_broken = False
+        reason = ""
+
+        # Condition 1: entries_seen > 0 but ok + already_known == 0
+        if entries_seen > 0 and (ok_count + already_known) == 0:
+            is_broken = True
+            reason = f"entries_seen={entries_seen} but ok+already_known=0 (extraction failed for all)"
+
+        # Condition 2: All feeds failed (feed_failed present, no feed_ok)
+        elif feed_failed > 0 and feed_ok == 0:
+            is_broken = True
+            reason = f"all feeds failed (feed_failed={feed_failed}, feed_ok=0)"
+
+        # Condition 3: Feeds OK but zero entries while other tier-1 sources have entries
+        elif feed_ok > 0 and entries_seen == 0 and sources_with_entries:
+            is_broken = True
+            reason = "feeds OK but zero entries seen while other tier-1 sources have entries"
+
+        breakdown[domain] = {
+            "entries_seen": entries_seen,
+            "ok": ok_count,
+            "already_known": already_known,
+            "feed_ok": feed_ok,
+            "feed_failed": feed_failed,
+            "is_broken": is_broken,
+            "reason": reason,
+        }
+
+        if is_broken:
+            broken_sources.append(domain)
+
+    return broken_sources, breakdown
 
 
 async def log_status(session, phase: str, status: str, details: dict = None):
@@ -282,27 +354,63 @@ async def main():
                     with open(summary_path, "a") as f:
                         f.write(f"\n## Ingestion Stats\n\n{stats_md}\n")
 
-        # Exit non-zero if tier-1 critical GDELT domains are down (not dry run)
+        # Classify tier-1 sources as BROKEN
         if not dry_run:
+            stats_snapshot = results["phases"].get("ingestion", {}).get("extraction_stats", {})
+            from src.ingestion.source_registry import get_enabled_sources_by_tier
+            tier1_sources = get_enabled_sources_by_tier(SourceTier.TIER1)
+
+            broken_sources, breakdown = classify_tier1_sources_broken(stats_snapshot, tier1_sources)
+            total_tier1 = len(tier1_sources)
+            broken_count = len(broken_sources)
+
+            print("\n--- TIER-1 SOURCE HEALTH ---")
+            for domain, info in breakdown.items():
+                status = "BROKEN" if info["is_broken"] else "OK"
+                print(f"  {domain}: {status} (entries_seen={info['entries_seen']}, ok={info['ok']}, already_known={info['already_known']}, feed_ok={info['feed_ok']}, feed_failed={info['feed_failed']})")
+                if info["is_broken"]:
+                    print(f"    Reason: {info['reason']}")
+
+            # Exit 1 if >=50% of enabled tier-1 sources are BROKEN, or total tier-1 ok+already_known == 0
+            total_tier1_ok_known = sum(
+                stats_snapshot.get(f"{s.domain}.ok", 0) + stats_snapshot.get(f"{s.domain}.already_known", 0)
+                for s in tier1_sources.values()
+            )
+
+            if broken_count * 2 >= total_tier1 or total_tier1_ok_known == 0:
+                print(f"\nERROR: {broken_count}/{total_tier1} tier-1 sources BROKEN (>=50% threshold) or total tier-1 ok+already_known=0")
+                for domain in broken_sources:
+                    print(f"::error title=Tier-1 source BROKEN::{domain}: {breakdown[domain]['reason']}")
+                sys.exit(1)
+            elif broken_count > 0:
+                # Below threshold: print as ::error annotations without failing
+                print(f"\nWARNING: {broken_count}/{total_tier1} tier-1 sources BROKEN (below 50% threshold)")
+                for domain in broken_sources:
+                    print(f"::error title=Tier-1 source BROKEN (below threshold)::{domain}: {breakdown[domain]['reason']}")
+            else:
+                print(f"\nAll {total_tier1} tier-1 sources OK")
+
+            # Always write per-source stats to GITHUB_STEP_SUMMARY (including tier-2 and Reddit)
+            stats_md = STATS.render_markdown()
+            if stats_md:
+                print("\n--- INGESTION STATS ---")
+                print(stats_md)
+                summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+                if summary_path:
+                    with open(summary_path, "a") as f:
+                        f.write(f"\n## Ingestion Stats\n\n{stats_md}\n")
+
+            # Exit non-zero if tier-1 critical GDELT domains are down
             tier1_critical_down = results["phases"].get("ingestion", {}).get("tier1_critical_down", [])
             if tier1_critical_down:
                 print(f"\nWARNING: tier-1 critical GDELT domains down: {tier1_critical_down}")
                 sys.exit(1)
 
-            # Exit guard: zero fetched articles is a real problem (all dupes is fine)
+            # Exit guard: zero fetched articles is a real problem
             total_fetched = results["phases"].get("ingestion", {}).get("total_fetched")
             if total_fetched is not None and total_fetched == 0:
                 print("\nERROR: total_fetched == 0 (no articles fetched from any source)")
                 sys.exit(1)
-
-            # Warn per tier-1 source that produced zero ok articles
-            stats_snapshot = results["phases"].get("ingestion", {}).get("extraction_stats", {})
-            from src.ingestion.source_registry import get_enabled_sources_by_tier
-            tier1_sources = get_enabled_sources_by_tier(SourceTier.TIER1)
-            for source_key, source_config in tier1_sources.items():
-                ok_count = stats_snapshot.get(f"{source_config.domain}.ok", 0)
-                if ok_count == 0:
-                    print(f"::warning title=Source produced no articles::{source_config.domain}")
 
     except Exception as e:
         print(f"\nPipeline failed: {e}")
