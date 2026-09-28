@@ -211,7 +211,7 @@ TIER1_SOURCES = {
 
 # Tier-2 Sources (National/Regional reputable outlets)
 TIER2_SOURCES = {
-    # Disabled (2026-09-28): 0 ok articles across 2-3 daily-ingest runs; circuit breaker trips every run
+    # Disabled (2026-09-28): 0 ok across runs 36452503330 (circuit_tripped=60, 403=9) and 36379797179 (circuit breaker OPEN, 0 ok)
     "nytimes.com": SourceConfig(
         domain="nytimes.com",
         name="The New York Times",
@@ -229,7 +229,7 @@ TIER2_SOURCES = {
         fetch_priority=2,
         enabled=False,
     ),
-    # Disabled (2026-09-28): 0 ok articles across 2 daily-ingest runs; circuit breaker trips every run
+    # Disabled (2026-09-28): 0 ok across runs 36452503330 (circuit_tripped=9, 403=9) and 36379797179 (circuit breaker OPEN, 0 ok)
     "washingtonpost.com": SourceConfig(
         domain="washingtonpost.com",
         name="The Washington Post",
@@ -247,7 +247,7 @@ TIER2_SOURCES = {
         fetch_priority=2,
         enabled=False,
     ),
-    # Disabled (2026-09-28): 0 ok articles across 2 daily-ingest runs; circuit breaker trips every run
+    # Disabled (2026-09-28): 0 ok across runs 36452503330 (circuit_tripped=31, 403=9) and 36379797179 (circuit breaker OPEN, 0 ok)
     "wsj.com": SourceConfig(
         domain="wsj.com",
         name="The Wall Street Journal",
@@ -265,7 +265,7 @@ TIER2_SOURCES = {
         fetch_priority=2,
         enabled=False,
     ),
-    # Disabled (2026-09-28): 0 ok articles across 3 daily-ingest runs; circuit breaker trips every run
+    # Disabled (2026-09-28): 0 ok across runs 36452503330 (circuit_tripped=2, 403=8), 36434221800 (circuit_open=3, 403=1), 36379797179 (circuit breaker OPEN, 0 ok)
     "ft.com": SourceConfig(
         domain="ft.com",
         name="Financial Times",
@@ -283,7 +283,7 @@ TIER2_SOURCES = {
         fetch_priority=2,
         enabled=False,
     ),
-    # Disabled (2026-09-28): 0 ok articles across 3 daily-ingest runs; circuit breaker trips every run
+    # Disabled (2026-09-28): 0 ok across runs 36452503330 (circuit_tripped=42, 403=8), 36434221800 (circuit_open=43, 403=8), 36379797179 (circuit breaker OPEN, 0 ok)
     "economist.com": SourceConfig(
         domain="economist.com",
         name="The Economist",
@@ -409,7 +409,7 @@ TIER2_SOURCES = {
         fetch_priority=1,
     ),
     # Major US regional papers
-    # Disabled (2026-09-28): 0 ok articles across 2 daily-ingest runs; feed_failed:http_403
+    # Disabled (2026-09-28): 0 ok across runs 36452503330 (feed_failed:403=1) and 36379797179 (feed_failed:403=1)
     "latimes.com": SourceConfig(
         domain="latimes.com",
         name="Los Angeles Times",
@@ -426,6 +426,7 @@ TIER2_SOURCES = {
         fetch_priority=1,
         enabled=False,
     ),
+    # Kept (2026-09-28): feed_ok=1 in runs 36452503330, 36379797179
     "chicagotribune.com": SourceConfig(
         domain="chicagotribune.com",
         name="Chicago Tribune",
