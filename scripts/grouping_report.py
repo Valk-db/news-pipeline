@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from src.schema.models import (
     RawArticle, ReportingUnit, Story, StoryUnitLink, SourceTier,
 )
-from src.verification.units import OWNERSHIP_GROUPS, get_owner_group
+from src.verification.units import get_owner_group
 
 
 async def run_report(hours: int = 48):
@@ -38,7 +38,7 @@ async def run_report(hours: int = 48):
         print("ERROR: DATABASE_URL not found in environment or .env")
         return
 
-    print(f"Connecting to database...")
+    print("Connecting to database...")
     # Supabase pooler uses pgbouncer which doesn't support prepared statements
     engine = create_async_engine(database_url, echo=False, connect_args={"statement_cache_size": 0})
     async_session = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
@@ -82,7 +82,7 @@ async def run_report(hours: int = 48):
 
         print(f"  Stories created in window: {created_count}")
         print(f"  Stories attached-to-existing: {attached_count}")
-        print(f"  Units per story distribution:")
+        print("  Units per story distribution:")
         for count in sorted(units_per_story.keys()):
             print(f"    {count} unit(s): {units_per_story[count]} stories")
 
@@ -123,7 +123,6 @@ async def run_report(hours: int = 48):
 
             for story in stories:
                 tier1_owners = story_tier1_owners.get(story.id, set())
-                distinct_tier1_owners = len(tier1_owners)
 
                 # Check story status and gate reason
                 if story.status == Story.Status.QUEUED:
@@ -154,7 +153,7 @@ async def run_report(hours: int = 48):
                 print(f"    Owner groups: {', '.join(sorted(owners))}")
 
             print(f"\nBlocked stories: {len(blocked_stories)}")
-            print(f"Blocked by reason:")
+            print("Blocked by reason:")
             for reason, count in blocked_reasons.most_common():
                 # Sanitize reason for console output
                 safe_reason = str(reason).encode('ascii', 'replace').decode('ascii')
@@ -200,7 +199,7 @@ async def run_report(hours: int = 48):
             else:
                 entity_size_buckets["6+"] += 1
 
-        print(f"Entity set size distribution:")
+        print("Entity set size distribution:")
         for bucket in ["0 (empty)", "1-2", "3-5", "6+"]:
             print(f"  {bucket}: {entity_size_buckets[bucket]} units")
 
@@ -244,7 +243,6 @@ async def run_report(hours: int = 48):
         # Compute title similarity (TF-IDF cosine) for cross-outlet pairs
         from sklearn.feature_extraction.text import TfidfVectorizer
         from sklearn.metrics.pairwise import cosine_similarity
-        import numpy as np
 
         if len(tier1_units) >= 2:
             titles = [u["title"] for u in tier1_units]
@@ -312,11 +310,11 @@ async def run_report(hours: int = 48):
                         else:
                             jaccard_buckets[">=0.40"] += 1
 
-                    print(f"\n  Entity Jaccard distribution for non-merged pairs:")
+                    print("\n  Entity Jaccard distribution for non-merged pairs:")
                     for bucket in ["0", "0.01-0.19", "0.20-0.39", ">=0.40"]:
                         print(f"    {bucket}: {jaccard_buckets[bucket]}")
 
-                    print(f"\n  Example non-merged pairs (10):")
+                    print("\n  Example non-merged pairs (10):")
                     for i, pair in enumerate(not_merged[:10]):
                         u1 = pair["unit1"]
                         u2 = pair["unit2"]
@@ -399,8 +397,8 @@ async def run_report(hours: int = 48):
         from src.shared.config import get_settings
         settings = get_settings()
         print(f"  top_n_entities: {settings.top_n_entities} (default 3, max 9 IDs per unit across PERSON/ORG/GPE)")
-        print(f"  Jaccard similarity threshold: 0.4")
-        print(f"  Story matching window: 48 hours")
+        print("  Jaccard similarity threshold: 0.4")
+        print("  Story matching window: 48 hours")
         print(f"  Containment threshold (units): {settings.containment_threshold}")
 
     await engine.dispose()
