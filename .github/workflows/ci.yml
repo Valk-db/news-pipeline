@@ -6,9 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# A newer push to the same ref supersedes the older run (saves Actions minutes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -22,8 +28,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Fails if pyproject.toml and uv.lock disagree. Production workflows install with
+      # --frozen (they trust the lockfile), so a stale lock must never reach main.
+      - name: Check lockfile is in sync
+        run: uv lock --check
+
       - name: Install dependencies
-        run: uv sync --extra dev --extra pipeline
+        run: uv sync --frozen --extra dev --extra pipeline
 
       - name: Run ruff
         run: uv run ruff check .
@@ -34,6 +45,7 @@ jobs:
 
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -61,7 +73,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: uv sync --extra dev --extra pipeline
+        run: uv sync --frozen --extra dev --extra pipeline
 
       - name: Wait for database
         run: |

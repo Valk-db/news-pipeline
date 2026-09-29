@@ -10,10 +10,62 @@ from src.utils.ner import (
 )
 from src.verification.tiers import recompute_story_counters, apply_dynamic_gate
 from datetime import datetime, timezone, timedelta
+import json
+import re
 import uuid
 import logging
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_VIEWPOINT_LABEL = "neutral"
+MAX_VIEWPOINT_LABEL_LEN = 32
+
+
+def _normalize_viewpoint_label(raw: object) -> str:
+    """Coerce whatever the LLM returned for one unit into a short snake_case label."""
+    if not isinstance(raw, str):
+        return DEFAULT_VIEWPOINT_LABEL
+    label = re.sub(r"[^a-z0-9_]+", "_", raw.strip().lower()).strip("_")
+    return label[:MAX_VIEWPOINT_LABEL_LEN] or DEFAULT_VIEWPOINT_LABEL
+
+
+def _parse_viewpoint_response(content: str) -> dict[str, str]:
+    """Parse the LLM's {unit_id: label} JSON, tolerating ```json fences and prose wrappers."""
+    text = (content or "").strip()
+    if text.startswith("```"):
+        parts = text.split("```")
+        text = parts[1] if len(parts) > 1 else text
+        text = text.removeprefix("json").strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        data = json.loads(text[start : end + 1])
+    if not isinstance(data, dict):
+        raise ValueError("viewpoint response is not a JSON object")
+    return {str(k): _normalize_viewpoint_label(v) for k, v in data.items()}
+
+
+def _build_viewpoint_prompt(unit_texts: list[dict]) -> str:
+    """Build the stance-labeling prompt. Every excerpt carries its unit_id so the model
+    can key its answer by it (without ids the model has nothing to key on and every unit
+    silently falls back to the default label)."""
+    excerpts = "\n\n---\n\n".join(
+        f"unit_id: {u['unit_id']}\nsource_tier: {u['source_tier']}\n{u['text']}" for u in unit_texts
+    )
+    return f"""Analyze these news article excerpts about the same event and identify distinct viewpoints/stances.
+Group them into perspectives (e.g., pro-government, opposition, neutral/international, local, skeptical).
+
+Articles:
+{excerpts}
+
+Return a JSON object mapping every unit_id above (copied exactly) to a viewpoint_label. Use concise labels like:
+"pro_govt", "opposition", "neutral", "international", "local", "skeptical", "pro_business", "pro_labor", etc.
+Use "neutral" when a unit takes no clear stance.
+
+Only return the JSON object, no explanation."""
 
 
 async def _gather_unit_texts_for_story(
@@ -218,19 +270,7 @@ async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) 
         from src.shared.llm import get_llm_client
         llm = await get_llm_client()
 
-        # Create a prompt to classify viewpoints
-        texts_for_prompt = "\n\n---\n\n".join([f"Source: {u['source_tier']}\n{u['text']}" for u in unit_texts])
-
-        prompt = f"""Analyze these news article excerpts about the same event and identify distinct viewpoints/stances.
-Group them into perspectives (e.g., pro-government, opposition, neutral/international, local, skeptical).
-
-Articles:
-{texts_for_prompt}
-
-Return a JSON object mapping unit_id to viewpoint_label. Use concise labels like:
-"pro_govt", "opposition", "neutral", "international", "local", "skeptical", "pro_business", "pro_labor", etc.
-
-Only return the JSON object, no explanation."""
+        prompt = _build_viewpoint_prompt(unit_texts)
 
         try:
             result = await llm.chat_completion(
@@ -238,17 +278,22 @@ Only return the JSON object, no explanation."""
                 temperature=0.1,
                 max_tokens=500,
             )
-            import json
-            viewpoint_labels = json.loads(result["choices"][0]["message"]["content"])
+            viewpoint_labels = _parse_viewpoint_response(result["choices"][0]["message"]["content"])
 
             # Group units by viewpoint
             viewpoint_to_units = {}
             for unit_data in unit_texts:
                 unit_id = unit_data["unit_id"]
-                label = viewpoint_labels.get(str(unit_id), "neutral")
+                label = viewpoint_labels.get(str(unit_id), DEFAULT_VIEWPOINT_LABEL)
                 if label not in viewpoint_to_units:
                     viewpoint_to_units[label] = []
                 viewpoint_to_units[label].append(unit_id)
+
+            # One label = no distinct viewpoints; a lone child would just duplicate the parent
+            # in the curation queue.
+            if len(viewpoint_to_units) < 2:
+                logger.info("Story %s: single viewpoint label, not splitting", story.id)
+                continue
 
             # Create viewpoint clusters
             for label, unit_ids in viewpoint_to_units.items():
@@ -301,6 +346,9 @@ async def _get_recent_stories_with_entities(
         select(Story)
         .where(Story.status.in_([Story.Status.PENDING, Story.Status.BLOCKED]))
         .where(Story.updated_at >= cutoff)
+        # Viewpoint children copy their parent's entities; letting new units attach to
+        # a child instead of the parent would split one event across slices.
+        .where(Story.viewpoint_cluster_id.is_(None))
     )
     result = await session.execute(stmt)
     stories = result.scalars().all()
