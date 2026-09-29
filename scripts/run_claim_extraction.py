@@ -10,6 +10,7 @@ Usage:
 import asyncio
 import json
 import os
+import sys
 
 from src.shared.database import init_db, get_session_maker
 from src.verification.claims import extract_claims_for_recent_stories
@@ -24,8 +25,13 @@ async def main() -> None:
     total_claims = 0
     total_evidence = 0
     total_errors = 0
+    stories_with_llm_errors = 0
     for r in results:
         if r.get("errors"):
+            # Check if error is LLM-related
+            llm_error = any("llm" in e.lower() or "chat" in e.lower() or "auth" in e.lower() or "401" in e or "403" in e for e in r.get("errors", []))
+            if llm_error:
+                stories_with_llm_errors += 1
             print(f"  Story {r['story_id']}: {len(r['errors'])} errors")
             total_errors += len(r['errors'])
         else:
@@ -35,6 +41,12 @@ async def main() -> None:
             )
             total_claims += r.get("claims_created", 0)
             total_evidence += r.get("evidence_created", 0)
+
+    # Fail loudly if LLM calls failed for more than half of attempted stories
+    if results and stories_with_llm_errors > len(results) / 2:
+        error_msg = f"ERROR claims_llm_failed={stories_with_llm_errors}/{len(results)}"
+        print(error_msg)
+        sys.exit(1)
 
     summary = {
         "stories_processed": len(results),

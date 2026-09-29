@@ -30,8 +30,9 @@ async def main() -> None:
         if r.get("errors"):
             print(f"  Story {r['story_id']}: {len(r['errors'])} errors")
         else:
+            media_str = "NOT_IMPLEMENTED" if r.get('media_assets', 0) == 0 else str(r.get('media_assets', 0))
             print(
-                f"  Story {r['story_id']}: media={r['media_assets']} "
+                f"  Story {r['story_id']}: media={media_str} "
                 f"videos={r['videos_found']} snippets={r['social_snippets_found']} "
                 f"embeddings={r['embeddings_generated']}"
             )
