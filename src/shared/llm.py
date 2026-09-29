@@ -132,7 +132,11 @@ class LLMClient:
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(3),
-        retry=lambda e: LLMClient._is_transient_error(e),
+        retry=lambda retry_state: (
+            LLMClient._is_transient_error(retry_state.outcome.exception())
+            if retry_state.outcome and retry_state.outcome.exception()
+            else False
+        ),
     )
     async def _chat_completion_groq(
         self,
@@ -161,7 +165,11 @@ class LLMClient:
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(3),
-        retry=lambda e: LLMClient._is_transient_error(e),
+        retry=lambda retry_state: (
+            LLMClient._is_transient_error(retry_state.outcome.exception())
+            if retry_state.outcome and retry_state.outcome.exception()
+            else False
+        ),
     )
     async def _chat_completion_cerebras(
         self,
@@ -247,6 +255,15 @@ OUTPUT: Just the post text, nothing else."""
             except BudgetExhausted as e:
                 logger.warning("Groq budget exhausted: %s", e)
             except Exception as e:
+                # If it's a transient error (including RetryError wrapping one), re-raise
+                from tenacity import RetryError
+                if isinstance(e, RetryError):
+                    if e.last_attempt:
+                        exc = e.last_attempt.exception()
+                        if exc and self._is_transient_error(exc):
+                            raise LLMError("No LLM provider available")
+                elif self._is_transient_error(e):
+                    raise LLMError("No LLM provider available")
                 # P0-5: Handle auth failures uniformly - fall through to Cerebras
                 if self._is_auth_error(e) and not self._groq_auth_warned:
                     import os
@@ -323,6 +340,13 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
             except (json.JSONDecodeError, KeyError, ValueError) as e:
                 logger.warning("classify_relevance Groq parse failed: %s", e)
             except Exception as e:
+                # If it's a transient error (including RetryError wrapping one), re-raise
+                from tenacity import RetryError
+                if isinstance(e, RetryError):
+                    if e.last_attempt and self._is_transient_error(e.last_attempt.exception()):
+                        raise LLMError("No LLM provider available")
+                elif self._is_transient_error(e):
+                    raise LLMError("No LLM provider available")
                 # P0-5: Handle auth failures uniformly - fall through to Cerebras
                 if self._is_auth_error(e) and not self._groq_auth_warned:
                     import os
@@ -396,6 +420,9 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
             except BudgetExhausted as e:
                 logger.warning(f"Groq budget exhausted: {e}")
             except Exception as e:
+                # If it's a transient error, re-raise (it will have been retried by decorator)
+                if self._is_transient_error(e):
+                    raise
                 # P0-5: Handle auth failures uniformly - fall through to Cerebras
                 if self._is_auth_error(e) and not self._groq_auth_warned:
                     import os
@@ -414,6 +441,9 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     temperature=temperature,
                 )
             except Exception as e:
+                # If it's a transient error, re-raise
+                if self._is_transient_error(e):
+                    raise
                 if self._is_auth_error(e) and not self._cerebras_auth_warned:
                     import os
                     if os.getenv("GITHUB_ACTIONS"):

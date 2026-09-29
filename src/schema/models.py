@@ -58,7 +58,7 @@ class ReportingUnit(Base):
     tier1_owner_groups = Column(JSON, nullable=False, default={})  # Only owners from tier-1 articles
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
-    representative = relationship("RawArticle", foreign_keys=[representative_article_id])
+    representative = relationship("RawArticle", foreign_keys=[representative_article_id], lazy="selectin")
 
 
 class Story(Base):

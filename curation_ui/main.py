@@ -3,6 +3,9 @@
 import logging
 import socket
 import secrets
+import time
+from collections import defaultdict
+from typing import Dict, List, Tuple
 
 # Force IPv4-only DNS resolution to avoid Vercel's lack of outbound IPv6 routes
 # This patches the resolver asyncio (and asyncpg through it) calls underneath
@@ -32,11 +35,6 @@ from datetime import datetime, timezone
 import uuid
 import os
 
-# Rate limiting for auth endpoints
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-
 
 # Get the directory where this file is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,32 +47,80 @@ settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
-# Rate limiter for auth endpoints
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
 app.include_router(health_router)
 
 security = HTTPBasic()
 
 
-@limiter.limit("10/minute")
+# In-memory rate limiter for FAILED auth attempts only
+# Stores (timestamp, is_failed) tuples per client IP
+_auth_attempts: Dict[str, List[Tuple[float, bool]]] = defaultdict(list)
+_AUTH_WINDOW_SECONDS = 60  # 1 minute window
+_AUTH_MAX_FAILED = 10  # Max failed attempts per window
+
+
+def _get_client_ip(request: Request) -> str:
+    """Extract client IP, honoring X-Forwarded-For header."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        # Take the first IP in the chain (original client)
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _clean_old_attempts(ip: str, now: float) -> None:
+    """Remove attempts older than the window."""
+    cutoff = now - _AUTH_WINDOW_SECONDS
+    _auth_attempts[ip] = [(ts, failed) for ts, failed in _auth_attempts[ip] if ts > cutoff]
+
+
+def _count_failed_attempts(ip: str, now: float) -> int:
+    """Count failed attempts in the current window."""
+    _clean_old_attempts(ip, now)
+    return sum(1 for ts, failed in _auth_attempts[ip] if failed)
+
+
+def _record_attempt(ip: str, success: bool) -> None:
+    """Record an auth attempt."""
+    now = time.time()
+    _auth_attempts[ip].append((now, not success))  # Store True for failed
+
+
 async def require_auth(request: Request, creds: HTTPBasicCredentials = Depends(security)) -> str:
-    """Require HTTP Basic auth for all mutating endpoints."""
+    """Require HTTP Basic auth for all mutating endpoints.
+
+    Rate limits only FAILED attempts (max 10 per minute per IP).
+    Successful attempts are not counted against the limit.
+    """
     if not settings.has_curation_auth:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Curation UI not configured: CURATION_USER and CURATION_PASSWORD must be set",
         )
+
+    client_ip = _get_client_ip(request)
+    now = time.time()
+
     ok_user = secrets.compare_digest(creds.username, settings.curation_user)
     ok_pass = secrets.compare_digest(creds.password, settings.curation_password)
+
     if not (ok_user and ok_pass):
+        # Check rate limit for failed attempts BEFORE recording this one
+        failed_count = _count_failed_attempts(client_ip, now)
+        if failed_count >= _AUTH_MAX_FAILED:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many failed authentication attempts. Try again in {_AUTH_WINDOW_SECONDS} seconds.",
+            )
+        _record_attempt(client_ip, success=False)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
             headers={"WWW-Authenticate": "Basic"},
         )
+
+    # Record successful attempt (doesn't count toward limit)
+    _record_attempt(client_ip, success=True)
     return creds.username
 
 
@@ -381,6 +427,18 @@ async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depen
         if not story:
             raise HTTPException(404, "Story not found")
 
+        # Only allow approval of PENDING stories
+        if story.status != Story.Status.PENDING:
+            raise HTTPException(409, f"Story is not in PENDING status (current: {story.status.value})")
+
+        # Check if CuratedPost already exists for this story (idempotency)
+        from src.schema.models import CuratedPost
+        existing_post_stmt = select(CuratedPost).where(CuratedPost.story_id == story_id)
+        existing_post_result = await session.execute(existing_post_stmt)
+        existing_post = existing_post_result.scalar_one_or_none()
+        if existing_post:
+            raise HTTPException(409, f"Story already has a curated post (id: {existing_post.id})")
+
         # Get source URLs and key facts for caption generation
         stmt = (
             select(RawArticle)
@@ -627,6 +685,10 @@ async def save_story(
         story = result.scalar_one_or_none()
         if not story:
             raise HTTPException(404, "Story not found")
+
+        # Only allow saving of PENDING stories
+        if story.status != Story.Status.PENDING:
+            raise HTTPException(409, f"Story is not in PENDING status (current: {story.status.value})")
 
         # Get source articles for validation
         stmt = (
