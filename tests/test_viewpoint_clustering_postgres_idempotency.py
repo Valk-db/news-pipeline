@@ -95,6 +95,7 @@ async def test_cluster_viewpoints_idempotent_pg(pg_session):
 
     # Create 4 reporting units (enough for viewpoint clustering)
     units = []
+    article_ids = []
     for i in range(4):
         if i < 2:
             source_tiers = {"tier1": 1}
@@ -102,8 +103,10 @@ async def test_cluster_viewpoints_idempotent_pg(pg_session):
         else:
             source_tiers = {"tier2": 1}
             owner_groups = {"Owner2": 1}
+        article_id = uuid4()
+        article_ids.append(article_id)
         unit = ReportingUnit(
-            representative_article_id=uuid4(),
+            representative_article_id=article_id,
             source_tiers=source_tiers,
             tier1_owner_groups=owner_groups,
             owner_groups=owner_groups,  # Required NOT NULL column
@@ -111,15 +114,14 @@ async def test_cluster_viewpoints_idempotent_pg(pg_session):
             article_count=1,
         )
         units.append(unit)
-        session.add(unit)
 
-    # Create RawArticle records for each unit FIRST (required for FK constraint)
-    for unit in units:
+    # Create RawArticle records FIRST (required for FK constraint on ReportingUnit.representative_article_id)
+    for article_id in article_ids:
         article = RawArticle(
-            id=unit.representative_article_id,
-            url=f"https://example.com/article/{unit.id}",
-            url_hash=unit.id.hex[:32],
-            title=f"Test article for {unit.id}",
+            id=article_id,
+            url=f"https://example.com/article/{article_id}",
+            url_hash=article_id.hex[:32],
+            title=f"Test article for {article_id}",
             body_text="Test body text",
             source_domain="example.com",
             source_tier=SourceTier.TIER1,
@@ -127,6 +129,10 @@ async def test_cluster_viewpoints_idempotent_pg(pg_session):
             entities={"PERSON": ["Trump"], "ORG": ["White House"], "GPE": ["US"]},
         )
         session.add(article)
+
+    # Now create ReportingUnit objects with the same article IDs
+    for unit in units:
+        session.add(unit)
 
     # Link units to parent story
     for unit in units:
