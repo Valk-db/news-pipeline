@@ -61,3 +61,10 @@ src/worker/
 
 # Node (if any)
 node_modules/
+
+# Vercel-specific exclusions
+requirements-vercel.txt
+uv.lock
+docs/
+*.md
+!README.md
