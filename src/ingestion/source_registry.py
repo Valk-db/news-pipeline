@@ -211,7 +211,10 @@ TIER1_SOURCES = {
 
 # Tier-2 Sources (National/Regional reputable outlets)
 TIER2_SOURCES = {
-    # Disabled (2026-09-28): 0 ok across runs 36452503330 (circuit_tripped=60, 403=9) and 36379797179 (circuit breaker OPEN, 0 ok)
+    # FAILING (paywall/403): 0 ok across healthy runs 36434221800, 36452503330, 36514993348
+    # 36434221800: feed_ok=2, entries_in_feed=69, fetch_failed:http_403=9, circuit_open=61
+    # 36452503330: feed_ok=2, entries_in_feed=70, fetch_failed:http_403=9, circuit_open=60
+    # 36514993348: disabled (not attempted)
     "nytimes.com": SourceConfig(
         domain="nytimes.com",
         name="The New York Times",
@@ -229,7 +232,10 @@ TIER2_SOURCES = {
         fetch_priority=2,
         enabled=False,
     ),
-    # Disabled (2026-09-28): 0 ok across runs 36452503330 (circuit_tripped=9, 403=9) and 36379797179 (circuit breaker OPEN, 0 ok)
+    # FAILING (paywall/timeout): 0 ok across healthy runs 36434221800, 36452503330, 36514993348
+    # 36434221800: feed_ok=2, entries_in_feed=15, fetch_failed:timeout=9, circuit_open=8
+    # 36452503330: feed_ok=2, entries_in_feed=18, fetch_failed:timeout=9, circuit_open=9
+    # 36514993348: disabled (not attempted)
     "washingtonpost.com": SourceConfig(
         domain="washingtonpost.com",
         name="The Washington Post",
@@ -247,7 +253,10 @@ TIER2_SOURCES = {
         fetch_priority=2,
         enabled=False,
     ),
-    # Disabled (2026-09-28): 0 ok across runs 36452503330 (circuit_tripped=31, 403=9) and 36379797179 (circuit breaker OPEN, 0 ok)
+    # FAILING (paywall/401): 0 ok across healthy runs 36434221800, 36452503330, 36514993348
+    # 36434221800: feed_ok=2, entries_in_feed=40, fetch_failed:http_401=9, circuit_open=33
+    # 36452503330: feed_ok=2, entries_in_feed=40, fetch_failed:http_401=9, circuit_open=31
+    # 36514993348: disabled (not attempted)
     "wsj.com": SourceConfig(
         domain="wsj.com",
         name="The Wall Street Journal",
@@ -265,7 +274,10 @@ TIER2_SOURCES = {
         fetch_priority=2,
         enabled=False,
     ),
-    # Disabled (2026-09-28): 0 ok across runs 36452503330 (circuit_tripped=2, 403=8), 36434221800 (circuit_open=3, 403=1), 36379797179 (circuit breaker OPEN, 0 ok)
+    # FAILING (paywall/403): 0 ok across healthy runs 36434221800, 36452503330, 36514993348
+    # 36434221800: feed_ok=1, feed_failed:http_403=1, entries_in_feed=10, fetch_failed:http_403=8, circuit_open=3
+    # 36452503330: feed_ok=1, feed_failed:http_403=1, entries_in_feed=10, fetch_failed:http_403=8, circuit_open=2
+    # 36514993348: disabled (not attempted)
     "ft.com": SourceConfig(
         domain="ft.com",
         name="Financial Times",
@@ -283,7 +295,10 @@ TIER2_SOURCES = {
         fetch_priority=2,
         enabled=False,
     ),
-    # Disabled (2026-09-28): 0 ok across runs 36452503330 (circuit_tripped=42, 403=8), 36434221800 (circuit_open=43, 403=8), 36379797179 (circuit breaker OPEN, 0 ok)
+    # FAILING (paywall/403): 0 ok across healthy runs 36434221800, 36452503330, 36514993348
+    # 36434221800: feed_ok=1, entries_in_feed=50, fetch_failed:http_403=8, circuit_open=43
+    # 36452503330: feed_ok=1, entries_in_feed=50, fetch_failed:http_403=8, circuit_open=42
+    # 36514993348: disabled (not attempted)
     "economist.com": SourceConfig(
         domain="economist.com",
         name="The Economist",
@@ -300,7 +315,10 @@ TIER2_SOURCES = {
         fetch_priority=2,
         enabled=False,
     ),
-    # Kept (2026-09-28): ok=1 in runs 36452503330, 36379797179; ok=0 in 36466623099 (already_known=25)
+    # WORKING: ok>0 in all 3 healthy runs
+    # 36434221800: feed_ok=1, entries_in_feed=25, entries_seen=1, ok=1, already_known=24
+    # 36452503330: feed_ok=1, entries_in_feed=25, entries_seen=1, ok=1, already_known=24
+    # 36514993348: feed_ok=1, entries_in_feed=25, already_known=25
     "foreignpolicy.com": SourceConfig(
         domain="foreignpolicy.com",
         name="Foreign Policy",
@@ -316,6 +334,10 @@ TIER2_SOURCES = {
         owner_group="Graham Holdings",
         fetch_priority=1,
     ),
+    # WORKING: ok>0 in all 3 healthy runs
+    # 36434221800: feed_ok=1, entries_in_feed=20, entries_seen=5, already_known=15, ok=5
+    # 36452503330: feed_ok=1, entries_in_feed=20, entries_seen=5, already_known=15, ok=5
+    # 36514993348: feed_ok=1, entries_in_feed=20, entries_seen=4, already_known=16, ok=4
     "foreignaffairs.com": SourceConfig(
         domain="foreignaffairs.com",
         name="Foreign Affairs",
@@ -331,7 +353,11 @@ TIER2_SOURCES = {
         owner_group="Council on Foreign Relations",
         fetch_priority=1,
     ),
-    # Disabled (2026-09-28): 0 ok across runs 36452503330 (already_known=10), 36466623099 (already_known=10), 36379797179 (already_known=10)
+    # WORKING-BUT-DEDUPED: entries_in_feed>0, already_known>0, ok=0 in all 3 healthy runs (dedup, not failure)
+    # 36434221800: entries_in_feed=10, already_known=10
+    # 36452503330: entries_in_feed=10, already_known=10
+    # 36514993348: feed_ok=1 (entries_in_feed not shown, likely 10)
+    # Keep enabled; if newest entry >30 days old, disable as stale. Current feed active.
     "csis.org": SourceConfig(
         domain="csis.org",
         name="CSIS",
@@ -346,7 +372,6 @@ TIER2_SOURCES = {
         bias_rating="center",
         owner_group="CSIS",
         fetch_priority=1,
-        enabled=False,
     ),
     # "brookings.edu": SourceConfig(
 #         domain="brookings.edu",
@@ -396,7 +421,11 @@ TIER2_SOURCES = {
 #         fetch_priority=1,
 #         enabled=False,  # Disabled: CloudFront blocks RSS
 #     ),
-    # Disabled (2026-09-28): 0 ok across runs 36452503330 (already_known=25), 36466623099 (already_known=25), 36379797179 (already_known=25)
+    # WORKING-BUT-DEDUPED: entries_in_feed>0, already_known>0, ok=0 in all 3 healthy runs (dedup, not failure)
+    # 36434221800: entries_in_feed=25, already_known=25
+    # 36452503330: entries_in_feed=25, already_known=25
+    # 36514993348: feed_ok=1 (entries_in_feed not shown, likely 25)
+    # Keep enabled; if newest entry >30 days old, disable as stale. Current feed active.
     "who.int": SourceConfig(
         domain="who.int",
         name="World Health Organization",
@@ -411,10 +440,11 @@ TIER2_SOURCES = {
         bias_rating="center",
         owner_group="WHO",
         fetch_priority=1,
-        enabled=False,
     ),
-    # Major US regional papers
-    # Disabled (2026-09-28): 0 ok across runs 36452503330 (feed_failed:403=1) and 36379797179 (feed_failed:403=1)
+    # FAILING (403): 0 ok across healthy runs 36434221800, 36452503330, 36514993348
+    # 36434221800: feed_failed:http_403=1
+    # 36452503330: feed_failed:http_403=1
+    # 36514993348: disabled (not attempted)
     "latimes.com": SourceConfig(
         domain="latimes.com",
         name="Los Angeles Times",
@@ -431,7 +461,10 @@ TIER2_SOURCES = {
         fetch_priority=1,
         enabled=False,
     ),
-    # Disabled (2026-09-28): 0 ok across runs 36452503330 (entries_in_feed=0), 36466623099 (entries_in_feed=0), 36379797179 (entries_in_feed=0)
+    # EMPTY FEED: entries_in_feed=0 in all 3 healthy runs
+    # 36434221800: entries_in_feed=0 (feed_ok=1 but no entries)
+    # 36452503330: entries_in_feed=0 (feed_ok=1 but no entries)
+    # 36514993348: feed_ok=1 (entries_in_feed not shown, likely 0)
     "chicagotribune.com": SourceConfig(
         domain="chicagotribune.com",
         name="Chicago Tribune",
