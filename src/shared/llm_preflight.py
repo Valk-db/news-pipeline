@@ -19,7 +19,7 @@ async def run_llm_preflight() -> dict:
     if settings.groq_api_key:
         try:
             # Minimal chat completion to test auth
-            result = await client.chat_completion(
+            await client.chat_completion(
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
                 temperature=0,
