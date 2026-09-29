@@ -2,7 +2,6 @@
 """Build label sample for what-if simulation."""
 
 import asyncio
-import json
 import os
 import random
 from datetime import datetime, timezone, timedelta
@@ -184,19 +183,19 @@ async def build_label_sample():
 
             for idx, m in enumerate(sample[:45]):
                 f.write(f'## Pair {idx+1}\n\n')
-                f.write(f'**Story (existing):**\n')
+                f.write('**Story (existing):**\n')
                 f.write(f'- Title: {m["title1"]}\n')
                 f.write(f'- Source: {m["owner1"]}\n')
                 f.write(f'- Published: {m["pub1"]}\n')
                 f.write(f'- URL: {m["url1"]}\n')
                 f.write(f'- Body (first 200 chars): {m["body1"]}\n\n')
-                f.write(f'**Unit (newly attached):**\n')
+                f.write('**Unit (newly attached):**\n')
                 f.write(f'- Title: {m["title2"]}\n')
                 f.write(f'- Source: {m["owner2"]}\n')
                 f.write(f'- Published: {m["pub2"]}\n')
                 f.write(f'- URL: {m["url2"]}\n')
                 f.write(f'- Body (first 200 chars): {m["body2"]}\n\n')
-                f.write(f'**same_event? (Y/N/UNSURE):** \n\n')
+                f.write('**same_event? (Y/N/UNSURE):** \n\n')
                 f.write('---\n\n')
 
         # Write key file
