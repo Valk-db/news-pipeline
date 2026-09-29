@@ -176,6 +176,18 @@ async def what_if_simulation():
 
             print(f'Union-growth flips at top_n={top_n}: {flip_count}')
 
+            # Full embedding-cos histogram (0.1 bins) for newly-merged pairs
+            if newly_merged:
+                cos_values = [m['cosine'] for m in newly_merged]
+                print(f'Embedding cosine histogram (0.1 bins) for newly-merged pairs at top_n={top_n}:')
+                for bin_start in range(0, 10):
+                    bin_low = bin_start * 0.1
+                    bin_high = (bin_start + 1) * 0.1
+                    count = sum(1 for c in cos_values if bin_low <= c < bin_high)
+                    if count > 0:
+                        bar = '#' * min(count // 5 + 1, 40)
+                        print(f'  [{bin_low:.1f}-{bin_high:.1f}): {count:4d} {bar}')
+
         # 7. Jaccard threshold sweep at top_n=3
         print('\n=== Jaccard threshold sweep at top_n=3 ===')
         entity_sets = entity_sets_by_top_n[3]

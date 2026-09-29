@@ -3,5 +3,6 @@
     "curation_ui/main.py": {
       "maxDuration": 300
     }
-  }
+  },
+  "installCommand": "pip install --no-cache-dir sqlalchemy[asyncio]==2.0.32 asyncpg==0.29.0 pgvector==0.2.6 fastapi==0.115.0 jinja2==3.1.6 python-multipart==0.0.9 uvicorn==0.32.1 tenacity==8.5.0 pydantic-settings==2.9.0 python-dotenv==1.0.1 pydantic==2.10.6 httpx==0.28.1 groq==0.17.0 cerebras-cloud-sdk==1.91.0 slowapi==0.1.9"
 }
