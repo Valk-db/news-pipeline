@@ -14,7 +14,7 @@ from sqlalchemy.sql import text
 from unittest.mock import AsyncMock, patch
 
 from src.schema.models import (
-    Story, ReportingUnit, StoryUnitLink
+    Story, ReportingUnit, StoryUnitLink, RawArticle, SourceTier
 )
 from src.verification.stories import cluster_viewpoints
 
@@ -114,6 +114,21 @@ async def test_cluster_viewpoints_idempotent_pg(pg_session):
         session.add(unit)
 
     await session.flush()
+
+    # Create RawArticle records for each unit (required for FK constraint)
+    for unit in units:
+        article = RawArticle(
+            id=unit.representative_article_id,
+            url=f"https://example.com/article/{unit.id}",
+            url_hash=unit.id.hex[:32],
+            title=f"Test article for {unit.id}",
+            body_text="Test body text",
+            source_domain="example.com",
+            source_tier=SourceTier.TIER1,
+            published_at=datetime.now(timezone.utc),
+            entities={"PERSON": ["Trump"], "ORG": ["White House"], "GPE": ["US"]},
+        )
+        session.add(article)
 
     # Link units to parent story
     for unit in units:
