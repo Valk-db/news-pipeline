@@ -113,9 +113,7 @@ async def test_cluster_viewpoints_idempotent_pg(pg_session):
         units.append(unit)
         session.add(unit)
 
-    await session.flush()
-
-    # Create RawArticle records for each unit (required for FK constraint)
+    # Create RawArticle records for each unit FIRST (required for FK constraint)
     for unit in units:
         article = RawArticle(
             id=unit.representative_article_id,
