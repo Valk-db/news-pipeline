@@ -96,8 +96,6 @@ async def test_preflight_or_fail_success():
 @pytest.mark.asyncio
 async def test_preflight_or_fail_failure():
     """run_llm_preflight_or_fail exits 1 when any provider fails."""
-    import sys
-    
     with patch("src.shared.llm_preflight.run_llm_preflight", new_callable=AsyncMock) as mock_preflight:
         mock_preflight.return_value = {
             "groq": {"status": 401, "ok": False, "error": "Unauthorized"},
