@@ -134,6 +134,8 @@ async def test_cluster_viewpoints_idempotent_pg(pg_session):
     for unit in units:
         session.add(unit)
 
+    await session.flush()  # Generate unit IDs
+
     # Link units to parent story
     for unit in units:
         link = StoryUnitLink(story_id=parent_id, unit_id=unit.id)
