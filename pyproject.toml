@@ -23,6 +23,7 @@ dependencies = [
     "cerebras-cloud-sdk>=0.1",
     "slowapi>=0.1",
     "scikit-learn>=1.9.1",
+    "sentence-transformers>=6.1.0",
 ]
 
 [project.optional-dependencies]
