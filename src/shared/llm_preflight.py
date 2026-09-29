@@ -42,7 +42,7 @@ async def run_llm_preflight() -> dict:
     # Test Cerebras
     if settings.cerebras_api_key:
         try:
-            result = await client.chat_completion(
+            await client.chat_completion(
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
                 temperature=0,
