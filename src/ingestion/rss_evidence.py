@@ -170,7 +170,8 @@ TAG_RE = re.compile(r"<[^>]+>")
 
 # Namespaces we care about. Item extraction is namespace-aware: RDF/RSS 1.0 puts
 # items in the RSS 1.0 namespace directly under rdf:RDF, not under a channel.
-RSS10_NS = "http://purl.org/rss/1.0/"
+# rdf:RDF attributes live in the RDF namespace, not the RSS 1.0 one.
+RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 
 
 def state_path() -> Path:
@@ -425,7 +426,7 @@ def parse_feed_xml(body: bytes | str) -> list[dict[str, Any]]:
         link = fields.get("link")
         if not link:
             # RDF 1.0 items carry the URL in rdf:about when there is no <link>.
-            about = item.attrib.get(f"{{{RSS10_NS}}}about") or item.attrib.get("about")
+            about = item.attrib.get(f"{{{RDF_NS}}}about") or item.attrib.get("about")
             link = _clean(about) if about else ""
         if not link:
             continue
@@ -441,11 +442,13 @@ def parse_feed_xml(body: bytes | str) -> list[dict[str, Any]]:
 
 
 def _item_fields(item: Any) -> dict[str, str]:
-    """Pull title/date/description out of an item, by local name.
+    """Pull title/link/date/description out of an item, by local name.
 
-    dc:date (Dublin Core) and pubDate (RSS 2.0) are the same fact under two
-    names, and content:encoded / description likewise for the body. Matching on
-    local name keeps the namespace out of the call site.
+    pubDate (RSS 2.0) and dc:date (Dublin Core) are the same fact under two
+    local names, and content:encoded / description likewise for the body.
+    Matching on local name keeps the namespace out of the call site. First
+    occurrence wins, because a feed that repeats a field usually puts the
+    canonical one first.
     """
     fields: dict[str, str] = {}
     for child in item:
@@ -455,9 +458,10 @@ def _item_fields(item: Any) -> dict[str, str]:
         text = _clean(child.text)
         if not text:
             continue
-        if name == "title" and "title" not in fields:
-            fields["title"] = text
-        elif name == "date" and "date" not in fields:
+        if name in ("title", "link") and name not in fields:
+            fields[name] = text
+        elif name in ("date", "pubdate") and "date" not in fields:
+            # pubDate (RSS 2.0) and dc:date (Dublin Core) are one field.
             fields["date"] = text
         elif name in ("encoded", "description") and "description" not in fields:
             fields["description"] = text
@@ -539,8 +543,8 @@ async def refresh(
     states: dict[str, FeedState],
     feeds: Sequence[dict[str, Any]] | None = None,
     *,
-    now_fn=datetime.now,
-    extract=extract_article,
+    now_fn=None,
+    extract=None,
     max_body_fetches: int = MAX_BODY_FETCHES_PER_REFRESH,
 ) -> RefreshReport:
     """Poll every due feed, parse it, and extract bodies for the new items.
@@ -555,6 +559,10 @@ async def refresh(
     arbitrary but stable, which is what makes the cap fair over cycles: every
     refresh moves the queue forward rather than starving the same feeds.
     """
+    # Resolved here rather than bound as a default argument, so patching
+    # extract_article on this module is what a test actually intercepts.
+    now_fn = now_fn or datetime.now
+    extract = extract or extract_article
     feed_list = list(feeds if feeds is not None else EVIDENCE_FEEDS)
     report = RefreshReport()
     failed: list[str] = []
@@ -867,6 +875,15 @@ async def link_to_gdelt_radar(session: AsyncSession, articles: Sequence[RawArtic
     entity_edges exists in dev, so this sink is live. A match whose entities
     carry an EVENT key is recorded separately: that is GDELT's own event
     classification, i.e. radar confirmation rather than a bare URL collision.
+
+    One caveat worth stating, because it decides how often this sink can fire:
+    raw_articles still carries a UNIQUE index on url_hash, so in a schema where
+    that holds, a canonical URL can only occupy one row and the query below can
+    only ever find the article itself. The join becomes live as soon as a
+    deployment drops that index (or a radar row is held outside raw_articles),
+    which is part of what the later inclusion-proofs step has to settle. The
+    matching logic is written and tested either way, so turning it on is a
+    migration and not a code change.
     """
     links: list[dict[str, Any]] = []
     gdelt_confirmed = 0
@@ -936,8 +953,8 @@ async def run_evidence_refresh(
     feeds: Sequence[dict[str, Any]] | None = None,
     state_store_path: Path | None = None,
     merkle_log: Any | None = None,
-    now_fn=datetime.now,
-    extract=extract_article,
+    now_fn=None,
+    extract=None,
     max_body_fetches: int = MAX_BODY_FETCHES_PER_REFRESH,
 ) -> dict[str, Any]:
     """One full evidence refresh: poll, extract, persist, stamp, link.
@@ -1016,31 +1033,36 @@ async def run_evidence_refresh(
         result["gdelt_link_detail"] = links["links"]
         return result
 
-    # The ledger is entered through an AsyncExitStack rather than `async with`
-    # so that the one recoverable failure -- pipeline_runs not being migrated --
-    # can be caught without replaying the whole stage body. Everything inside
-    # the ledger still runs in the caller's transaction, so a rollback here
-    # takes the ledger row with it, exactly as stage_run documents.
+    # Entering stage_run goes through a SAVEPOINT, and only the enter. A failed
+    # INSERT into an unmigrated pipeline_runs aborts the Postgres transaction, and
+    # rolling back to a savepoint clears that state without discarding whatever
+    # the caller had pending in the same transaction. On success the savepoint is
+    # released and the pipeline_runs row belongs to the caller's transaction, so
+    # stage_run keeps its documented behaviour -- including writing the error
+    # text when the stage below fails.
+    #
+    # The context manager is entered through an AsyncExitStack rather than
+    # `async with` so the one failure we recover from can be caught without
+    # replaying the stage body, which means the work runs exactly once either way.
     stack = AsyncExitStack()
     recorder = None
     try:
-        recorder = await stack.enter_async_context(
-            stage_run(session, stage_name="ingest_rss_evidence")
-        )
+        async with session.begin_nested():
+            recorder = await stack.enter_async_context(
+                stage_run(session, stage_name="ingest_rss_evidence")
+            )
     except Exception as exc:
         if not _is_missing_table(exc):
             raise
         # pipeline_runs is not migrated in dev. The context manager failed on its
-        # own INSERT, so no stage row exists and no stage work has happened.
-        # The failed statement also aborted the transaction, so the work runs
-        # inside a savepoint to clear that before touching anything else.
+        # own INSERT, so no stage row exists and no stage work has run. Losing the
+        # ledger row matters less than losing the articles.
         result["sinks"]["ledger"] = "missing_table"
         logger.warning(
             "pipeline_runs is missing; ingest_rss_evidence ran without the ledger (%s)",
             type(exc).__name__,
         )
-        async with session.begin_nested():
-            await _do_work()
+        await _do_work()
         return result
 
     try:
