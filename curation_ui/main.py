@@ -916,6 +916,87 @@ async def get_story_sources(story_id: uuid.UUID, request: Request, user: str = D
     }
 
 
+def _event_conditions(
+    layer_id: uuid.UUID = None,
+    event_type: str = None,
+    min_confidence: float = None,
+    bbox: str = None,
+    start: datetime = None,
+    end: datetime = None,
+) -> list:
+    """Build the WHERE clauses shared by the event GeoJSON endpoints.
+
+    An unparseable bbox is ignored (matches the historical globe behavior);
+    start/end arrive already parsed by _parse_iso_timestamp.
+    """
+    conditions = []
+    if layer_id:
+        conditions.append(Event.layer_id == layer_id)
+    if event_type:
+        conditions.append(Event.event_type == event_type)
+    if min_confidence:
+        conditions.append(Event.confidence.cast(Float) >= min_confidence)
+    if bbox:
+        try:
+            min_lon, min_lat, max_lon, max_lat = map(float, bbox.split(","))
+            conditions.append(
+                and_(
+                    Event.longitude.cast(Float) >= min_lon,
+                    Event.longitude.cast(Float) <= max_lon,
+                    Event.latitude.cast(Float) >= min_lat,
+                    Event.latitude.cast(Float) <= max_lat,
+                )
+            )
+        except ValueError:
+            pass  # Invalid bbox, ignore
+    if start is not None:
+        conditions.append(Event.start_time >= start)
+    if end is not None:
+        conditions.append(Event.start_time <= end)
+    return conditions
+
+
+def _event_feature(event: Event) -> dict:
+    """Serialize one Event as a GeoJSON Feature.
+
+    Shared by /api/globe/events and /api/map/replay so both endpoints emit
+    identical properties. Falls back to the event's own lat/lon when no
+    EventGeometry row is attached.
+    """
+    properties = {
+        "story_id": str(event.story_id),
+        "layer_id": str(event.layer_id) if event.layer_id else None,
+        "event_type": event.event_type.value if event.event_type else None,
+        "confidence": float(event.confidence) if event.confidence else 0.5,
+        "source_count": event.source_count,
+        "tier1_source_count": event.tier1_source_count,
+        "location_name": event.location_name,
+        "location_type": event.location_type,
+        "radius_km": float(event.radius_km) if event.radius_km else None,
+        "start_time": event.start_time.isoformat() if event.start_time else None,
+        "entities": event.entities,
+    }
+
+    geometry = event.geometry
+    if geometry and geometry.geojson:
+        return {
+            "type": "Feature",
+            "id": str(event.id),
+            "geometry": geometry.geojson,
+            "properties": {**properties, **(geometry.properties or {})},
+        }
+
+    return {
+        "type": "Feature",
+        "id": str(event.id),
+        "geometry": {
+            "type": "Point",
+            "coordinates": [float(event.longitude), float(event.latitude)],
+        },
+        "properties": properties,
+    }
+
+
 # Globe API endpoints
 @app.get("/api/globe/events")
 async def get_globe_events(
@@ -938,28 +1019,12 @@ async def get_globe_events(
     async with get_session() as session:
         stmt = select(Event).options(selectinload(Event.geometry), selectinload(Event.layer))
 
-        # Apply filters
-        conditions = []
-        if layer_id:
-            conditions.append(Event.layer_id == layer_id)
-        if event_type:
-            conditions.append(Event.event_type == event_type)
-        if min_confidence:
-            conditions.append(Event.confidence.cast(Float) >= min_confidence)
-        if bbox:
-            try:
-                min_lon, min_lat, max_lon, max_lat = map(float, bbox.split(","))
-                conditions.append(
-                    and_(
-                        Event.longitude.cast(Float) >= min_lon,
-                        Event.longitude.cast(Float) <= max_lon,
-                        Event.latitude.cast(Float) >= min_lat,
-                        Event.latitude.cast(Float) <= max_lat,
-                    )
-                )
-            except ValueError:
-                pass  # Invalid bbox, ignore
-
+        conditions = _event_conditions(
+            layer_id=layer_id,
+            event_type=event_type,
+            min_confidence=min_confidence,
+            bbox=bbox,
+        )
         if conditions:
             stmt = stmt.where(and_(*conditions))
 
@@ -967,56 +1032,7 @@ async def get_globe_events(
         result = await session.execute(stmt)
         events = result.scalars().all()
 
-        # Build GeoJSON FeatureCollection
-        features = []
-        for event in events:
-            geometry = event.geometry
-            if geometry and geometry.geojson:
-                feature = {
-                    "type": "Feature",
-                    "id": str(event.id),
-                    "geometry": geometry.geojson,
-                    "properties": {
-                        "story_id": str(event.story_id),
-                        "layer_id": str(event.layer_id) if event.layer_id else None,
-                        "event_type": event.event_type.value if event.event_type else None,
-                        "confidence": float(event.confidence) if event.confidence else 0.5,
-                        "source_count": event.source_count,
-                        "tier1_source_count": event.tier1_source_count,
-                        "location_name": event.location_name,
-                        "location_type": event.location_type,
-                        "radius_km": float(event.radius_km) if event.radius_km else None,
-                        "start_time": event.start_time.isoformat() if event.start_time else None,
-                        "entities": event.entities,
-                        **(geometry.properties or {}),
-                    },
-                }
-            else:
-                # Fallback to point geometry
-                feature = {
-                    "type": "Feature",
-                    "id": str(event.id),
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [float(event.longitude), float(event.latitude)],
-                    },
-                    "properties": {
-                        "story_id": str(event.story_id),
-                        "layer_id": str(event.layer_id) if event.layer_id else None,
-                        "event_type": event.event_type.value if event.event_type else None,
-                        "confidence": float(event.confidence) if event.confidence else 0.5,
-                        "source_count": event.source_count,
-                        "tier1_source_count": event.tier1_source_count,
-                        "location_name": event.location_name,
-                        "location_type": event.location_type,
-                        "radius_km": float(event.radius_km) if event.radius_km else None,
-                        "start_time": event.start_time.isoformat() if event.start_time else None,
-                        "entities": event.entities,
-                    },
-                }
-            features.append(feature)
-
-    return {"type": "FeatureCollection", "features": features}
+    return {"type": "FeatureCollection", "features": [_event_feature(e) for e in events]}
 
 
 @app.get("/api/globe/stats")
@@ -1105,6 +1121,115 @@ async def get_globe_layers(
         }
 
 
+# Map replay API
+#
+# Replay sends the entire time window in a single response so the browser can
+# scrub back and forth without refetching. That makes the result count the cost
+# driver (payload size plus per-marker work in the client), so every response is
+# capped at MAP_REPLAY_MAX_LIMIT events and the requested limit is clamped into
+# [1, MAP_REPLAY_MAX_LIMIT]. Over-cap windows come back with "truncated": true
+# and the oldest events dropped — narrow the window or filter by event_type
+# rather than raising the cap.
+MAP_REPLAY_DEFAULT_LIMIT = 500
+MAP_REPLAY_MAX_LIMIT = 1000
+
+
+def _parse_iso_timestamp(value: str, param: str) -> datetime | None:
+    """Parse an optional ISO 8601 query parameter into an aware datetime.
+
+    Blank/absent returns None. A date-only value (2026-09-30) means midnight
+    UTC. Naive timestamps are assumed UTC, which matches how Event.start_time
+    is stored.
+    """
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Invalid {param} timestamp: {value!r}. "
+                "Expected ISO 8601, e.g. 2026-09-30T00:00:00Z or 2026-09-30."
+            ),
+        )
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+@app.get("/api/map/replay")
+async def get_map_replay(
+    request: Request,
+    user: str = Depends(require_auth),
+    start: str = None,  # ISO 8601, inclusive
+    end: str = None,  # ISO 8601, inclusive
+    event_type: str = None,
+    limit: int = MAP_REPLAY_DEFAULT_LIMIT,
+):
+    """Get a chronological event window for the flat map's replay scrubber.
+
+    Same auth and same event query path as /api/globe/events, ordered oldest
+    first so the client can reveal markers by start_time. start/end bound the
+    window inclusively and are optional (absent = unbounded). The window is
+    fetched worldwide rather than per-bbox: the scrubber has to hold the whole
+    timeline to jump anywhere, and panning mid-replay must not drop markers.
+
+    Returns a GeoJSON FeatureCollection (identical feature shape to
+    /api/globe/events, so the map's marker rendering is reused verbatim) plus
+    window metadata as foreign members. Result count is capped at
+    MAP_REPLAY_MAX_LIMIT; see the comment above that constant.
+    """
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    start_dt = _parse_iso_timestamp(start, "start")
+    end_dt = _parse_iso_timestamp(end, "end")
+    if start_dt and end_dt and start_dt > end_dt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start must be earlier than or equal to end.",
+        )
+
+    effective_limit = max(1, min(limit, MAP_REPLAY_MAX_LIMIT))
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    async with get_session() as session:
+        stmt = select(Event).options(selectinload(Event.geometry), selectinload(Event.layer))
+
+        conditions = _event_conditions(event_type=event_type, start=start_dt, end=end_dt)
+        if conditions:
+            stmt = stmt.where(and_(*conditions))
+
+        # Oldest first, id as a tiebreak so equal start_times keep a stable order.
+        # One extra row is fetched purely to report truncation accurately.
+        stmt = stmt.order_by(Event.start_time.asc(), Event.id.asc()).limit(effective_limit + 1)
+        result = await session.execute(stmt)
+        events = list(result.scalars().all())
+
+    truncated = len(events) > effective_limit
+    events = events[:effective_limit]
+
+    return {
+        "type": "FeatureCollection",
+        "features": [_event_feature(e) for e in events],
+        "start": start_dt.isoformat() if start_dt else None,
+        "end": end_dt.isoformat() if end_dt else None,
+        "count": len(events),
+        "limit": effective_limit,
+        "max_limit": MAP_REPLAY_MAX_LIMIT,
+        "truncated": truncated,
+    }
+
+
 # Globe page route
 @app.get("/globe", response_class=HTMLResponse)
 async def globe_page(request: Request, user: str = Depends(require_auth)):
@@ -1114,6 +1239,19 @@ async def globe_page(request: Request, user: str = Depends(require_auth)):
         return render_error_page(request, db_msg)
 
     return templates.TemplateResponse(request, "globe.html", {
+        "request": request,
+    })
+
+
+# Flat map page route
+@app.get("/map", response_class=HTMLResponse)
+async def map_page(request: Request, user: str = Depends(require_auth)):
+    """Flat 2D map visualization page."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return render_error_page(request, db_msg)
+
+    return templates.TemplateResponse(request, "map.html", {
         "request": request,
     })
 
