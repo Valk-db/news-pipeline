@@ -33,6 +33,12 @@
             </div>
         </header>
 
+        {% if not llm_available %}
+        <div class="notice-banner notice-banner-warning" role="status">
+            {{ no_llm_notice }}
+        </div>
+        {% endif %}
+
         {% if media %}
         <div class="story-media edit-media">
             {% for asset in media %}
@@ -101,6 +107,9 @@
             <div class="form-group">
                 <label>Caption <span class="char-count">(<span id="char-count">0</span>/280)</span></label>
                 <textarea name="caption" id="caption" rows="6" required>{{ draft_caption }}</textarea>
+                {% if ai_assisted %}
+                <div class="notice-banner notice-banner-info notice-banner-sm">Draft generated with AI assistance.</div>
+                {% endif %}
                 <div class="caption-hint">
                     Paraphrase only. One source link. No verbatim article text.
                 </div>

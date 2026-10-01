@@ -28,7 +28,7 @@ from sqlalchemy.types import Float
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.shared.database import get_session
 from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, CuratedPost, Event, EventLayer, Claim, ClaimEvidence, StoryTopicGroup, EntityEdge, EdgePredicate
-from src.shared.llm import get_llm_client, validate_caption
+from src.shared.llm import get_llm_client, validate_caption, build_deterministic_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
 from datetime import datetime, timezone
@@ -50,6 +50,18 @@ logger = logging.getLogger(__name__)
 app.include_router(health_router)
 
 security = HTTPBasic()
+
+
+# Curator facing copy for the two caption paths
+NO_LLM_NOTICE = (
+    "AI assistance is unavailable because no LLM is configured. "
+    "Write your caption manually."
+)
+APPROVE_NO_LLM_NOTICE = (
+    "AI assistance is unavailable because no LLM is configured. "
+    "This caption is a deterministic draft, please review and edit it."
+)
+APPROVE_AI_NOTICE = "Caption generated with AI assistance."
 
 
 # In-memory rate limiter for FAILED auth attempts only
@@ -138,6 +150,9 @@ def check_llm_available() -> tuple[bool, str]:
     -initialized/injected client (e.g. the mock LLMClient tests set on
     src.shared.llm._llm_client). Gating on settings.has_llm alone made this
     return False even when a working client was already in place.
+
+    A False result is not fatal: approve and edit fall back to deterministic,
+    LLM-free behavior (see build_deterministic_caption) and tell the curator.
     """
     import src.shared.llm as llm_module
     if not settings.has_llm and llm_module._llm_client is None:
@@ -408,14 +423,16 @@ async def index(request: Request, user: str = Depends(require_auth)):
 
 @app.post("/story/{story_id}/approve")
 async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
-    """Approve a story for posting - generates caption via LLM and creates CuratedPost."""
+    """Approve a story for posting - creates a CuratedPost and queues the story.
+
+    The caption comes from the LLM when one is configured, otherwise from the
+    deterministic builder, so approval works with no provider key at all.
+    """
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)
 
-    llm_ok, llm_msg = check_llm_available()
-    if not llm_ok:
-        return render_error_page(request, llm_msg)
+    llm_ok, _ = check_llm_available()
 
     from src.schema.models import MediaAsset, Snippet
     from sqlalchemy import select, desc
@@ -503,17 +520,28 @@ async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depen
             if snippet.text:
                 key_facts.append(snippet.text[:300])
 
-        # Generate caption via LLM
-        llm = await get_llm_client()
-        caption = await llm.generate_caption(
-            story_title="; ".join(key_facts) if key_facts else "News Update",
-            key_facts=key_facts,
-            source_urls=source_urls,
-            platform="twitter",
-        )
-
-        if not caption:
-            raise HTTPException(500, "Failed to generate caption")
+        # Generate the caption: LLM when configured, deterministic draft otherwise
+        story_title = "; ".join(key_facts) if key_facts else "News Update"
+        ai_assisted = False
+        if llm_ok:
+            llm = await get_llm_client()
+            caption = await llm.generate_caption(
+                story_title=story_title,
+                key_facts=key_facts,
+                source_urls=source_urls,
+                platform="twitter",
+            )
+            if not caption:
+                raise HTTPException(500, "Failed to generate caption")
+            ai_assisted = True
+        else:
+            caption = build_deterministic_caption(
+                story_title=story_title,
+                key_facts=key_facts,
+                source_urls=source_urls,
+                platform="twitter",
+            )
+            logger.info("No LLM configured, approved story %s with a deterministic caption draft", story_id)
 
         # Create curated post with media_urls
         post = CuratedPost(
@@ -535,6 +563,10 @@ async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depen
     return templates.TemplateResponse(request, "story_grid.html", {
         "request": request,
         "stories": stories,
+        "notice": (
+            APPROVE_AI_NOTICE if ai_assisted else APPROVE_NO_LLM_NOTICE
+        ),
+        "notice_type": "info" if ai_assisted else "warning",
     })
 
 
@@ -567,14 +599,17 @@ async def reject_story(story_id: uuid.UUID, request: Request, user: str = Depend
 
 @app.get("/story/{story_id}/edit", response_class=HTMLResponse)
 async def edit_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
-    """Show edit form for a story."""
+    """Show edit form for a story.
+
+    The draft is prefilled from text already saved for the story. Otherwise it
+    comes from the LLM when one is configured, and stays blank when none is, so
+    the curator can write the caption by hand.
+    """
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)
 
-    llm_ok, llm_msg = check_llm_available()
-    if not llm_ok:
-        return render_error_page(request, llm_msg)
+    llm_ok, _ = check_llm_available()
 
     from src.schema.models import MediaAsset, Snippet, SourceReliabilitySnapshot
     from sqlalchemy import select, desc
@@ -599,14 +634,28 @@ async def edit_story(story_id: uuid.UUID, request: Request, user: str = Depends(
         source_urls = [a.url for a in articles]
         key_facts = [a.title for a in articles[:3]]
 
-        # Generate draft caption
-        llm = await get_llm_client()
-        caption = await llm.generate_caption(
-            story_title="; ".join(key_facts) if key_facts else "News Update",
-            key_facts=key_facts,
-            source_urls=source_urls,
-            platform="twitter",
+        # Existing caption for this story, so an edit never starts blank
+        existing_stmt = (
+            select(CuratedPost)
+            .where(CuratedPost.story_id == story_id)
+            .order_by(desc(CuratedPost.created_at))
         )
+        existing_result = await session.execute(existing_stmt)
+        existing_post = existing_result.scalars().first()
+        existing_caption = str(existing_post.caption or "") if existing_post else ""
+
+        # Generate a draft caption only when there is no saved one to prefill
+        caption: str = existing_caption
+        ai_assisted = False
+        if not caption and llm_ok:
+            llm = await get_llm_client()
+            caption = await llm.generate_caption(
+                story_title="; ".join(key_facts) if key_facts else "News Update",
+                key_facts=key_facts,
+                source_urls=source_urls,
+                platform="twitter",
+            ) or ""
+            ai_assisted = bool(caption)
 
         # Fetch media for this story
         media_stmt = (
@@ -659,6 +708,9 @@ async def edit_story(story_id: uuid.UUID, request: Request, user: str = Depends(
         "source_urls": source_urls,
         "key_facts": key_facts,
         "draft_caption": caption or "",
+        "llm_available": llm_ok,
+        "ai_assisted": ai_assisted,
+        "no_llm_notice": NO_LLM_NOTICE,
         "media": filtered_media,
         "snippets": snippets,
         "reliability_by_domain": reliability_by_domain,
@@ -674,7 +726,11 @@ async def save_story(
     override_validation: bool = Form(False),  # Allow manual override
     user: str = Depends(require_auth),
 ):
-    """Save edited story as curated post."""
+    """Save edited story as curated post.
+
+    The caption always comes from the form, so this path never calls an LLM,
+    with or without a configured provider.
+    """
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)

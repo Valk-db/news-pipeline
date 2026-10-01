@@ -38,6 +38,45 @@ PLATFORM_LIMITS = {
 logger = logging.getLogger(__name__)
 
 
+def _first_non_empty(values: Optional[List[str]]) -> str:
+    """Return the first non-empty stripped string from values, else ""."""
+    for value in values or []:
+        text = (value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def build_deterministic_caption(
+    story_title: str,
+    key_facts: Optional[List[str]] = None,
+    source_urls: Optional[List[str]] = None,
+    platform: str = "twitter",
+) -> str:
+    """Build a caption without calling an LLM.
+
+    Used when no provider is configured, so curation still works end to end.
+    Pure and deterministic: the same inputs always produce the same output.
+
+    The caption is the first key fact (falling back to the story title, then a
+    generic label), trimmed so caption plus the primary source URL fits the
+    platform character limit.
+    """
+    base = _first_non_empty(key_facts) or (story_title or "").strip() or "News Update"
+    base = " ".join(base.split())
+    url = _first_non_empty(source_urls)
+    limit = PLATFORM_LIMITS.get((platform or "twitter").lower(), 280)
+
+    if not url:
+        return base[:limit].strip()
+
+    # One character of the budget goes to the space before the link.
+    room = limit - len(url) - 1
+    if room <= 0:
+        return url[:limit]
+    return f"{base[:room].rstrip()} {url}"
+
+
 def _extract_ngrams(text: str, n: int = 7) -> set[str]:
     """Extract word n-grams from text."""
     words = text.lower().split()
