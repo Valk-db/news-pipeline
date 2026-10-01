@@ -1385,6 +1385,46 @@ async def test_run_evidence_refresh_merkle_missing_table_continues(db_session, t
     assert count == 3
 
 
+async def test_stamp_against_real_sqlalchemy_merkle_log(tmp_path):
+    """The real SqlAlchemyMerkleLog path, against a schema that HAS the table.
+
+    The missing-table tests prove the defensive branch. This proves the live
+    one: a real append chain, written through SQLAlchemy, whose leaf hashes
+    verify afterwards. MerkleLogEntry lives on TransparencyBase, so it has to be
+    created explicitly -- which is exactly why init_db() does not create it.
+    """
+    from src.transparency.log import MerkleLogEntry, SqlAlchemyMerkleLog
+
+    engine = await _engine_with([RawArticle.__table__, MerkleLogEntry.__table__])
+    try:
+        async with sa_asyncio.async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )() as session:
+            articles = [_persisted_article(i) for i in range(3)]
+            for a in articles:
+                session.add(a)
+            await session.flush()
+
+            log = SqlAlchemyMerkleLog(session)
+            result = await rss_evidence.stamp_observations(session, articles, merkle_log=log)
+            await session.commit()
+
+            assert result["table_missing"] is False
+            assert result["stamped"] == 3
+            assert result["unstamped"] == []
+            assert [e[2] for e in result["entries"]] == [0, 1, 2]
+
+            stored = await log.entries()
+            assert len(stored) == 3
+            assert verify_chain(stored) is True
+            assert all(e.payload["type"] == "rss_evidence" for e in stored)
+            assert all(e.payload["body_sha256"] == a.content_hash
+                       for e, a in zip(stored, articles))
+            assert await log.size() == 3
+    finally:
+        await engine.dispose()
+
+
 async def test_run_evidence_refresh_ledger_missing_table_continues(tmp_path):
     """A missing pipeline_runs must not sink the run: sinks.ledger says so.
 
