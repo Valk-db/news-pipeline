@@ -24,6 +24,12 @@ class RawArticle(Base):
         Index("ix_raw_articles_source_domain", "source_domain"),
         Index("ix_raw_articles_url_hash", "url_hash", unique=True),
         Index("ix_raw_articles_terminal_state", "terminal_state"),
+        # BEGIN scheme u1, additive block. See migration
+        # 20261001000300_url_canonicalization_v1.sql. Do not make url_hash_v1
+        # unique until the ingest workstream has decided what to do with the rows
+        # that collapse under u1.
+        Index("ix_raw_articles_url_hash_v1", "url_hash_v1"),
+        # END scheme u1, additive block.
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -52,6 +58,13 @@ class RawArticle(Base):
     # A row left at 'pending' long after ingestion is the orphan that
     # scripts/check_orphans.py counts.
     terminal_state = Column(Text, nullable=False, default="pending", server_default="pending")
+
+    # BEGIN scheme u1, additive block. The legacy url and url_hash above stay
+    # exactly as the Merkle log saw them; these two columns carry the versioned
+    # scheme u1 identity that scripts/backfill_url_hash_v1.py computes.
+    canonical_url_v1 = Column(Text, nullable=True)  # canonicalize_url_v1 output
+    url_hash_v1 = Column(String(64), nullable=True)  # SHA256 hex of the u1 canonical form
+    # END scheme u1, additive block.
 
 
 class ReportingUnit(Base):
@@ -828,3 +841,38 @@ class DeadLetter(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     article = relationship("RawArticle")
+
+
+# ============================================================================
+# BEGIN scheme u1, additive block.
+# Translation table between the legacy url_hash identity and scheme u1.
+#
+# url_aliases exists so a lookup by an old hash can still be answered after the
+# move to u1, and so a lookup by a u1 hash can be traced back to the rows that
+# produced it. Nothing here rewrites raw_articles.url or raw_articles.url_hash:
+# those values are covered by the signed Merkle log and stay frozen.
+#
+# old_url_hash is the primary key, so exactly one u1 identity can own a legacy
+# hash. That is what makes the backfill safe to re-run, and it also means a
+# collision on backfill is visible as an insert conflict rather than silently
+# taking the last writer. url_hash_v1 is not unique, because u1 is expected to
+# merge rows that the legacy scheme kept apart, and that merge is a decision for
+# the ingest workstream, not a database error.
+# ============================================================================
+
+class UrlAlias(Base):
+    """Maps one legacy url_hash onto its scheme u1 identity."""
+    __tablename__ = "url_aliases"
+    __table_args__ = (
+        Index("ix_url_aliases_url_hash_v1", "url_hash_v1"),
+    )
+
+    old_url_hash = Column(String(64), primary_key=True)  # raw_articles.url_hash, frozen
+    url_hash_v1 = Column(String(64), nullable=False)  # raw_articles.url_hash_v1
+    canonical_url_v1 = Column(Text, nullable=False)  # canonicalize_url_v1 output
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+# ============================================================================
+# END scheme u1, additive block.
+# ============================================================================
