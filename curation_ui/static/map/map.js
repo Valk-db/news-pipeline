@@ -16,27 +16,6 @@
 
     var API_ENDPOINT = '/api/globe/events';
     var REPLAY_ENDPOINT = '/api/map/replay';
-    var FRESHNESS_ENDPOINT = '/api/map/freshness';
-    var STORIES_ENDPOINT = '/api/map/stories';
-
-    /* Default window when the page loads with no explicit filters. Mirrors
-     * MAP_DEFAULT_WINDOW_HOURS in curation_ui/main.py; the server applies the
-     * same default, so a stale cached script cannot widen the window by
-     * accident. 0 means all time, which is only ever sent after the reader
-     * picks it in the UI. */
-    var DEFAULT_WINDOW_HOURS = 48;
-
-    /* Corroboration threshold, in tier 1 sources, matching
-     * MAP_CORROBORATION_MIN_TIER1 and the pipeline's 2 owner gate. */
-    var CORROBORATION_MIN_TIER1 = 2;
-
-    /* Grid clustering. Cells are sized in screen pixels rather than degrees, so
-     * a cluster always covers about the same amount of screen no matter the
-     * zoom, and markers fall apart into singles as the reader zooms in. */
-    var CLUSTER_CELL_PX = 64;
-    var CLUSTER_MAX_ZOOM = 11;
-    var CLUSTER_RADIUS_MIN = 15;
-    var CLUSTER_RADIUS_MAX = 30;
 
     /*
      * Keyless OpenStreetMap raster tiles, one host on purpose. iOS Safari pays
@@ -85,7 +64,6 @@
 
     var REPLAY_WINDOWS = [
         { value: '24h', label: 'Last 24h', hours: 24 },
-        { value: '48h', label: 'Last 48h', hours: 48 },
         { value: '7d', label: 'Last 7d', hours: 24 * 7 },
         { value: '30d', label: 'Last 30d', hours: 24 * 30 },
         { value: 'all', label: 'All time', hours: null }
@@ -123,15 +101,6 @@
     var el = {
         map: document.getElementById('map'),
         body: document.getElementById('map-body'),
-        stamp: document.getElementById('map-stamp'),
-        stampText: document.getElementById('map-stamp-text'),
-        stories: document.getElementById('map-stories'),
-        storiesHead: document.getElementById('map-stories-head'),
-        storiesList: document.getElementById('map-stories-list'),
-        storiesEmpty: document.getElementById('map-stories-empty'),
-        windowSelect: document.getElementById('map-window-select'),
-        corroboratedToggle: document.getElementById('map-corroborated-toggle'),
-        corroboratedButtons: document.querySelectorAll('.map-corroborated-btn'),
         typeSelect: document.getElementById('event-type-select'),
         modeToggle: document.getElementById('map-mode-toggle'),
         modeButtons: document.querySelectorAll('.map-mode-btn'),
@@ -179,21 +148,8 @@
         markerCount: 0,
         typeCounts: {},
         loaded: false,
-        mode: 'live',
-        /* Default view is the last DEFAULT_WINDOW_HOURS hours, corroborated
-         * only. Both flip only from an explicit control, and full history
-         * stays reachable that way. */
-        windowHours: DEFAULT_WINDOW_HOURS,
-        corroborated: true,
-        clusterCount: 0,
-        /* Last live payload, kept so a zoom can re-cluster instantly instead of
-         * waiting on the debounced refetch. */
-        lastFeatures: []
+        mode: 'live'
     };
-
-    /* How often the freshness stamp re-reads the server. Long enough to be
-     * quiet, short enough that a reader watching the page sees the data move. */
-    var STAMP_POLL_MS = 60000;
 
     /* Replay-only state. timeline is ascending by start time; entries hold
      * markers that are created up front but only added to the map as the play
@@ -209,7 +165,7 @@
         playOrigin: 0,
         playStamp: 0,
         speed: 1,
-        window: '48h',
+        window: '7d',
         truncated: false,
         maxLimit: REPLAY_MAX_LIMIT
     };
@@ -372,19 +328,15 @@
     }
 
     /** Where the rest of the story lives. Only when the id is really a uuid. */
-    /**
-     * The public story view. /story/{id}/edit is the curator's editing form and
-     * stays behind auth, so a public map link must not point at it.
-     */
     function storyHref(props) {
         if (isUuid(props.story_id)) {
-            return '/stories/' + encodeURIComponent(props.story_id);
+            return '/story/' + encodeURIComponent(props.story_id) + '/edit';
         }
-        return '/map';
+        return '/';
     }
 
     function storyHrefLabel(props) {
-        return isUuid(props.story_id) ? 'Read the story' : 'Back to the map';
+        return isUuid(props.story_id) ? 'Open the story' : 'Open Curation';
     }
 
     function confidenceLabel(value) {
@@ -542,196 +494,6 @@
         return [[west, south, east, north]];
     }
 
-    /* ------------------------------------------------------------------ */
-    /* Freshness stamp and top stories list                                */
-    /* ------------------------------------------------------------------ */
-
-    /**
-     * The stamp is server rendered already; this only refreshes it, and does
-     * nothing at all when the endpoint is unreachable. A missing or blank
-     * payload leaves the last honest text in place rather than blanking it.
-     */
-    function applyFreshness(payload) {
-        if (!payload || payload.error) {
-            return;
-        }
-        var stamp = typeof payload.stamp === 'string' ? payload.stamp.trim() : '';
-        if (!stamp || !el.stampText) {
-            return;
-        }
-        el.stampText.textContent = stamp;
-        if (el.stamp) {
-            var corroborated = toFiniteNumber(payload.corroborated_events, 0);
-            el.stamp.classList.toggle('is-stale', corroborated <= 0);
-        }
-    }
-
-    function refreshFreshness() {
-        var options = { headers: { Accept: 'application/json' }, credentials: 'same-origin' };
-        return fetch(FRESHNESS_ENDPOINT, options)
-            .then(function (response) {
-                return response.ok ? response.json() : null;
-            })
-            .then(function (payload) {
-                applyFreshness(payload);
-            })
-            .catch(function () {
-                /* Stamp is decorative. A failed poll keeps the old text. */
-            });
-    }
-
-    function buildStoriesUrl() {
-        var params = new URLSearchParams();
-        params.set('hours', String(state.windowHours));
-        params.set('min_owners', state.corroborated ? String(CORROBORATION_MIN_TIER1) : '0');
-        return STORIES_ENDPOINT + '?' + params.toString();
-    }
-
-    function renderStories(stories) {
-        if (!el.storiesList) {
-            return;
-        }
-        while (el.storiesList.firstChild) {
-            el.storiesList.removeChild(el.storiesList.firstChild);
-        }
-
-        var items = Array.isArray(stories) ? stories : [];
-        items.forEach(function (item, index) {
-            var outlets = toFiniteNumber(item.outlets, 0);
-            var eventCount = toFiniteNumber(item.event_count, 0);
-
-            var row = document.createElement('li');
-            row.className = 'map-story';
-            if (item.story_id) {
-                row.setAttribute('data-story-id', String(item.story_id));
-            }
-
-            var link = document.createElement('a');
-            link.className = 'map-story-link';
-            link.href = item.href || '/map';
-
-            var rank = document.createElement('span');
-            rank.className = 'map-story-rank';
-            rank.setAttribute('aria-hidden', 'true');
-            rank.textContent = String(index + 1);
-
-            var main = document.createElement('span');
-            main.className = 'map-story-main';
-
-            var headline = document.createElement('span');
-            headline.className = 'map-story-headline';
-            headline.textContent = item.headline || 'Untitled story';
-
-            var meta = document.createElement('span');
-            meta.className = 'map-story-meta';
-
-            var outletSpan = document.createElement('span');
-            outletSpan.className = 'map-story-outlets';
-            outletSpan.textContent = formatNumber(outlets) + ' outlet' + (outlets === 1 ? '' : 's');
-
-            var eventSpan = document.createElement('span');
-            eventSpan.className = 'map-story-events';
-            eventSpan.textContent = formatNumber(eventCount) + ' event' + (eventCount === 1 ? '' : 's');
-
-            meta.appendChild(outletSpan);
-            meta.appendChild(eventSpan);
-            main.appendChild(headline);
-            main.appendChild(meta);
-
-            var gauge = document.createElement('span');
-            gauge.className = 'map-story-gauge';
-            gauge.setAttribute('aria-hidden', 'true');
-            var fill = document.createElement('span');
-            fill.className = 'map-story-gauge-fill';
-            // Scale against the leader so the bar reads as a ranking, and never
-            // divide by a zero count on an empty response.
-            fill.style.setProperty('--fill', (items.length ? (outlets / Math.max(1, items[0].outlets)) * 100 : 0) + '%');
-            gauge.appendChild(fill);
-
-            link.appendChild(rank);
-            link.appendChild(main);
-            link.appendChild(gauge);
-            row.appendChild(link);
-            el.storiesList.appendChild(row);
-        });
-
-        if (el.storiesEmpty) {
-            el.storiesEmpty.hidden = items.length > 0;
-        }
-    }
-
-    function refreshStories() {
-        var options = { headers: { Accept: 'application/json' }, credentials: 'same-origin' };
-        return fetch(buildStoriesUrl(), options)
-            .then(function (response) {
-                return response.ok ? response.json() : null;
-            })
-            .then(function (payload) {
-                if (!payload || payload.error) {
-                    return;
-                }
-                renderStories(payload.stories);
-            })
-            .catch(function () {
-                /* Keep whatever the server already rendered. */
-            });
-    }
-
-    function buildStoriesControls() {
-        if (el.windowSelect) {
-            var initial = toFiniteNumber(el.windowSelect.value, DEFAULT_WINDOW_HOURS);
-            state.windowHours = initial >= 0 ? initial : DEFAULT_WINDOW_HOURS;
-            el.windowSelect.addEventListener('change', function () {
-                var hours = toFiniteNumber(el.windowSelect.value, DEFAULT_WINDOW_HOURS);
-                state.windowHours = hours >= 0 ? hours : DEFAULT_WINDOW_HOURS;
-                if (state.mode === 'replay') {
-                    loadReplay();
-                } else {
-                    state.loaded = false;
-                    fetchEvents();
-                }
-                refreshStories();
-            });
-        }
-
-        Array.prototype.forEach.call(el.corroboratedButtons, function (button) {
-            button.addEventListener('click', function () {
-                var requested = button.getAttribute('data-corroborated') === '1';
-                if (requested === state.corroborated) {
-                    return;
-                }
-                state.corroborated = requested;
-                syncCorroboratedToggle();
-                if (state.mode === 'replay') {
-                    loadReplay();
-                } else {
-                    state.loaded = false;
-                    fetchEvents();
-                }
-                refreshStories();
-            });
-        });
-        syncCorroboratedToggle();
-
-        if (el.storiesHead) {
-            el.storiesHead.addEventListener('click', function () {
-                var collapsed = el.stories.classList.toggle('is-collapsed');
-                el.storiesHead.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-            });
-        }
-    }
-
-    function syncCorroboratedToggle() {
-        if (el.corroboratedToggle) {
-            el.corroboratedToggle.setAttribute('data-on', state.corroborated ? 'true' : 'false');
-        }
-        Array.prototype.forEach.call(el.corroboratedButtons, function (button) {
-            var active = (button.getAttribute('data-corroborated') === '1') === state.corroborated;
-            button.classList.toggle('is-active', active);
-            button.setAttribute('aria-pressed', active ? 'true' : 'false');
-        });
-    }
-
     function buildRequestUrl(bbox) {
         var params = new URLSearchParams();
         if (bbox) {
@@ -740,12 +502,6 @@
         }
         if (state.eventType) {
             params.set('event_type', state.eventType);
-        }
-        params.set('hours', String(state.windowHours));
-        if (state.corroborated) {
-            params.set('min_tier1_sources', String(CORROBORATION_MIN_TIER1));
-        } else {
-            params.set('min_tier1_sources', '0');
         }
         params.set('limit', String(EVENT_LIMIT));
         return API_ENDPOINT + '?' + params.toString();
@@ -1162,132 +918,13 @@
         return { marker: marker, style: style };
     }
 
-    /**
-     * Group plotted events into screen space grid cells.
-     *
-     * Cells are keyed on the projected pixel position at the current zoom, so
-     * zooming in pushes pins into different cells and clusters break apart on
-     * their own without another server round trip. Two events at the same
-     * coordinates with the same type are never collapsed into one dot: they
-     * land in the same cell and the cell renders as a cluster showing the count.
-     */
-    function clusterEvents(entries, zoom) {
-        var useClusters = zoom <= CLUSTER_MAX_ZOOM;
-        var groups = [];
-        var index = {};
-
-        entries.forEach(function (entry) {
-            if (!useClusters) {
-                groups.push({ entries: [entry], latlng: entry.latlng });
-                return;
-            }
-            var point = map.project(entry.latlng, zoom);
-            var key = Math.floor(point.x / CLUSTER_CELL_PX) + ':' +
-                Math.floor(point.y / CLUSTER_CELL_PX);
-            var group = index[key];
-            if (!group) {
-                group = { key: key, entries: [], sumLat: 0, sumLon: 0 };
-                index[key] = group;
-                groups.push(group);
-            }
-            group.entries.push(entry);
-            group.sumLat += entry.latlng[0];
-            group.sumLon += entry.latlng[1];
-        });
-
-        groups.forEach(function (group) {
-            if (group.entries.length > 1) {
-                group.latlng = [group.sumLat / group.entries.length, group.sumLon / group.entries.length];
-            }
-        });
-        return groups;
-    }
-
-    function clusterRadius(count) {
-        // Logarithmic so a 400 event cell does not become a 400 pixel circle.
-        return clamp(
-            CLUSTER_RADIUS_MIN + Math.log(count + 1) * 3,
-            CLUSTER_RADIUS_MIN,
-            CLUSTER_RADIUS_MAX
-        );
-    }
-
-    /** Dominant event type in a cell, so the cluster keeps its type colour. */
-    function clusterType(group) {
-        var counts = {};
-        var top = '';
-        var best = 0;
-        group.entries.forEach(function (entry) {
-            var type = entry.props.event_type || '';
-            counts[type] = (counts[type] || 0) + 1;
-            if (counts[type] > best) {
-                best = counts[type];
-                top = type;
-            }
-        });
-        return top;
-    }
-
-    function clusterPopupHtml(group, now) {
-        var rows = group.entries.slice(0, 8).map(function (entry) {
-            var props = entry.props;
-            var age = relativeAge(props.start_time, now);
-            return '<div class="map-cluster-row">' +
-                '<span class="map-cluster-dot" style="background:' +
-                typeColor(props.event_type || '') + '"></span>' +
-                '<span class="map-cluster-where">' +
-                escapeHtml(props.location_name || 'Unknown location') + '</span>' +
-                (age ? '<span class="map-cluster-age">' + escapeHtml(age) + '</span>' : '') +
-                '</div>';
-        }).join('');
-        var extra = group.entries.length - rows.length;
-        var overflow = extra > 0
-            ? '<div class="map-cluster-more">and ' + formatNumber(extra) +
-                ' more in this area. Zoom in to separate them.</div>'
-            : '';
-        return '<div class="map-cluster-popup">' +
-            '<div class="map-cluster-head">' +
-            formatNumber(group.entries.length) + ' events here' +
-            '</div>' + rows + overflow + '</div>';
-    }
-
-    function createClusterMarker(group, now) {
-        var count = group.entries.length;
-        var type = clusterType(group);
-        var marker = L.circleMarker(group.latlng, {
-            className: 'map-cluster',
-            radius: clusterRadius(count),
-            color: typeColor(type),
-            weight: 2,
-            opacity: 0.95,
-            fillColor: typeColor(type),
-            fillOpacity: 0.32
-        });
-        marker.bindPopup(clusterPopupHtml(group, now), {
-            maxWidth: 280,
-            minWidth: 220,
-            autoPan: true,
-            autoPanPadding: [16, 16 + deckInset()],
-            className: 'map-cluster-popup-wrap'
-        });
-        // Zooming in is the reader's way of asking for the individual events.
-        marker.on('click', function () {
-            if (!map) {
-                return;
-            }
-            map.setView(group.latlng, Math.min(map.getZoom() + 2, 18), {
-                animate: true
-            });
-        });
-        return marker;
-    }
-
     function renderFeatures(features, now) {
         markerLayer.clearLayers();
 
         var counts = {};
         var skipped = 0;
-        var entries = [];
+        var drawn = 0;
+        var seen = {};
         var budget = { left: PULSE_MAX };
 
         features.forEach(function (feature) {
@@ -1300,40 +937,24 @@
                 skipped += 1;
                 return;
             }
+
             var props = feature.properties;
             var type = props.event_type || '';
             counts[type] = (counts[type] || 0) + 1;
-            entries.push({ latlng: latlng, props: props });
-        });
 
-        var zoom = map ? map.getZoom() : 0;
-        var groups = clusterEvents(entries, zoom);
-        var clusters = 0;
-
-        groups.forEach(function (group) {
-            if (group.entries.length > 1) {
-                clusters += 1;
-                var clusterMarker = createClusterMarker(group, now);
-                clusterMarker.addTo(markerLayer);
-                var clusterNode = clusterMarker.getElement();
-                if (clusterNode) {
-                    clusterNode.classList.add('map-cluster-node');
-                }
-                var label = document.createElement('span');
-                label.className = 'map-cluster-count';
-                label.textContent = formatNumber(group.entries.length);
-                if (clusterNode) {
-                    clusterNode.appendChild(label);
-                }
+            var key = latlng[0].toFixed(3) + ',' + latlng[1].toFixed(3) + '|' + type;
+            if (seen[key]) {
                 return;
             }
-            var built = createEventMarker(group.entries[0].latlng, group.entries[0].props, now, budget);
+            seen[key] = true;
+            drawn += 1;
+
+            var built = createEventMarker(latlng, props, now, budget);
             built.marker.addTo(markerLayer);
             decorateMarker(built.marker, built.style);
         });
 
-        state.markerCount = entries.length;
-        state.clusterCount = clusters;
+        state.markerCount = drawn;
         state.typeCounts = counts;
         updateLegend();
 
@@ -1342,9 +963,6 @@
         }).length;
 
         var text = formatNumber(state.markerCount) + ' events';
-        if (clusters) {
-            text += ' / ' + formatNumber(clusters) + ' clusters';
-        }
         if (typesPresent) {
             text += ' / ' + typesPresent + ' types';
         }
@@ -1395,7 +1013,6 @@
                 });
                 hideBanner();
                 showLoading(false);
-                state.lastFeatures = features;
                 setStatus(renderFeatures(features, Date.now()), null, liveMeta());
                 if (!state.markerCount) {
                     showEmpty();
@@ -1408,8 +1025,6 @@
                 markerLayer.clearLayers();
                 state.markerCount = 0;
                 state.typeCounts = {};
-                state.clusterCount = 0;
-                state.lastFeatures = [];
                 updateLegend();
                 showLoading(false);
                 setStatus('unavailable', 'is-error', 'live view / failed');
@@ -1472,23 +1087,17 @@
                 return;
             }
             var key = latlng[0].toFixed(3) + ',' + latlng[1].toFixed(3) + '|' + (props.event_type || '');
-            // Same spot, same type: keep one marker but count the rest, so two
-            // events never render as one dot that looks like a single event.
-            var existing = seen[key];
-            if (existing) {
-                existing.overlaps += 1;
+            if (seen[key]) {
                 return;
             }
+            seen[key] = true;
             var built = createEventMarker(latlng, props, now, budget);
-            var entry = {
+            entries.push({
                 time: time,
                 type: props.event_type || '',
                 marker: built.marker,
-                style: built.style,
-                overlaps: 0
-            };
-            seen[key] = entry;
-            entries.push(entry);
+                style: built.style
+            });
         });
 
         entries.sort(function (a, b) {
@@ -1503,7 +1112,7 @@
                 return REPLAY_WINDOWS[i].hours;
             }
         }
-        return DEFAULT_WINDOW_HOURS;
+        return REPLAY_WINDOWS[1].hours;
     }
 
     function windowLabel() {
@@ -1523,9 +1132,6 @@
         if (state.eventType) {
             params.set('event_type', state.eventType);
         }
-        // Same corroboration default as the live view, so switching modes does
-        // not silently widen what the reader is looking at.
-        params.set('min_tier1_sources', state.corroborated ? String(CORROBORATION_MIN_TIER1) : '0');
         params.set('limit', String(REPLAY_LIMIT));
         return REPLAY_ENDPOINT + '?' + params.toString();
     }
@@ -1616,15 +1222,6 @@
                 var node = entry.marker.getElement();
                 if (node) {
                     node.classList.add('is-fresh');
-                    // Events sharing this exact spot and type get a count badge
-                    // rather than silently rendering as a single pin.
-                    if (entry.overlaps > 0) {
-                        node.classList.add('is-overlapped');
-                        var badge = document.createElement('span');
-                        badge.className = 'map-overlap-count';
-                        badge.textContent = String(entry.overlaps + 1);
-                        node.appendChild(badge);
-                    }
                 }
                 decorateMarker(entry.marker, entry.style);
                 state.typeCounts[entry.type] = (state.typeCounts[entry.type] || 0) + 1;
@@ -1940,7 +1537,7 @@
         if (el.replayWindow) {
             replay.window = el.replayWindow.value || replay.window;
             el.replayWindow.addEventListener('change', function () {
-                replay.window = el.replayWindow.value || '48h';
+                replay.window = el.replayWindow.value || '7d';
                 if (state.mode === 'replay') {
                     loadReplay();
                 }
@@ -2065,24 +1662,7 @@
             }
         }
 
-        // On a phone the story sheet docks over the map's lower third, so it
-        // starts collapsed to its heading and the reader opens it deliberately.
-        if (el.stories && window.matchMedia && window.matchMedia('(max-width: 900px)').matches) {
-            el.stories.classList.add('is-collapsed');
-            if (el.storiesHead) {
-                el.storiesHead.setAttribute('aria-expanded', 'false');
-            }
-        }
-
         map.on('moveend zoomend', scheduleFetch);
-        // Re-cluster from the payload already in hand so zooming in splits the
-        // cells straight away; the debounced refetch then refines the data.
-        map.on('zoomend', function () {
-            if (state.mode !== 'live' || !state.lastFeatures.length) {
-                return;
-            }
-            setStatus(renderFeatures(state.lastFeatures, Date.now()), null, liveMeta());
-        });
         window.addEventListener('orientationchange', function () {
             setTimeout(function () {
                 map.invalidateSize();
@@ -2090,11 +1670,6 @@
             }, 250);
         });
         window.addEventListener('resize', measureReplayPanel);
-
-        buildStoriesControls();
-        refreshFreshness();
-        refreshStories();
-        window.setInterval(refreshFreshness, STAMP_POLL_MS);
 
         fetchEvents();
 

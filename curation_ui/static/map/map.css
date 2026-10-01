@@ -16,8 +16,7 @@
      8. Markers
      9. Popups
     10. Responsive
-    11. Public story page
-    12. Reduced motion
+    11. Reduced motion
    ========================================================================== */
 
 /* --- 1. Tokens ---------------------------------------------------------- */
@@ -246,6 +245,48 @@
   gap: var(--m-space-2);
 }
 
+/* Freshness stamp. One line above the map, outside the chrome, because it is a
+   claim about the data rather than a control: how old the newest event is, how
+   many outlets stand behind it, and how many corroborated events landed in the
+   last day. The dot turns amber when nothing corroborated is in the window,
+   which is the honest "we have data but none of it is confirmed yet" state.
+   Server rendered so the page is honest before any script runs. */
+[data-theme="map"] .map-stamp {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-2);
+  flex: 0 0 auto;
+  padding: 6px var(--m-space-4);
+  background: var(--m-panel);
+  border-bottom: 1px solid var(--m-line-soft);
+  font-family: var(--m-font-data);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--m-ink-soft);
+  z-index: 899;
+}
+
+[data-theme="map"] .map-stamp-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--m-accent);
+  box-shadow: 0 0 0 3px var(--m-accent-wash);
+}
+
+[data-theme="map"] .map-stamp.is-stale .map-stamp-dot {
+  background: var(--m-amber);
+  box-shadow: 0 0 0 3px var(--m-amber-wash);
+}
+
+[data-theme="map"] .map-stamp-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Status pill: one line of outcome over one line of scope. The dot carries
    the state, the copy carries the numbers. */
 [data-theme="map"] .map-status {
@@ -386,44 +427,6 @@
   max-width: 320px;
 }
 
-[data-theme="map"] .map-instrument-corroborated {
-  flex: 0 0 auto;
-}
-
-/* Same segmented control as the mode toggle, but the window cell and the
-   corroboration cell sit next to each other because they are the two halves of
-   "what am I looking at". */
-[data-theme="map"] .map-corroborated-toggle {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px;
-  background: var(--m-raise);
-  border: 1px solid var(--m-line);
-  border-radius: var(--m-radius-sm);
-}
-
-[data-theme="map"] .map-corroborated-btn {
-  min-height: 28px;
-  padding: 4px 12px;
-  background: none;
-  border: 0;
-  border-radius: 6px;
-  color: var(--m-ink-dim);
-  font-family: var(--m-font-data);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color var(--m-tap), background var(--m-tap);
-}
-
-[data-theme="map"] .map-corroborated-btn.is-active {
-  color: var(--m-ink);
-  background: linear-gradient(120deg, rgba(0, 212, 170, 0.3), rgba(0, 212, 170, 0.12));
-  box-shadow: inset 0 0 0 1px rgba(0, 212, 170, 0.4);
-}
-
 [data-theme="map"] .map-field-label {
   font-family: var(--m-font-data);
   font-size: 9px;
@@ -539,49 +542,6 @@
   position: absolute;
   inset: 0;
   z-index: 1;
-}
-
-/*
- * Freshness stamp. One line above the map, outside the chrome, because it is a
- * claim about the data rather than a control: how old the newest event is, how
- * many outlets stand behind it, and how many corroborated events landed in the
- * last day. The dot turns amber when nothing corroborated is in the window,
- * which is the honest "we have data but none of it is confirmed yet" state.
- */
-[data-theme="map"] .map-stamp {
-  display: flex;
-  align-items: center;
-  gap: var(--m-space-2);
-  flex: 0 0 auto;
-  padding: 6px var(--m-space-4);
-  background: var(--m-panel);
-  border-bottom: 1px solid var(--m-line-soft);
-  font-family: var(--m-font-data);
-  font-size: 10.5px;
-  letter-spacing: 0.02em;
-  color: var(--m-ink-soft);
-  z-index: 899;
-}
-
-[data-theme="map"] .map-stamp-dot {
-  width: 6px;
-  height: 6px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--m-accent);
-  box-shadow: 0 0 0 3px var(--m-accent-wash);
-}
-
-[data-theme="map"] .map-stamp.is-stale .map-stamp-dot {
-  background: var(--m-amber);
-  box-shadow: 0 0 0 3px var(--m-amber-wash);
-}
-
-[data-theme="map"] .map-stamp-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /*
@@ -1729,110 +1689,6 @@
 /* --- 8. Markers -------------------------------------------------------- */
 
 /*
- * Clusters. The cell is a filled disc in the dominant type colour with its
- * count printed on top, so a dense area reads as "this many events here"
- * rather than as one lucky looking pin. A soft halo separates it from a
- * neighbouring cluster without adding a second shape.
- */
-[data-theme="map"] .map-cluster {
-  cursor: zoom-in;
-}
-
-[data-theme="map"] .map-cluster-node {
-  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6));
-}
-
-[data-theme="map"] .map-cluster-count {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  font-family: var(--m-font-data);
-  font-size: 11px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--m-void);
-  white-space: nowrap;
-  pointer-events: none;
-  text-shadow: 0 0 4px rgba(255, 255, 255, 0.35);
-}
-
-/* Overlap badge for replay markers that share an exact spot with another event
-   of the same type. One pin plus a number beats one pin that looks unique. */
-[data-theme="map"] .map-marker.is-overlapped {
-  cursor: pointer;
-}
-
-[data-theme="map"] .map-overlap-count {
-  position: absolute;
-  left: 100%;
-  top: 50%;
-  transform: translate(-30%, -50%);
-  font-family: var(--m-font-data);
-  font-size: 9px;
-  font-weight: 700;
-  color: var(--m-void);
-  background: var(--m-ink-soft);
-  border-radius: var(--m-radius-pill);
-  padding: 1px 4px;
-  pointer-events: none;
-}
-
-[data-theme="map"] .map-cluster-popup {
-  display: flex;
-  flex-direction: column;
-  gap: var(--m-space-1);
-  padding: var(--m-space-3) var(--m-space-4) var(--m-space-4);
-  min-width: 210px;
-}
-
-[data-theme="map"] .map-cluster-head {
-  font-family: var(--m-font-data);
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--m-ink);
-  padding-bottom: var(--m-space-1);
-  border-bottom: 1px solid var(--m-line);
-  margin-bottom: var(--m-space-1);
-}
-
-[data-theme="map"] .map-cluster-row {
-  display: flex;
-  align-items: center;
-  gap: var(--m-space-2);
-  font-size: 12px;
-  color: var(--m-ink-soft);
-}
-
-[data-theme="map"] .map-cluster-dot {
-  width: 7px;
-  height: 7px;
-  flex-shrink: 0;
-  border-radius: 50%;
-}
-
-[data-theme="map"] .map-cluster-where {
-  flex: 1 1 auto;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-[data-theme="map"] .map-cluster-age {
-  font-family: var(--m-font-data);
-  font-size: 9.5px;
-  color: var(--m-ink-dim);
-  white-space: nowrap;
-}
-
-[data-theme="map"] .map-cluster-more {
-  font-size: 11px;
-  color: var(--m-ink-dim);
-  padding-top: var(--m-space-1);
-}
-
-/*
  * Marker language: a filled core in the type colour with a thin dark rim, so
  * neighbouring types stay separable even where they overlap. Fresh, well
  * corroborated events get their own rim turned into a breathing ring.
@@ -2188,6 +2044,33 @@
   [data-theme="map"] .map-btn {
     padding: 7px 9px;
   }
+
+  /* Phone: the top stories list becomes a bottom sheet. */
+    [data-theme="map"] .map-stories {
+      left: var(--m-space-2);
+      right: var(--m-space-2);
+      top: auto;
+      bottom: calc(var(--m-replay-offset) + var(--m-space-2));
+      width: auto;
+      max-height: 46vh;
+      border-radius: var(--m-radius-lg);
+    }
+
+    [data-theme="map"] .map-stories-head {
+      padding: var(--m-space-3) var(--m-space-4);
+    }
+
+    [data-theme="map"] .map-stories-caret {
+      transform: rotate(180deg);
+    }
+
+    [data-theme="map"] .map-stories.is-collapsed .map-stories-caret {
+      transform: rotate(0deg);
+    }
+
+    [data-theme="map"] .map-stories.is-collapsed {
+      max-height: none;
+    }
 }
 
 /* Phone: everything is thumb sized and the deck keeps its scrubber full
@@ -2282,45 +2165,6 @@
   }
 }
 
-/* Phone: the top stories list becomes a bottom sheet. It docks to the bottom
-   edge above the replay deck, so the map keeps its upper two thirds, and it
-   collapses to its heading when the reader wants the whole map. The sheet
-   never covers the map's centre, only its lower edge. */
-@media (max-width: 900px) {
-  [data-theme="map"] .map-stories {
-    left: var(--m-space-2);
-    right: var(--m-space-2);
-    top: auto;
-    bottom: calc(var(--m-replay-offset) + var(--m-space-2));
-    width: auto;
-    max-height: 46vh;
-    border-radius: var(--m-radius-lg);
-  }
-
-  [data-theme="map"] .map-stories-head {
-    padding: var(--m-space-3) var(--m-space-4);
-  }
-
-  [data-theme="map"] .map-stories-caret {
-    transform: rotate(180deg);
-  }
-
-  [data-theme="map"] .map-stories.is-collapsed .map-stories-caret {
-    transform: rotate(0deg);
-  }
-
-  [data-theme="map"] .map-stories.is-collapsed {
-    max-height: none;
-  }
-
-  /* Collapsed, the sheet is only a handle: the heading sits above the deck
-     rather than eating into the map. */
-  [data-theme="map"] .map-stamp {
-    padding: 6px var(--m-space-3);
-    font-size: 10px;
-  }
-}
-
 /* Very narrow: the scope line is the first thing to go, the count is not. */
 @media (max-width: 560px) {
   [data-theme="map"] .map-status .status-meta {
@@ -2363,182 +2207,7 @@
   }
 }
 
-/* --- 11. Public story page --------------------------------------------- */
-
-/*
- * The public story view reuses the map's tokens so a reader moving from a
- * marker popup to the story page sees one product, not two. Reading column,
- * not a dashboard: no controls, no queue language.
- */
-/* Explicit class on the body rather than :has(), so the scroll reset does not
-   depend on a selector Safari only gained recently. */
-[data-theme="map"] body.is-story-page {
-  height: auto;
-  min-height: 100vh;
-  min-height: 100dvh;
-  overflow: auto;
-}
-
-[data-theme="map"] .story-public {
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  min-height: 100dvh;
-  background: var(--m-void);
-}
-
-[data-theme="map"] .story-public-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--m-space-3);
-  padding: var(--m-space-3) var(--m-space-4);
-  background: var(--m-panel);
-  border-bottom: 1px solid var(--m-line);
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-[data-theme="map"] .story-public-back {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--m-space-1);
-  padding: 7px 10px;
-  background: var(--m-raise);
-  border: 1px solid var(--m-line);
-  border-radius: var(--m-radius-sm);
-  color: var(--m-ink-soft);
-  font-family: var(--m-font-data);
-  font-size: 11px;
-  text-decoration: none;
-  transition: color var(--m-tap), background var(--m-tap);
-}
-
-[data-theme="map"] .story-public-back svg {
-  width: 15px;
-  height: 15px;
-}
-
-@media (hover: hover) {
-  [data-theme="map"] .story-public-back:hover {
-    color: var(--m-ink);
-    background: var(--m-hover);
-    border-color: var(--m-line-strong);
-  }
-}
-
-[data-theme="map"] .story-public-main {
-  width: 100%;
-  max-width: 720px;
-  margin: 0 auto;
-  padding: var(--m-space-5) var(--m-space-4) var(--m-space-5);
-}
-
-[data-theme="map"] .story-public-eyebrow {
-  margin: 0 0 var(--m-space-2);
-  font-family: var(--m-font-data);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--m-accent);
-}
-
-[data-theme="map"] .story-public-headline {
-  margin: 0 0 var(--m-space-3);
-  font-size: 24px;
-  line-height: 1.25;
-  letter-spacing: -0.015em;
-  color: var(--m-ink);
-}
-
-[data-theme="map"] .story-public-meta {
-  margin: 0 0 var(--m-space-5);
-  font-family: var(--m-font-data);
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--m-ink-dim);
-}
-
-[data-theme="map"] .story-public-section {
-  margin-bottom: var(--m-space-5);
-}
-
-[data-theme="map"] .story-public-heading {
-  margin: 0 0 var(--m-space-2);
-  padding-bottom: var(--m-space-1);
-  border-bottom: 1px solid var(--m-line);
-  font-family: var(--m-font-data);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--m-ink-dim);
-}
-
-[data-theme="map"] .story-public-events,
-[data-theme="map"] .story-public-sources {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-[data-theme="map"] .story-public-event,
-[data-theme="map"] .story-public-source {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: var(--m-space-3) 0;
-  border-bottom: 1px solid var(--m-line-soft);
-}
-
-[data-theme="map"] .story-public-event:last-child,
-[data-theme="map"] .story-public-source:last-child {
-  border-bottom: 0;
-}
-
-[data-theme="map"] .story-public-event-where {
-  font-size: 14px;
-  color: var(--m-ink);
-}
-
-[data-theme="map"] .story-public-event-meta,
-[data-theme="map"] .story-public-source-meta {
-  font-family: var(--m-font-data);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  color: var(--m-ink-dim);
-}
-
-[data-theme="map"] .story-public-source a {
-  color: var(--m-ink);
-  font-size: 14px;
-  line-height: 1.4;
-  text-decoration: none;
-  border-bottom: 1px solid transparent;
-}
-
-@media (hover: hover) {
-  [data-theme="map"] .story-public-source a:hover {
-    border-bottom-color: var(--m-accent);
-  }
-}
-
-[data-theme="map"] .story-public-empty {
-  margin: 0;
-  padding: var(--m-space-3) 0;
-  font-size: 12.5px;
-  color: var(--m-ink-dim);
-}
-
-@media (max-width: 560px) {
-  [data-theme="map"] .story-public-headline {
-    font-size: 20px;
-  }
-}
-
-/* --- 12. Reduced motion ------------------------------------------------ */
+/* --- 11. Reduced motion ------------------------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {
   [data-theme="map"] .map-status.is-busy .status-dot,
