@@ -13,9 +13,9 @@
 
     var API_ENDPOINT = '/api/globe/events';
     var REPLAY_ENDPOINT = '/api/map/replay';
-    var TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-    var TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
-    var TILE_SUBDOMAINS = 'abcd';
+    var TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+    var TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+    var TILE_SUBDOMAINS = 'abc';
     var MOVE_DEBOUNCE_MS = 400;
     var EVENT_LIMIT = 500;
     var FALLBACK_COLOR = '#7f8c8d';
