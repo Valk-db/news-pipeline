@@ -46,6 +46,9 @@ logs/
 *.sqlite
 *.sqlite3
 
+# Runtime state written by ingest jobs (e.g. var/rss_evidence_state.json)
+var/
+
 # OS
 .DS_Store
 Thumbs.db
