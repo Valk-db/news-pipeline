@@ -23,6 +23,7 @@ from src.ingestion.adapters.rss_adapter import RssAdapter
 from src.ingestion.adapters.gdelt_adapter import GDELTAdapter
 from src.ingestion.adapters.reddit_adapter import RedditAdapter
 from src.ingestion.adapters.sensor_adapter import SensorAdapter
+from src.ingestion.adapters.rss_evidence_adapter import RssEvidenceAdapter
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_dynamic_gate
@@ -203,9 +204,16 @@ def build_adapters(
 ) -> list:
     """Assemble adapters for the requested tiers, optionally filtered by --sources.
 
-    A --sources entry matches an adapter name (rss_tier1, gdelt, reddit_tier3,
-    sensors) or a registry domain. Unmatched entries are reported, not fatal,
-    so a typo shows up in the log instead of silently shrinking the run.
+    A --sources entry matches an adapter name (rss_tier1, rss_tier2, gdelt,
+    reddit_tier3, sensors, rss_evidence) or a registry domain. Unmatched entries
+    are reported, not fatal, so a typo shows up in the log instead of silently
+    shrinking the run.
+
+    RssEvidenceAdapter is opt-in rather than default: `--sources rss_evidence`
+    selects it regardless of --tiers, because it owns its own hand-verified
+    feed list and its own polling cadence and is not a tiered source at all.
+    It is deliberately absent from the unfiltered candidate list, so a run with
+    no --sources behaves exactly as it did before the evidence locker existed.
     """
     candidates = []
     if SourceTier.TIER1 in tiers:
@@ -225,6 +233,11 @@ def build_adapters(
     wanted = {s.strip().lower() for s in sources if s.strip()}
     if not wanted:
         return candidates
+
+    # Selected by name only, never by tier, so it is offered separately rather
+    # than appended to candidates where --tiers would gate it.
+    opt_in = [RssEvidenceAdapter()]
+    candidates = candidates + opt_in
 
     selected = []
     for adapter in candidates:
@@ -291,6 +304,7 @@ async def run_ingestion(
         gdelt_count = 0
         reddit_count = 0
         sensor_count = 0
+        rss_evidence_count = 0
         adapter_health = {}
 
         for adapter in adapters:
@@ -315,6 +329,9 @@ async def run_ingestion(
             elif adapter.name == "sensors":
                 sensor_count = len(articles)
                 print(f"  Sensors: {sensor_count}")
+            elif adapter.name == "rss_evidence":
+                rss_evidence_count = len(articles)
+                print(f"  RSS evidence: {rss_evidence_count}")
 
         print(f"  Total fetched articles: {len(all_articles)}")
 
@@ -375,6 +392,7 @@ async def run_ingestion(
             "gdelt": gdelt_count,
             "reddit": reddit_count,
             "sensors": sensor_count,
+            "rss_evidence": rss_evidence_count,
             "total_fetched": len(all_articles),
             "total_new": len(new_articles),
             "url_duplicates_skipped": url_dup,
@@ -463,7 +481,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--sources",
         default="",
-        help="Comma separated adapter names (rss_tier1, rss_tier2, gdelt, reddit_tier3, sensors) or registry domains to limit the run to.",
+        help="Comma separated adapter names (rss_tier1, rss_tier2, gdelt, reddit_tier3, sensors, rss_evidence) or registry domains to limit the run to.",
     )
     parser.add_argument(
         "--tiers",
