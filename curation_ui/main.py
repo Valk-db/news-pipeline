@@ -4,6 +4,7 @@ import logging
 import socket
 import secrets
 import time
+import re
 from collections import defaultdict
 from typing import Dict, List, Tuple
 
@@ -23,7 +24,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from sqlalchemy import select, desc, and_, func
+from sqlalchemy import select, desc, and_, or_, func
 from sqlalchemy.types import Float
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.shared.database import get_session
@@ -1096,6 +1097,206 @@ def _event_feature(event: Event) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Discovery: tier filter, ranked topic search, near-duplicate collapsing.
+# ---------------------------------------------------------------------------
+
+# Cache for the pg_trgm probe: None = not probed yet.
+_trigram_available_cache: bool | None = None
+
+
+async def _trigram_available(session: AsyncSession) -> bool:
+    """True when the pg_trgm extension is installed (Postgres dev/prod).
+
+    SQLite test databases never have it; search falls back to ILIKE there.
+    The result is cached per process because extensions do not change at runtime.
+    """
+    global _trigram_available_cache
+    if _trigram_available_cache is not None:
+        return _trigram_available_cache
+    try:
+        from sqlalchemy import text as _text
+
+        result = await session.execute(
+            _text("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'")
+        )
+        _trigram_available_cache = result.first() is not None
+    except Exception:
+        # SQLite (tests) or any failure: no trigram support.
+        _trigram_available_cache = False
+    return _trigram_available_cache
+
+
+def normalize_headline(headline: str | None) -> str:
+    """Canonical form for near-duplicate headline comparison.
+
+    Lowercase, strip punctuation, collapse whitespace. Applied to the ENGLISH
+    headline so the same story reported in French and English still clusters.
+    """
+    text = (headline or "").lower()
+    text = re.sub(r"[^\w\s]", "", text, flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _tier_columns() -> list:
+    return [
+        Story.tier1_unit_count,
+        Story.tier2_unit_count,
+        Story.tier3_unit_count,
+        Story.tier4_unit_count,
+    ]
+
+
+def _tier_include_condition(tiers: list[int] | None):
+    """Story passes when it has at least one unit in an included tier.
+
+    tiers is a list like [1, 2]; None/empty means all tiers. This is what lets
+    a reader hide tier 3: stories carried only by tier-3 outlets drop out,
+    while tier-1 stories that also have tier-3 units stay.
+    """
+    if not tiers:
+        return None
+    wanted = {t for t in tiers if t in (1, 2, 3, 4)}
+    if not wanted or len(wanted) == 4:
+        return None
+    cols = _tier_columns()
+    return or_(*[cols[t - 1] > 0 for t in sorted(wanted)])
+
+
+def _parse_tiers(raw: str | None) -> list[int] | None:
+    if not raw:
+        return None
+    try:
+        tiers = [int(p) for p in raw.split(",") if p.strip()]
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="tiers must be a comma-separated list like '1,2'.",
+        )
+    tiers = [t for t in tiers if t in (1, 2, 3, 4)]
+    return tiers or None
+
+
+def _apply_story_tier_filter(stmt, tiers: list[int] | None):
+    """Restrict an Event query to events whose story has a unit in an included tier.
+
+    Joins Event -> Story once; the tier mix lives on the story. None/empty
+    tiers leave the statement untouched.
+    """
+    condition = _tier_include_condition(tiers)
+    if condition is None:
+        return stmt
+    return stmt.join(Story, Story.id == Event.story_id).where(condition)
+
+
+def _verification_badge(story: Story) -> dict:
+    """Unmissable corroboration state for one story.
+
+    Outlets count plus the tier mix, so a reader sees at a glance whether a
+    story stands on tier-1 reporting or a pile of tier-3 aggregators.
+    """
+    mix = {
+        "t1": int(story.tier1_unit_count or 0),
+        "t2": int(story.tier2_unit_count or 0),
+        "t3": int(story.tier3_unit_count or 0),
+        "t4": int(story.tier4_unit_count or 0),
+    }
+    best_tier = next((i + 1 for i, k in enumerate(["t1", "t2", "t3", "t4"]) if mix[k] > 0), None)
+    corroborated = (
+        mix["t1"] >= MAP_CORROBORATION_MIN_TIER1
+        and int(story.distinct_owners or 0) >= MAP_CORROBORATION_MIN_OWNERS
+    )
+    outlets = int(story.distinct_owners or 0)
+    if corroborated:
+        label = f"Corroborated · {outlets} outlet{'s' if outlets != 1 else ''}"
+    elif outlets >= 2:
+        label = f"{outlets} outlets · needs tier-1 confirmation"
+    elif outlets == 1:
+        label = "Single outlet · unconfirmed"
+    else:
+        label = "No outlets yet"
+    return {
+        "outlets": outlets,
+        "tier_mix": mix,
+        "best_tier": best_tier,
+        "corroborated": corroborated,
+        "label": label,
+    }
+
+
+async def _search_story_ids(
+    session: AsyncSession,
+    query: str,
+    limit: int = 50,
+) -> list:
+    """Ranked story search over article headlines (English preferred).
+
+    pg_trgm similarity ranking on Postgres; ILIKE fallback elsewhere (tests).
+    Searches both the translated and original headlines so a French query can
+    still find the story via its English translation and vice versa. Returns
+    story ids ordered best match first.
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+    trigram = await _trigram_available(session)
+
+    rep_join = (
+        select(ReportingUnit.id, StoryUnitLink.story_id)
+        .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
+        .subquery()
+    )
+
+    if trigram:
+        from sqlalchemy import text as _text
+
+        # Similarity against the English headline first, then the original;
+        # take the better of the two so neither language is penalized.
+        sim = func.greatest(
+            func.similarity(func.coalesce(RawArticle.title_en, ""), query),
+            func.similarity(func.coalesce(RawArticle.title, ""), query),
+        )
+        stmt = (
+            select(rep_join.c.story_id, func.max(sim).label("score"))
+            .join(
+                ReportingUnit,
+                ReportingUnit.id == rep_join.c.id,
+            )
+            .join(
+                RawArticle,
+                RawArticle.id == ReportingUnit.representative_article_id,
+            )
+            .where(
+                or_(
+                    _text("COALESCE(raw_articles.title_en, '') % :q").bindparams(q=query),
+                    _text("COALESCE(raw_articles.title, '') % :q").bindparams(q=query),
+                )
+            )
+            .group_by(rep_join.c.story_id)
+            .order_by(desc("score"))
+            .limit(limit)
+        )
+    else:
+        like = f"%{query}%"
+        stmt = (
+            select(rep_join.c.story_id, func.max(RawArticle.fetched_at).label("score"))
+            .join(ReportingUnit, ReportingUnit.id == rep_join.c.id)
+            .join(RawArticle, RawArticle.id == ReportingUnit.representative_article_id)
+            .where(
+                or_(
+                    RawArticle.title_en.ilike(like),
+                    RawArticle.title.ilike(like),
+                )
+            )
+            .group_by(rep_join.c.story_id)
+            .order_by(desc("score"))
+            .limit(limit)
+        )
+    result = await session.execute(stmt)
+    return [row[0] for row in result.all()]
+
+
 # Globe API endpoints
 def _resolve_window(
     hours: int,
@@ -1139,13 +1340,15 @@ async def get_globe_events(
     hours: int = MAP_DEFAULT_WINDOW_HOURS,
     min_tier1_sources: int = None,
     limit: int = 500,
+    tiers: str = None,
 ):
     """Get events as GeoJSON FeatureCollection for globe visualization.
 
     Public and read only. The default window is the last MAP_DEFAULT_WINDOW_HOURS
     hours filtered to corroborated events (tier1_source_count >= 2, the same
     threshold apply_tier1_gate uses for stories); pass hours=0 for all time and
-    min_tier1_sources=0 to turn the corroboration filter off.
+    min_tier1_sources=0 to turn the corroboration filter off. tiers (e.g.
+    "1,2") keeps only events whose story has a unit in an included tier.
     """
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -1159,6 +1362,7 @@ async def get_globe_events(
 
     async with get_session() as session:
         stmt = select(Event).options(selectinload(Event.geometry), selectinload(Event.layer))
+        stmt = _apply_story_tier_filter(stmt, _parse_tiers(tiers))
 
         conditions = _event_conditions(
             layer_id=layer_id,
@@ -1414,11 +1618,27 @@ async def get_map_freshness(request: Request):
         return await _collect_map_freshness(session, now)
 
 
-def _public_story_summary(story: Story, headline: str, event_count: int, latest: datetime) -> dict:
-    """Public projection of one Story: what the pipeline corroborated, nothing else."""
+def _public_story_summary(
+    story: Story,
+    headline: str,
+    event_count: int,
+    latest: datetime,
+    headline_en: str | None = None,
+    lang: str | None = None,
+) -> dict:
+    """Public projection of one Story: what the pipeline corroborated, nothing else.
+
+    headline_en is the translated headline when the original is not English;
+    the display headline prefers it (COALESCE semantics: English when
+    available, original otherwise, never stored twice). lang tags the original
+    language so a translated headline is honest about its source.
+    """
     return {
         "story_id": str(story.id),
-        "headline": headline or "Untitled story",
+        "headline": headline_en or headline or "Untitled story",
+        "headline_original": headline or "Untitled story",
+        "lang": lang,
+        "translated": bool(headline_en and headline_en != headline),
         "outlets": int(story.distinct_owners or 0),
         "tier1_units": int(story.tier1_unit_count or 0),
         "units": (
@@ -1434,6 +1654,7 @@ def _public_story_summary(story: Story, headline: str, event_count: int, latest:
             int(story.tier1_unit_count or 0) >= MAP_CORROBORATION_MIN_TIER1
             and int(story.distinct_owners or 0) >= MAP_CORROBORATION_MIN_OWNERS
         ),
+        "verification": _verification_badge(story),
         "href": f"/stories/{story.id}",
     }
 
@@ -1444,18 +1665,42 @@ async def _collect_top_stories(
     min_owners: int = MAP_CORROBORATION_MIN_OWNERS,
     limit: int = MAP_TOP_STORIES_DEFAULT_LIMIT,
     now: datetime = None,
+    tiers: list[int] | None = None,
+    sort: str = "top",
+    q: str | None = None,
+    start: datetime = None,
+    end: datetime = None,
 ) -> list:
     """Stories ranked by independent outlet count, using the existing gate fields.
 
-    Ordering is Story.distinct_owners first, then Story.tier1_unit_count, then
-    recency: the same corroboration the map's default view filters on. min_owners
-    of 0 turns the gate filter off so full history stays reachable from the UI.
+    Discovery controls:
+      tiers: only stories with at least one unit in these tiers (e.g. [1, 2]
+        hides tier-3-only stories). None means all tiers.
+      sort: "top" (corroboration rank), "newest", or "oldest" by latest event.
+      q: ranked topic search over headlines; overrides sort with best-match order.
+      start/end: explicit ISO window on event start_time; wins over hours.
+
+    Near-duplicate headlines (same story from several outlets, or the same
+    wire copy in two languages) collapse to one entry: the highest-ranked
+    story per normalized English headline wins. The UI shows one row per
+    story, never five rows for five outlets.
     """
     now = now or datetime.now(timezone.utc)
-    window_start, _ = _resolve_window(hours, now)
+    if start is not None or end is not None:
+        window_start, window_end = start, now if end is None else end
+    else:
+        window_start, window_end = _resolve_window(hours, now)
     limit = max(1, min(int(limit or MAP_TOP_STORIES_DEFAULT_LIMIT), MAP_TOP_STORIES_MAX_LIMIT))
 
     from sqlalchemy.orm import selectinload
+
+    # Ranked search short-circuits the normal listing: fetch matching story
+    # ids in best-match order, then hydrate in that order.
+    search_order: list | None = None
+    if q and q.strip():
+        search_order = await _search_story_ids(session, q.strip(), limit=limit * 2)
+        if not search_order:
+            return []
 
     event_stmt = (
         select(
@@ -1467,25 +1712,42 @@ async def _collect_top_stories(
     )
     if window_start is not None:
         event_stmt = event_stmt.where(Event.start_time >= window_start)
+    if window_end is not None:
+        event_stmt = event_stmt.where(Event.start_time <= window_end)
     event_stmt = event_stmt.subquery()
 
     stmt = (
         select(Story, event_stmt.c.event_count, event_stmt.c.latest_at)
         .join(event_stmt, event_stmt.c.story_id == Story.id)
         .options(selectinload(Story.units).selectinload(ReportingUnit.representative))
-        .order_by(
-            desc(Story.distinct_owners),
-            desc(Story.tier1_unit_count),
-            desc(event_stmt.c.latest_at),
-        )
-        .limit(limit)
     )
 
-    if min_owners and int(min_owners) > 0:
+    tier_condition = _tier_include_condition(tiers)
+    if tier_condition is not None:
+        stmt = stmt.where(tier_condition)
+
+    if search_order is not None:
+        stmt = stmt.where(Story.id.in_(search_order))
+    elif min_owners and int(min_owners) > 0:
         stmt = stmt.where(
             Story.distinct_owners >= int(min_owners),
             Story.tier1_unit_count >= MAP_CORROBORATION_MIN_TIER1,
         )
+
+    if search_order is not None:
+        # Hydrate then order by the search ranking in Python (portable).
+        pass
+    elif sort == "newest":
+        stmt = stmt.order_by(desc(event_stmt.c.latest_at))
+    elif sort == "oldest":
+        stmt = stmt.order_by(event_stmt.c.latest_at.asc())
+    else:  # "top": corroboration rank, the default
+        stmt = stmt.order_by(
+            desc(Story.distinct_owners),
+            desc(Story.tier1_unit_count),
+            desc(event_stmt.c.latest_at),
+        )
+    stmt = stmt.limit(limit * 2)  # over-fetch: near-dupe collapsing trims below
 
     result = await session.execute(stmt)
     rows = result.all()
@@ -1493,13 +1755,42 @@ async def _collect_top_stories(
     summaries = []
     for story, event_count, latest_at in rows:
         headline = ""
+        headline_en = None
+        lang = None
         for unit in story.units:
             representative = getattr(unit, "representative", None)
             if representative is not None and representative.title:
                 headline = representative.title
+                headline_en = getattr(representative, "title_en", None) or None
+                lang = getattr(representative, "detected_language", None) or None
                 break
-        summaries.append(_public_story_summary(story, headline, event_count or 0, latest_at))
-    return summaries
+        summaries.append(
+            (
+                story,
+                _public_story_summary(
+                    story, headline, event_count or 0, latest_at,
+                    headline_en=headline_en, lang=lang,
+                ),
+            )
+        )
+
+    if search_order is not None:
+        rank = {str(sid): i for i, sid in enumerate(search_order)}
+        summaries.sort(key=lambda pair: rank.get(str(pair[0].id), 10**9))
+
+    # Collapse near-duplicates: same normalized English headline, one entry.
+    seen: set[str] = set()
+    deduped = []
+    for story, summary in summaries:
+        key = normalize_headline(summary["headline"])
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        deduped.append(summary)
+        if len(deduped) >= limit:
+            break
+    return deduped
 
 
 @app.get("/api/map/stories")
@@ -1508,11 +1799,34 @@ async def get_map_stories(
     hours: int = MAP_DEFAULT_WINDOW_HOURS,
     min_owners: int = MAP_CORROBORATION_MIN_OWNERS,
     limit: int = MAP_TOP_STORIES_DEFAULT_LIMIT,
+    tiers: str = None,
+    sort: str = "top",
+    q: str = None,
+    start: str = None,
+    end: str = None,
 ):
-    """Top stories for the public map list, ranked by corroboration. Read only."""
+    """Top stories for the public map list, ranked by corroboration. Read only.
+
+    Discovery params: tiers (comma list like "1,2", stories need a unit in an
+    included tier), sort (top|newest|oldest), q (ranked topic search over
+    headlines), start/end (ISO 8601 window on event time, wins over hours).
+    """
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return {"error": db_msg}
+
+    if sort not in ("top", "newest", "oldest"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="sort must be one of: top, newest, oldest.",
+        )
+    start_dt = _parse_iso_timestamp(start, "start") if start else None
+    end_dt = _parse_iso_timestamp(end, "end") if end else None
+    if start_dt and end_dt and start_dt > end_dt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start must be earlier than or equal to end.",
+        )
 
     async with get_session() as session:
         stories = await _collect_top_stories(
@@ -1520,6 +1834,11 @@ async def get_map_stories(
             hours=hours,
             min_owners=min_owners,
             limit=limit,
+            tiers=_parse_tiers(tiers),
+            sort=sort,
+            q=q,
+            start=start_dt,
+            end=end_dt,
         )
 
     return {
@@ -1527,6 +1846,9 @@ async def get_map_stories(
         "count": len(stories),
         "window_hours": hours,
         "min_owners": min_owners,
+        "tiers": tiers,
+        "sort": sort,
+        "q": q,
     }
 
 
@@ -1561,13 +1883,21 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
             representative = getattr(unit, "representative", None)
             if representative is None:
                 continue
+            title_en = getattr(representative, "title_en", None) or None
+            lang = getattr(representative, "detected_language", None) or None
+            tier_value = (
+                representative.source_tier.value if representative.source_tier else None
+            )
+            tier_num = {"tier1": 1, "tier2": 2, "tier3": 3, "tier4": 4}.get(tier_value)
             articles.append({
-                "title": representative.title,
+                "title": title_en or representative.title,
+                "title_original": representative.title,
+                "lang": lang,
+                "translated": bool(title_en and title_en != representative.title),
                 "url": representative.url,
                 "source_domain": representative.source_domain,
-                "source_tier": (
-                    representative.source_tier.value if representative.source_tier else None
-                ),
+                "source_tier": tier_value,
+                "tier_num": tier_num,
                 "published_at": representative.published_at,
             })
         articles.sort(
@@ -1604,6 +1934,7 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
             int(story.tier1_unit_count or 0) >= MAP_CORROBORATION_MIN_TIER1
             and int(story.distinct_owners or 0) >= MAP_CORROBORATION_MIN_OWNERS
         ),
+        "verification": _verification_badge(story),
         "events": [
             {
                 "location_name": event.location_name,
@@ -1668,6 +1999,7 @@ async def get_map_replay(
     event_type: str = None,
     min_tier1_sources: int = None,
     limit: int = MAP_REPLAY_DEFAULT_LIMIT,
+    tiers: str = None,
 ):
     """Get a chronological event window for the flat map's replay scrubber.
 
@@ -1707,6 +2039,7 @@ async def get_map_replay(
 
     async with get_session() as session:
         stmt = select(Event).options(selectinload(Event.geometry), selectinload(Event.layer))
+        stmt = _apply_story_tier_filter(stmt, _parse_tiers(tiers))
 
         conditions = _event_conditions(
             event_type=event_type,
@@ -1753,21 +2086,39 @@ async def globe_page(request: Request):
 
 # Flat map page route
 @app.get("/map", response_class=HTMLResponse)
-async def map_page(request: Request):
+async def map_page(
+    request: Request,
+    tiers: str = None,
+    sort: str = "top",
+    q: str = None,
+    hours: int = MAP_DEFAULT_WINDOW_HOURS,
+):
     """Flat 2D map visualization page. Public and read only.
 
     The list of top stories and the freshness stamp are rendered server side so
     the page is useful before any JavaScript runs; map.js refreshes both from
-    the public JSON endpoints.
+    the public JSON endpoints. Discovery controls (tier filter, sort, search,
+    date window) are server-rendered in their initial state and stay in sync
+    with the query string, so first paint already reflects the reader's filters.
     """
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)
 
+    if sort not in ("top", "newest", "oldest"):
+        sort = "top"
+
     now = datetime.now(timezone.utc)
     async with get_session() as session:
         freshness = await _collect_map_freshness(session, now)
-        top_stories = await _collect_top_stories(session, now=now)
+        top_stories = await _collect_top_stories(
+            session,
+            now=now,
+            hours=hours,
+            tiers=_parse_tiers(tiers),
+            sort=sort,
+            q=q,
+        )
 
     return templates.TemplateResponse(request, "map.html", {
         "request": request,
@@ -1775,6 +2126,10 @@ async def map_page(request: Request):
         "top_stories": top_stories,
         "default_window_hours": MAP_DEFAULT_WINDOW_HOURS,
         "corroboration_min_tier1": MAP_CORROBORATION_MIN_TIER1,
+        "active_tiers": _parse_tiers(tiers) or [1, 2, 3, 4],
+        "active_sort": sort,
+        "active_q": q or "",
+        "active_hours": hours,
     })
 
 
