@@ -23,6 +23,7 @@ class RawArticle(Base):
         Index("ix_raw_articles_published_at", "published_at"),
         Index("ix_raw_articles_source_domain", "source_domain"),
         Index("ix_raw_articles_url_hash", "url_hash", unique=True),
+        Index("ix_raw_articles_terminal_state", "terminal_state"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -39,6 +40,18 @@ class RawArticle(Base):
     minhash_signature = Column(JSON, nullable=True)  # MinHash serialized
     content_hash = Column(String(64), nullable=True)  # For exact dedup
     reporting_unit_id = Column(UUID(as_uuid=True), ForeignKey("reporting_units.id"), nullable=True)
+    # Where this article ended up, so "we lost it" is distinguishable from "we dropped it
+    # on purpose". Written by the pipeline stages through src.shared.ledger.set_terminal_state.
+    # The vocabulary is closed, and the value is a single string so it needs no join to read:
+    #   pending                      row exists, not yet through dedupe, cluster, or geocode
+    #   dropped:<reason>             deliberately discarded, for example dropped:parse_failed
+    #   duplicate_of:<uuid>          deduped into the article named by the uuid
+    #   unit:<uuid>                  member of the reporting unit named by the uuid
+    #   story:<uuid>                 reached the story named by the uuid
+    #   candidate                    surfaced for curation, no story yet
+    # A row left at 'pending' long after ingestion is the orphan that
+    # scripts/check_orphans.py counts.
+    terminal_state = Column(Text, nullable=False, default="pending", server_default="pending")
 
 
 class ReportingUnit(Base):
@@ -752,3 +765,66 @@ class ArticleCorrection(Base):
 
     article = relationship("RawArticle")
     revision = relationship("ArticleRevision")
+
+
+class PipelineRun(Base):
+    """One row per stage per pipeline execution: what went in, what came out, what died.
+
+    The pipeline is a chain of stages (ingest_rss, dedupe, cluster, geocode), and until now
+    a stage that quietly lost half its input was indistinguishable from one that worked.
+    run_id groups every stage of a single execution, so a run that dies in geocode is still
+    legible: the ingest_rss row for that run_id says how many articles arrived and the
+    geocode row says how far the stage got before the error text was written.
+
+    The counters are declared by the stage, not measured, because measuring them would mean
+    the ledger knows what a stage does. items_in, items_out and items_dropped_by_reason are
+    whatever the stage reports, and a stage that reports nothing records zeros, which is
+    itself the honest answer for a stage that was not wired up yet.
+    """
+    __tablename__ = "pipeline_runs"
+    __table_args__ = (
+        Index("ix_pipeline_runs_run_id", "run_id"),
+        Index("ix_pipeline_runs_stage", "stage"),
+        Index("ix_pipeline_runs_started_at", "started_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Groups the stages of one execution. Not a foreign key: there is no runs table, and the
+    # grouping has to keep working for a run whose first stage failed before writing anything.
+    run_id = Column(UUID(as_uuid=True), nullable=False)
+    stage = Column(String(50), nullable=False)  # ingest_rss, dedupe, cluster, geocode, ...
+    started_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    finished_at = Column(DateTime(timezone=True), nullable=True)  # NULL while the stage is running
+    items_in = Column(Integer, nullable=False, default=0)
+    items_out = Column(Integer, nullable=False, default=0)
+    items_dropped_by_reason = Column(JSON, nullable=False, default=dict)  # {"parse_failed": 3, ...}
+    error = Column(Text, nullable=True)  # Exception text, NULL when the stage finished
+
+
+class DeadLetter(Base):
+    """An item the pipeline could not process, kept instead of silently discarded.
+
+    Two shapes, one table. Most dead letters point at an article row that exists but never
+    reached a story (article_id set, payload NULL). The rest are items that never became a
+    row at all, a feed entry that would not parse or a geocode call that returned nothing,
+    and those carry the item itself in payload with article_id NULL. Deleting the article
+    clears article_id rather than the letter, because the fact that the pipeline failed on it
+    outlives the article.
+    """
+    __tablename__ = "dead_letters"
+    __table_args__ = (
+        Index("ix_dead_letters_run_id", "run_id"),
+        Index("ix_dead_letters_article_id", "article_id"),
+        Index("ix_dead_letters_stage", "stage"),
+        Index("ix_dead_letters_created_at", "created_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(UUID(as_uuid=True), nullable=True)  # Execution that produced it, when known
+    stage = Column(String(50), nullable=False)  # Stage that gave up on the item
+    reason = Column(Text, nullable=False)  # Machine readable, e.g. parse_failed, geocode_empty
+    article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id", ondelete="SET NULL"), nullable=True)
+    payload = Column(JSON, nullable=True)  # The item itself, for items with no article row
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    article = relationship("RawArticle")
