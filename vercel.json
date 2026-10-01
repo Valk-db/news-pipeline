@@ -1,7 +1,1 @@
-{
-  "functions": {
-    "curation_ui/main.py": {
-      "maxDuration": 300
-    }
-  }
-}
+{"functions":{"api/index.py":{"maxDuration":60}},"rewrites":[{"destination":"/api/index","source":"/(.*)"}]}
