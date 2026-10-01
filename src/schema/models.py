@@ -667,3 +667,88 @@ class SourceTopicReliability(Base):
     sample_size = Column(Integer, nullable=False, default=0)
     snapshot_date = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class ArticleRevision(Base):
+    """One observed revision of an ingested article, written by the re-fetch scan.
+
+    raw_articles holds a single mutable snapshot of what a URL served when we first
+    ingested it, which is exactly the thing a stealth edit destroys. This table is the
+    append-only record of every *change* we observed afterwards: a new row per observed
+    content change, never an update to an older one.
+
+    There is no revision row for the ingested state itself. raw_articles.content_hash
+    plus raw_articles.body_text are that implicit revision 0, so an article that never
+    changes costs nothing (the free-tier storage budget is the reason revisions are not
+    stored body-for-body; only the hash, the diff summary, and an optional reference to
+    the transparency log are kept).
+
+    change_kind is the finding, not a verdict: ACKNOWLEDGED means the outlet published
+    a correction/update notice or bumped the displayed timestamp, STEALTH means the bytes
+    changed and nothing in the page admits to it. Supplied by src/verification/revisions.py.
+    """
+    __tablename__ = "article_revisions"
+    __table_args__ = (
+        Index("ix_article_revisions_article_id", "article_id"),
+        Index("ix_article_revisions_fetched_at", "fetched_at"),
+        Index("ix_article_revisions_content_hash", "content_hash"),
+        UniqueConstraint("article_id", "revision_number", name="uq_article_revision_number"),
+    )
+
+    class ChangeKind(str, PyEnum):
+        ACKNOWLEDGED = "acknowledged"  # Correction/update notice, or a newer displayed timestamp
+        STEALTH = "stealth"            # Content changed with no disclosure visible on the page
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id", ondelete="CASCADE"), nullable=False)
+    # 1 is the first change observed after the ingested baseline; increments per article.
+    revision_number = Column(Integer, nullable=False)
+    # NULL when this revision was the first change seen, i.e. it was diffed against the
+    # ingested body_text rather than against a stored revision.
+    previous_revision_id = Column(UUID(as_uuid=True), ForeignKey("article_revisions.id", ondelete="SET NULL"), nullable=True)
+    content_hash = Column(String(64), nullable=False)  # compute_content_hash, same function ingestion dedup uses
+    fetched_at = Column(DateTime(timezone=True), nullable=False)  # When *we* re-fetched it
+    displayed_at = Column(DateTime(timezone=True), nullable=True)  # Timestamp the page itself displayed, if any
+    change_kind = Column(Enum(ChangeKind, name="articlechangekind"), nullable=False, default=ChangeKind.STEALTH)
+    changed_paragraphs = Column(Integer, nullable=False, default=0)
+    diff_excerpt = Column(Text, nullable=True)  # Capped unified diff against the previous revision
+    diff_truncated = Column(Boolean, nullable=False, default=False)
+    correction_count = Column(Integer, nullable=False, default=0)  # Rows in article_corrections for this revision
+    # merkle_log_entries.index when this revision was appended to the transparency log.
+    # Nullable because the log is opt-in and (deliberately) has no migration yet.
+    log_index = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    article = relationship("RawArticle")
+
+
+class ArticleCorrection(Base):
+    """A correction or update notice seen in a revision's text, as a first-class event.
+
+    Distinct from CorrectionRecord, which models a correction a source published as its
+    own document with verbatim before/after text. This table records what *we* observed
+    in the article body at a known revision, which is all the archive can attest to: the
+    matched snippet, where it was found, and the revision it was found in.
+
+    The changed text such a notice refers to is recoverable from the parent revision's
+    diff_excerpt; linking a notice to individual pipeline-extracted claims is left open
+    because the claim extractor (src/verification/claims.py) does not report the
+    character offsets needed to join a notice to the claims it touches.
+    """
+    __tablename__ = "article_corrections"
+    __table_args__ = (
+        Index("ix_article_corrections_article_id", "article_id"),
+        Index("ix_article_corrections_revision_id", "revision_id"),
+        Index("ix_article_corrections_signal", "signal"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id", ondelete="CASCADE"), nullable=False)
+    revision_id = Column(UUID(as_uuid=True), ForeignKey("article_revisions.id", ondelete="CASCADE"), nullable=False)
+    signal = Column(String(50), nullable=False)  # Matched pattern label, e.g. "correction", "erratum"
+    location = Column(String(20), nullable=False)  # top, body, corrections_block
+    snippet = Column(Text, nullable=False)  # The matched text, capped
+    detected_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    article = relationship("RawArticle")
+    revision = relationship("ArticleRevision")
