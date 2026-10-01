@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="map">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>{{ headline }} · News Pipeline</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/map/map.css">
+</head>
+<body class="is-story-page">
+    <div class="story-public">
+        <header class="story-public-bar">
+            <a href="/map" class="story-public-back">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 12H5M11 5l-7 7 7 7"></path>
+                </svg>
+                <span>Back to the map</span>
+            </a>
+            <a href="/globe" class="story-public-back">Globe</a>
+        </header>
+
+        <main class="story-public-main">
+            <p class="story-public-eyebrow">
+                {% if corroborated %}Corroborated by {{ outlets }} independent outlet{{ '' if outlets == 1 else 's' }}
+                {%- else %}Awaiting a second independent outlet{% endif %}
+            </p>
+            <h1 class="story-public-headline">{{ headline }}</h1>
+            <p class="story-public-meta">
+                {{ tier1_units }} tier 1 unit{{ '' if tier1_units == 1 else 's' }} ·
+                {{ units }} reporting unit{{ '' if units == 1 else 's' }}
+                {%- if latest_at %} · latest {{ latest_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
+            </p>
+
+            {% if events %}
+            <section class="story-public-section" aria-label="Where this happened">
+                <h2 class="story-public-heading">Where it happened</h2>
+                <ul class="story-public-events">
+                    {% for event in events %}
+                    <li class="story-public-event">
+                        <span class="story-public-event-where">{{ event.location_name or 'Unknown location' }}</span>
+                        <span class="story-public-event-meta">
+                            {{ event.event_type or 'other' }} ·
+                            {{ event.start_time.strftime('%Y-%m-%d %H:%M UTC') if event.start_time else 'time unknown' }} ·
+                            {{ event.tier1_source_count or 0 }} tier 1 source{{ '' if (event.tier1_source_count or 0) == 1 else 's' }}
+                        </span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </section>
+            {% endif %}
+
+            {% if articles %}
+            <section class="story-public-section" aria-label="Sources">
+                <h2 class="story-public-heading">Sources</h2>
+                <ul class="story-public-sources">
+                    {% for article in articles %}
+                    <li class="story-public-source">
+                        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">{{ article.title }}</a>
+                        <span class="story-public-source-meta">
+                            {{ article.source_domain }}
+                            {%- if article.source_tier %} · tier {{ article.source_tier }}{% endif %}
+                            {%- if article.published_at %} · {{ article.published_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
+                        </span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </section>
+            {% else %}
+            <section class="story-public-section" aria-label="Sources">
+                <h2 class="story-public-heading">Sources</h2>
+                <p class="story-public-empty">No source articles are attached to this story yet.</p>
+            </section>
+            {% endif %}
+        </main>
+    </div>
+</body>
+</html>
