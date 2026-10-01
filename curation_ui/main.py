@@ -31,7 +31,7 @@ from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, C
 from src.shared.llm import get_llm_client, validate_caption, build_deterministic_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid
 import os
 
@@ -837,7 +837,14 @@ async def mark_posted(post_id: uuid.UUID, request: Request, user: str = Depends(
 
 @app.get("/api/stories/{story_id}/viewpoints")
 async def get_story_viewpoints(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
-    """Get all viewpoint sub-clusters for a story."""
+    """Get all viewpoint sub-clusters for a story.
+
+    Stays behind auth even though it exposes no gate notes: the payload is the
+    gate's own input (tier counts and distinct_owners per perspective, which is
+    what apply_tier1_gate weighs) over stories of any status, so publishing it
+    would hand anonymous readers the curation queue's decisions before curation
+    has made them.
+    """
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return {"error": db_msg}
@@ -919,7 +926,13 @@ async def get_story_viewpoints(story_id: uuid.UUID, request: Request, user: str 
 
 @app.get("/api/stories/{story_id}/sources")
 async def get_story_sources(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
-    """Get source breakdown for a story (tiers, owners, geographic)."""
+    """Get source breakdown for a story (tiers, owners, geographic).
+
+    Stays behind auth: the per-tier and per-owner distributions are the
+    clustering pipeline's internal view of how ownership is grouped for the
+    gate, and the story is looked up by id regardless of status, so it also
+    reads across stories a curator has not published yet.
+    """
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return {"error": db_msg}
@@ -972,6 +985,32 @@ async def get_story_sources(story_id: uuid.UUID, request: Request, user: str = D
     }
 
 
+# Public map defaults.
+#
+# Corroboration is not a Story.status value: Story.Status has no
+# "corroborated" member. The pipeline expresses it through the tier 1 counts,
+# and apply_tier1_gate in src/verification/tiers.py queues a story only when
+# at least 2 tier 1 units arrive from at least 2 distinct owner groups. The
+# map reuses exactly that rule rather than inventing a new status: stories
+# need tier1_unit_count >= 2 and distinct_owners >= 2, and an event counts as
+# corroborated when its tier1_source_count reaches the same threshold.
+MAP_CORROBORATION_MIN_TIER1 = 2
+MAP_CORROBORATION_MIN_OWNERS = 2
+
+# The default window for a map that loads with no explicit filters. Kept in
+# the 24 to 48 hour band; wider windows are an explicit user choice.
+MAP_DEFAULT_WINDOW_HOURS = 48
+MAP_MAX_WINDOW_HOURS = 24 * 365
+
+# Freshness stamp window and query guards.
+MAP_FRESHNESS_WINDOW_HOURS = 24
+MAP_FRESHNESS_OUTLET_STORY_CAP = 5000
+
+# Top stories list.
+MAP_TOP_STORIES_DEFAULT_LIMIT = 12
+MAP_TOP_STORIES_MAX_LIMIT = 50
+
+
 def _event_conditions(
     layer_id: uuid.UUID = None,
     event_type: str = None,
@@ -979,11 +1018,13 @@ def _event_conditions(
     bbox: str = None,
     start: datetime = None,
     end: datetime = None,
+    min_tier1_sources: int = None,
 ) -> list:
     """Build the WHERE clauses shared by the event GeoJSON endpoints.
 
     An unparseable bbox is ignored (matches the historical globe behavior);
     start/end arrive already parsed by _parse_iso_timestamp.
+    min_tier1_sources applies the tier 1 corroboration threshold.
     """
     conditions = []
     if layer_id:
@@ -992,6 +1033,8 @@ def _event_conditions(
         conditions.append(Event.event_type == event_type)
     if min_confidence:
         conditions.append(Event.confidence.cast(Float) >= min_confidence)
+    if min_tier1_sources:
+        conditions.append(Event.tier1_source_count >= min_tier1_sources)
     if bbox:
         try:
             min_lon, min_lat, max_lon, max_lat = map(float, bbox.split(","))
@@ -1054,23 +1097,65 @@ def _event_feature(event: Event) -> dict:
 
 
 # Globe API endpoints
+def _resolve_window(
+    hours: int,
+    now: datetime,
+) -> Tuple[datetime, datetime]:
+    """Turn an hours-bounded window into an inclusive (start, end) pair.
+
+    hours of None or 0 means unbounded, which is how the UI asks for full
+    history explicitly. The upper bound is "now", so a request can never reach
+    into the future.
+    """
+    if not hours or hours <= 0:
+        return None, now
+    hours = min(int(hours), MAP_MAX_WINDOW_HOURS)
+    return now - timedelta(hours=hours), now
+
+
+def _corroboration_filter(min_tier1_sources: int) -> int:
+    """Normalize the tier 1 corroboration threshold.
+
+    None keeps the endpoint default (the 2 tier 1 threshold the pipeline gate
+    uses). 0 or less means "no corroboration filter", which is what the UI
+    sends when someone turns the filter off.
+    """
+    if min_tier1_sources is None:
+        return MAP_CORROBORATION_MIN_TIER1
+    try:
+        value = int(min_tier1_sources)
+    except (TypeError, ValueError):
+        return MAP_CORROBORATION_MIN_TIER1
+    return max(0, value)
+
+
 @app.get("/api/globe/events")
 async def get_globe_events(
     request: Request,
-    user: str = Depends(require_auth),
     layer_id: uuid.UUID = None,
     event_type: str = None,
     min_confidence: float = None,
     bbox: str = None,  # min_lon,min_lat,max_lon,max_lat
+    hours: int = MAP_DEFAULT_WINDOW_HOURS,
+    min_tier1_sources: int = None,
     limit: int = 500,
 ):
-    """Get events as GeoJSON FeatureCollection for globe visualization."""
+    """Get events as GeoJSON FeatureCollection for globe visualization.
+
+    Public and read only. The default window is the last MAP_DEFAULT_WINDOW_HOURS
+    hours filtered to corroborated events (tier1_source_count >= 2, the same
+    threshold apply_tier1_gate uses for stories); pass hours=0 for all time and
+    min_tier1_sources=0 to turn the corroboration filter off.
+    """
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return {"error": db_msg}
 
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
+
+    window_start, window_end = _resolve_window(hours, datetime.now(timezone.utc))
+    threshold = _corroboration_filter(min_tier1_sources)
 
     async with get_session() as session:
         stmt = select(Event).options(selectinload(Event.geometry), selectinload(Event.layer))
@@ -1080,6 +1165,9 @@ async def get_globe_events(
             event_type=event_type,
             min_confidence=min_confidence,
             bbox=bbox,
+            start=window_start,
+            end=window_end,
+            min_tier1_sources=threshold or None,
         )
         if conditions:
             stmt = stmt.where(and_(*conditions))
@@ -1094,7 +1182,6 @@ async def get_globe_events(
 @app.get("/api/globe/stats")
 async def get_globe_stats(
     request: Request,
-    user: str = Depends(require_auth),
 ):
     """Get globe statistics."""
     db_ok, db_msg = check_database_available()
@@ -1144,7 +1231,6 @@ async def get_globe_stats(
 @app.get("/api/globe/layers")
 async def get_globe_layers(
     request: Request,
-    user: str = Depends(require_auth),
 ):
     """Get all event layers for globe visualization."""
     db_ok, db_msg = check_database_available()
@@ -1175,6 +1261,361 @@ async def get_globe_layers(
                 for layer in layers
             ]
         }
+
+
+# Public map surfaces: top stories list, per story page and the freshness stamp.
+#
+# Everything below is read only and anonymous safe. The serializer deliberately
+# omits the curation queue's internal fields (Story.status, Story.gate_reason,
+# CuratedPost rows, claim evidence), so nothing here reports what a curator has
+# decided or is about to decide.
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Read a timestamp back as aware UTC.
+
+    SQLite has no timezone type, so a DateTime(timezone=True) column comes back
+    naive there. Event.start_time and Story.updated_at are both stored as UTC,
+    so tagging it is the correct read rather than a guess.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _relative_age(latest_at: datetime, now: datetime) -> str:
+    """Coarse age string for the freshness stamp. Never negative, never NaN."""
+    if latest_at is None:
+        return ""
+    latest_at = _as_utc(latest_at)
+    now = _as_utc(now)
+    seconds = (now - latest_at).total_seconds()
+    if seconds < 0:
+        seconds = 0.0
+    minutes = int(seconds // 60)
+    if minutes < 2:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes} min ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hour{'' if hours == 1 else 's'} ago"
+    days = hours // 24
+    return f"{days} day{'' if days == 1 else 's'} ago"
+
+
+def format_freshness_stamp(
+    latest_at: datetime,
+    outlet_count: int,
+    corroborated_events: int,
+    now: datetime,
+    window_hours: int = MAP_FRESHNESS_WINDOW_HOURS,
+) -> str:
+    """Render the map's freshness line from already counted numbers.
+
+    Pure so the empty and stale cases are testable without a database. With no
+    timestamp at all the line says so plainly instead of showing zeroes as if
+    they were measurements.
+    """
+    outlets = max(0, int(outlet_count or 0))
+    corroborated = max(0, int(corroborated_events or 0))
+    window = f"({window_hours}h)"
+
+    if latest_at is None:
+        return "No events recorded yet"
+
+    age = _relative_age(latest_at, now)
+    corroborated_part = f"{corroborated} corroborated event{'' if corroborated == 1 else 's'} {window}"
+    # "No corroborated events" is the honest line when outlets exist in the
+    # window but none of them clear the gate. With zero outlets there is
+    # nothing behind the window at all, so the plain updated line reads better
+    # than a denial about corroboration.
+    if corroborated or outlets == 0:
+        return f"Updated {age}, {outlets} outlet{'' if outlets == 1 else 's'}, {corroborated_part}"
+    return f"No corroborated events {window}, {outlets} outlet{'' if outlets == 1 else 's'}, last event {age}"
+
+
+async def _collect_map_freshness(session: AsyncSession, now: datetime) -> dict:
+    """Gather the raw numbers behind the freshness stamp.
+
+    Outlet counts come from the same chain the map pages read: distinct
+    (story, source_domain) pairs across the reporting units of every story,
+    so one outlet covering one story counts once no matter how many units it
+    fed. The pair count is deliberately not windowed: a quiet day should still
+    show the outlets behind the older stories. The story set is capped so the
+    stamp cannot turn into a full table scan of the article table.
+    """
+    window_start = now - timedelta(hours=MAP_FRESHNESS_WINDOW_HOURS)
+
+    latest_event = (
+        await session.execute(select(func.max(Event.start_time)))
+    ).scalar()
+    latest_story = (
+        await session.execute(select(func.max(Story.updated_at)))
+    ).scalar()
+    # Event times drive the stamp: a story row touched by curation today whose
+    # events are six days old is stale map data, not a fresh update. The story
+    # timestamp is only a fallback for a database that has stories but no
+    # geocoded events yet.
+    latest_at = _as_utc(latest_event)
+    if latest_at is None:
+        latest_at = _as_utc(latest_story)
+
+    corroborated_events = (
+        await session.execute(
+            select(func.count(Event.id)).where(
+                Event.start_time >= window_start,
+                Event.tier1_source_count >= MAP_CORROBORATION_MIN_TIER1,
+            )
+        )
+    ).scalar() or 0
+
+    outlet_pairs = (
+        select(StoryUnitLink.story_id, RawArticle.source_domain)
+        .select_from(RawArticle)
+        .join(ReportingUnit, ReportingUnit.representative_article_id == RawArticle.id)
+        .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
+        .where(
+            StoryUnitLink.story_id.in_(
+                select(Story.id).limit(MAP_FRESHNESS_OUTLET_STORY_CAP)
+            )
+        )
+        .distinct()
+        .subquery()
+    )
+    outlet_count = (
+        await session.execute(select(func.count()).select_from(outlet_pairs))
+    ).scalar() or 0
+
+    return {
+        "stamp": format_freshness_stamp(latest_at, outlet_count, corroborated_events, now),
+        "latest_at": latest_at.isoformat() if latest_at is not None else None,
+        "updated_minutes_ago": (
+            int(max(0.0, (_as_utc(now) - latest_at).total_seconds()) // 60)
+            if latest_at is not None else None
+        ),
+        "outlets": max(0, int(outlet_count or 0)),
+        "corroborated_events": max(0, int(corroborated_events or 0)),
+        "window_hours": MAP_FRESHNESS_WINDOW_HOURS,
+    }
+
+
+@app.get("/api/map/freshness")
+async def get_map_freshness(request: Request):
+    """Freshness stamp for the public map. Read only, degrades to an empty stamp."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    now = datetime.now(timezone.utc)
+    async with get_session() as session:
+        return await _collect_map_freshness(session, now)
+
+
+def _public_story_summary(story: Story, headline: str, event_count: int, latest: datetime) -> dict:
+    """Public projection of one Story: what the pipeline corroborated, nothing else."""
+    return {
+        "story_id": str(story.id),
+        "headline": headline or "Untitled story",
+        "outlets": int(story.distinct_owners or 0),
+        "tier1_units": int(story.tier1_unit_count or 0),
+        "units": (
+            int(story.tier1_unit_count or 0)
+            + int(story.tier2_unit_count or 0)
+            + int(story.tier3_unit_count or 0)
+            + int(story.tier4_unit_count or 0)
+        ),
+        "event_count": int(event_count or 0),
+        "day": story.day.isoformat() if story.day else None,
+        "latest_at": latest.isoformat() if latest else None,
+        "corroborated": (
+            int(story.tier1_unit_count or 0) >= MAP_CORROBORATION_MIN_TIER1
+            and int(story.distinct_owners or 0) >= MAP_CORROBORATION_MIN_OWNERS
+        ),
+        "href": f"/stories/{story.id}",
+    }
+
+
+async def _collect_top_stories(
+    session: AsyncSession,
+    hours: int = MAP_DEFAULT_WINDOW_HOURS,
+    min_owners: int = MAP_CORROBORATION_MIN_OWNERS,
+    limit: int = MAP_TOP_STORIES_DEFAULT_LIMIT,
+    now: datetime = None,
+) -> list:
+    """Stories ranked by independent outlet count, using the existing gate fields.
+
+    Ordering is Story.distinct_owners first, then Story.tier1_unit_count, then
+    recency: the same corroboration the map's default view filters on. min_owners
+    of 0 turns the gate filter off so full history stays reachable from the UI.
+    """
+    now = now or datetime.now(timezone.utc)
+    window_start, _ = _resolve_window(hours, now)
+    limit = max(1, min(int(limit or MAP_TOP_STORIES_DEFAULT_LIMIT), MAP_TOP_STORIES_MAX_LIMIT))
+
+    from sqlalchemy.orm import selectinload
+
+    event_stmt = (
+        select(
+            Event.story_id,
+            func.count(Event.id).label("event_count"),
+            func.max(Event.start_time).label("latest_at"),
+        )
+        .group_by(Event.story_id)
+    )
+    if window_start is not None:
+        event_stmt = event_stmt.where(Event.start_time >= window_start)
+    event_stmt = event_stmt.subquery()
+
+    stmt = (
+        select(Story, event_stmt.c.event_count, event_stmt.c.latest_at)
+        .join(event_stmt, event_stmt.c.story_id == Story.id)
+        .options(selectinload(Story.units).selectinload(ReportingUnit.representative))
+        .order_by(
+            desc(Story.distinct_owners),
+            desc(Story.tier1_unit_count),
+            desc(event_stmt.c.latest_at),
+        )
+        .limit(limit)
+    )
+
+    if min_owners and int(min_owners) > 0:
+        stmt = stmt.where(
+            Story.distinct_owners >= int(min_owners),
+            Story.tier1_unit_count >= MAP_CORROBORATION_MIN_TIER1,
+        )
+
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    summaries = []
+    for story, event_count, latest_at in rows:
+        headline = ""
+        for unit in story.units:
+            representative = getattr(unit, "representative", None)
+            if representative is not None and representative.title:
+                headline = representative.title
+                break
+        summaries.append(_public_story_summary(story, headline, event_count or 0, latest_at))
+    return summaries
+
+
+@app.get("/api/map/stories")
+async def get_map_stories(
+    request: Request,
+    hours: int = MAP_DEFAULT_WINDOW_HOURS,
+    min_owners: int = MAP_CORROBORATION_MIN_OWNERS,
+    limit: int = MAP_TOP_STORIES_DEFAULT_LIMIT,
+):
+    """Top stories for the public map list, ranked by corroboration. Read only."""
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return {"error": db_msg}
+
+    async with get_session() as session:
+        stories = await _collect_top_stories(
+            session,
+            hours=hours,
+            min_owners=min_owners,
+            limit=limit,
+        )
+
+    return {
+        "stories": stories,
+        "count": len(stories),
+        "window_hours": hours,
+        "min_owners": min_owners,
+    }
+
+
+@app.get("/stories/{story_id}", response_class=HTMLResponse)
+async def public_story_page(story_id: uuid.UUID, request: Request):
+    """Public read only view of one story's corroboration.
+
+    Shows the source articles and the corroboration counts, and nothing about
+    the curation queue: no status, no gate reason, no curator decisions.
+    """
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return render_error_page(request, db_msg)
+
+    async with get_session() as session:
+        stmt = select(Story).where(Story.id == story_id)
+        result = await session.execute(stmt)
+        story = result.scalar_one_or_none()
+        if not story:
+            raise HTTPException(404, "Story not found")
+
+        units_stmt = (
+            select(ReportingUnit)
+            .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
+            .where(StoryUnitLink.story_id == story_id)
+        )
+        units_result = await session.execute(units_stmt)
+        units = units_result.scalars().all()
+
+        articles = []
+        for unit in units:
+            representative = getattr(unit, "representative", None)
+            if representative is None:
+                continue
+            articles.append({
+                "title": representative.title,
+                "url": representative.url,
+                "source_domain": representative.source_domain,
+                "source_tier": (
+                    representative.source_tier.value if representative.source_tier else None
+                ),
+                "published_at": representative.published_at,
+            })
+        articles.sort(
+            key=lambda item: (item["published_at"] is None, item["published_at"]),
+            reverse=False,
+        )
+
+        events_stmt = (
+            select(Event)
+            .where(Event.story_id == story_id)
+            .order_by(desc(Event.start_time))
+        )
+        events_result = await session.execute(events_stmt)
+        events = events_result.scalars().all()
+
+        latest_at = max(
+            (event.start_time for event in events if event.start_time is not None),
+            default=None,
+        )
+
+    headline = next((item["title"] for item in articles if item["title"]), "Untitled story")
+
+    return templates.TemplateResponse(request, "story.html", {
+        "request": request,
+        "story_id": str(story.id),
+        "headline": headline,
+        "articles": articles,
+        "outlets": int(story.distinct_owners or 0),
+        "tier1_units": int(story.tier1_unit_count or 0),
+        "units": len(units),
+        "day": story.day,
+        "latest_at": latest_at,
+        "corroborated": (
+            int(story.tier1_unit_count or 0) >= MAP_CORROBORATION_MIN_TIER1
+            and int(story.distinct_owners or 0) >= MAP_CORROBORATION_MIN_OWNERS
+        ),
+        "events": [
+            {
+                "location_name": event.location_name,
+                "event_type": event.event_type.value if event.event_type else None,
+                "start_time": event.start_time,
+                "confidence": float(event.confidence) if event.confidence is not None else None,
+                "source_count": event.source_count,
+                "tier1_source_count": event.tier1_source_count,
+            }
+            for event in events
+        ],
+    })
 
 
 # Map replay API
@@ -1222,19 +1663,24 @@ def _parse_iso_timestamp(value: str, param: str) -> datetime | None:
 @app.get("/api/map/replay")
 async def get_map_replay(
     request: Request,
-    user: str = Depends(require_auth),
     start: str = None,  # ISO 8601, inclusive
     end: str = None,  # ISO 8601, inclusive
     event_type: str = None,
+    min_tier1_sources: int = None,
     limit: int = MAP_REPLAY_DEFAULT_LIMIT,
 ):
     """Get a chronological event window for the flat map's replay scrubber.
 
-    Same auth and same event query path as /api/globe/events, ordered oldest
-    first so the client can reveal markers by start_time. start/end bound the
-    window inclusively and are optional (absent = unbounded). The window is
-    fetched worldwide rather than per-bbox: the scrubber has to hold the whole
-    timeline to jump anywhere, and panning mid-replay must not drop markers.
+    Public and read only, same event query path as /api/globe/events, ordered
+    oldest first so the client can reveal markers by start_time. start/end
+    bound the window inclusively and are optional (absent = unbounded). The
+    window is fetched worldwide rather than per-bbox: the scrubber has to hold
+    the whole timeline to jump anywhere, and panning mid-replay must not drop
+    markers.
+
+    min_tier1_sources defaults to the corroboration threshold
+    (MAP_CORROBORATION_MIN_TIER1); pass 0 for every event regardless of how
+    many tier 1 outlets carry it.
 
     Returns a GeoJSON FeatureCollection (identical feature shape to
     /api/globe/events, so the map's marker rendering is reused verbatim) plus
@@ -1254,6 +1700,7 @@ async def get_map_replay(
         )
 
     effective_limit = max(1, min(limit, MAP_REPLAY_MAX_LIMIT))
+    threshold = _corroboration_filter(min_tier1_sources)
 
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
@@ -1261,7 +1708,12 @@ async def get_map_replay(
     async with get_session() as session:
         stmt = select(Event).options(selectinload(Event.geometry), selectinload(Event.layer))
 
-        conditions = _event_conditions(event_type=event_type, start=start_dt, end=end_dt)
+        conditions = _event_conditions(
+            event_type=event_type,
+            start=start_dt,
+            end=end_dt,
+            min_tier1_sources=threshold or None,
+        )
         if conditions:
             stmt = stmt.where(and_(*conditions))
 
@@ -1288,8 +1740,8 @@ async def get_map_replay(
 
 # Globe page route
 @app.get("/globe", response_class=HTMLResponse)
-async def globe_page(request: Request, user: str = Depends(require_auth)):
-    """Globe visualization page."""
+async def globe_page(request: Request):
+    """Globe visualization page. Public and read only."""
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)
@@ -1301,14 +1753,28 @@ async def globe_page(request: Request, user: str = Depends(require_auth)):
 
 # Flat map page route
 @app.get("/map", response_class=HTMLResponse)
-async def map_page(request: Request, user: str = Depends(require_auth)):
-    """Flat 2D map visualization page."""
+async def map_page(request: Request):
+    """Flat 2D map visualization page. Public and read only.
+
+    The list of top stories and the freshness stamp are rendered server side so
+    the page is useful before any JavaScript runs; map.js refreshes both from
+    the public JSON endpoints.
+    """
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)
 
+    now = datetime.now(timezone.utc)
+    async with get_session() as session:
+        freshness = await _collect_map_freshness(session, now)
+        top_stories = await _collect_top_stories(session, now=now)
+
     return templates.TemplateResponse(request, "map.html", {
         "request": request,
+        "freshness": freshness,
+        "top_stories": top_stories,
+        "default_window_hours": MAP_DEFAULT_WINDOW_HOURS,
+        "corroboration_min_tier1": MAP_CORROBORATION_MIN_TIER1,
     })
 
 
