@@ -368,6 +368,27 @@ async def run_ingestion(
         print(f"  URL duplicates skipped: {url_dup}")
         print(f"  Content duplicates skipped: {content_dup}")
 
+        # Phase 1.5: Translate new articles to English (language detect +
+        # translated headline/body stored alongside the untouched originals).
+        # Translation never breaks ingest: failures are caught inside the
+        # module and articles persist untranslated.
+        print("Phase 1.5: Translating new articles to English...")
+        translation_summary = {"backend": "skipped", "total": 0}
+        if new_articles:
+            try:
+                from src.enrichment.translation import translate_articles
+
+                translation_summary = translate_articles(new_articles)
+                print(
+                    f"  Translated: {translation_summary['translated']}, "
+                    f"English: {translation_summary['english']}, "
+                    f"failed: {translation_summary['failed']} "
+                    f"(backend: {translation_summary['backend']})"
+                )
+            except Exception as exc:
+                print(f"  Translation step failed, continuing untranslated: {exc}")
+                translation_summary = {"backend": "error", "total": len(new_articles), "error": str(exc)}
+
         # Get GDELT health from adapter for tier1_critical_down check
         from src.ingestion.adapter import SourceHealth
         gdelt_health = adapter_health.get("gdelt", SourceHealth(
@@ -397,6 +418,7 @@ async def run_ingestion(
             "total_new": len(new_articles),
             "url_duplicates_skipped": url_dup,
             "content_duplicates_skipped": content_dup,
+            "translation": translation_summary,
             "gdelt_health": {
                 "succeeded": gdelt_health.succeeded,
                 "failed": gdelt_health.failed,

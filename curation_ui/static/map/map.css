@@ -408,6 +408,168 @@
 
 /* --- Instrument row: mode toggle and type filter as one control ---------- */
 
+/* Discovery bar: topic search, tier filter, date window, sort. A second
+   instrument row under the mode/event-type controls, same visual language. */
+[data-theme="map"] .map-discovery {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--m-space-3);
+  padding: 0 var(--m-space-4) var(--m-space-3);
+  flex-wrap: wrap;
+}
+
+[data-theme="map"] .map-discovery-search {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+[data-theme="map"] .map-search-input {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  background: var(--m-raise);
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius-sm);
+  color: var(--m-ink);
+  font-family: var(--m-font-ui);
+  font-size: 13px;
+}
+
+[data-theme="map"] .map-search-input::placeholder {
+  color: var(--m-ink-dim);
+}
+
+[data-theme="map"] .map-search-input:focus {
+  outline: 2px solid var(--m-accent);
+  outline-offset: -1px;
+}
+
+[data-theme="map"] .map-discovery-tiers {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+[data-theme="map"] .map-tier-chips {
+  display: flex;
+  gap: 6px;
+  min-height: 34px;
+  align-items: center;
+}
+
+[data-theme="map"] .map-tier-chip {
+  min-width: 38px;
+  min-height: 30px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius-pill);
+  color: var(--m-ink-dim);
+  font-family: var(--m-font-data);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+[data-theme="map"] .map-tier-chip.is-on {
+  background: var(--m-accent-wash);
+  border-color: var(--m-accent);
+  color: var(--m-ink);
+}
+
+[data-theme="map"] .map-discovery-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+/* Verification badge: corroboration state at a glance, not buried in meta.
+   Amber for unconfirmed, accent for corroborated. */
+[data-theme="map"] .map-story-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 2px;
+}
+
+[data-theme="map"] .map-verify-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--m-radius-pill);
+  background: var(--m-amber-wash);
+  border: 1px solid var(--m-amber);
+  color: var(--m-amber);
+  font-family: var(--m-font-data);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+[data-theme="map"] .map-verify-badge.is-corroborated {
+  background: var(--m-accent-wash);
+  border-color: var(--m-accent);
+  color: var(--m-accent);
+}
+
+[data-theme="map"] .map-lang-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: var(--m-radius-pill);
+  background: transparent;
+  border: 1px dashed var(--m-line);
+  color: var(--m-ink-dim);
+  font-family: var(--m-font-data);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+}
+
+/* Story page: per-article verification row. */
+[data-theme="map"] .story-public-verify {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 6px 0 0;
+}
+
+[data-theme="map"] .story-public-tier {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--m-radius-pill);
+  font-family: var(--m-font-data);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--m-line);
+  color: var(--m-ink-dim);
+}
+
+[data-theme="map"] .story-public-tier.is-t1 {
+  border-color: var(--m-accent);
+  color: var(--m-accent);
+  background: var(--m-accent-wash);
+}
+
+[data-theme="map"] .story-public-tier.is-t3,
+[data-theme="map"] .story-public-tier.is-t4 {
+  border-color: var(--m-amber);
+  color: var(--m-amber);
+  background: var(--m-amber-wash);
+}
+
+@media (max-width: 900px) {
+  [data-theme="map"] .map-discovery {
+    padding: 0 var(--m-space-3) var(--m-space-3);
+    gap: var(--m-space-2);
+  }
+}
+
 [data-theme="map"] .map-instrument {
   display: flex;
   align-items: flex-end;

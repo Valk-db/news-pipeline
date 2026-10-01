@@ -1,0 +1,338 @@
+"""Tests for discovery: tier filter, date sort, topic search, near-dupe collapsing.
+
+Search runs the ILIKE fallback here (SQLite has no pg_trgm); the trigram path
+is exercised live against dev Postgres during verification.
+"""
+
+import uuid
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+
+from src.schema.models import (
+    Event,
+    RawArticle,
+    ReportingUnit,
+    SourceTier,
+    Story,
+    StoryUnitLink,
+)
+from src.shared import database as database_module
+from src.shared.config import get_settings
+from curation_ui.main import normalize_headline, _verification_badge
+
+
+@pytest.fixture
+def test_settings(monkeypatch):
+    """Configure test settings with in-memory SQLite."""
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setenv("CURATION_USER", "testuser")
+    monkeypatch.setenv("CURATION_PASSWORD", "testpass")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("CEREBRAS_API_KEY", raising=False)
+    get_settings.cache_clear()
+    return get_settings()
+
+
+@pytest.fixture
+def app_with_db(test_settings, db_engine):
+    """Create app backed by the shared in-memory test database."""
+    database_module._engine = db_engine
+    database_module._async_session_maker = None
+
+    import curation_ui.main as main_module
+    from curation_ui.main import app
+
+    main_module.settings = test_settings
+
+    import src.shared.llm as llm_module
+    llm_module._llm_client = None
+
+    # Reset the trigram probe cache: SQLite never has pg_trgm.
+    main_module._trigram_available_cache = False
+
+    return app
+
+
+def _make_rich_story(
+    db_session,
+    *,
+    day,
+    headline,
+    tier_counts=(0, 0, 0, 0),
+    owners=1,
+    events=1,
+    lang=None,
+    headline_en=None,
+):
+    """Story with explicit tier mix and translatable headline."""
+    t1, t2, t3, t4 = tier_counts
+    story = Story(
+        id=uuid.uuid4(),
+        day=day,
+        primary_entities=["test-entity"],
+        status=Story.Status.PENDING,
+        tier1_unit_count=t1,
+        tier2_unit_count=t2,
+        tier3_unit_count=t3,
+        tier4_unit_count=t4,
+        distinct_owners=owners,
+    )
+    db_session.add(story)
+    unit = ReportingUnit(
+        id=uuid.uuid4(),
+        day=day,
+        representative_article_id=uuid.uuid4(),
+        article_count=1,
+        source_tiers={},
+        owner_groups={},
+        tier1_owner_groups={},
+    )
+    db_session.add(unit)
+    article = RawArticle(
+        id=unit.representative_article_id,
+        url=f"https://example.com/{unit.id}",
+        url_hash=str(unit.id).replace("-", ""),
+        title=headline,
+        title_en=headline_en,
+        detected_language=lang,
+        source_domain="example.com",
+        source_tier=SourceTier.TIER1,
+        reporting_unit_id=unit.id,
+    )
+    db_session.add(article)
+    db_session.add(StoryUnitLink(story_id=story.id, unit_id=unit.id))
+    for index in range(events):
+        db_session.add(Event(
+            id=uuid.uuid4(),
+            story_id=story.id,
+            latitude=50.45,
+            longitude=30.52,
+            location_name="Kyiv",
+            location_type="city",
+            radius_km=25.0,
+            start_time=day + timedelta(hours=index),
+            event_type=Event.EventType.CONFLICT,
+            confidence=0.8,
+            source_count=owners,
+            tier1_source_count=t1,
+            entities={"GPE": ["Kyiv"]},
+        ))
+    return story
+
+
+class TestTierFilter:
+    @pytest.mark.asyncio
+    async def test_hide_tier3_drops_tier3_only_stories(self, app_with_db, db_session):
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Tier one breakthrough in Geneva talks",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Viral rumor spreads on social forums",
+                         tier_counts=(0, 0, 3, 0), owners=3)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        all_resp = client.get("/api/map/stories?min_owners=0")
+        assert all_resp.json()["count"] == 2
+
+        filtered = client.get("/api/map/stories?min_owners=0&tiers=1,2")
+        payload = filtered.json()
+        assert payload["count"] == 1
+        assert "Geneva" in payload["stories"][0]["headline"]
+
+    @pytest.mark.asyncio
+    async def test_tier_filter_keeps_mixed_stories(self, app_with_db, db_session):
+        """A tier-1 story that also has tier-3 units survives tiers=1,2."""
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Mixed coverage of the summit",
+                         tier_counts=(2, 0, 5, 0), owners=4)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        payload = client.get("/api/map/stories?min_owners=0&tiers=1,2").json()
+        assert payload["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_bad_tiers_rejected(self, app_with_db, db_session):
+        client = TestClient(app_with_db)
+        resp = client.get("/api/map/stories?tiers=bogus")
+        assert resp.status_code == 400
+
+
+class TestSortAndWindow:
+    @pytest.mark.asyncio
+    async def test_newest_oldest_sort_orders_by_latest(self, app_with_db, db_session):
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(hours=10),
+                         headline="Older story about the harbor bridge",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        _make_rich_story(db_session, day=now - timedelta(hours=1),
+                         headline="Newer story about the peace summit",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        newest = client.get("/api/map/stories?min_owners=0&sort=newest").json()
+        assert "peace summit" in newest["stories"][0]["headline"]
+        oldest = client.get("/api/map/stories?min_owners=0&sort=oldest").json()
+        assert "harbor bridge" in oldest["stories"][0]["headline"]
+
+    @pytest.mark.asyncio
+    async def test_bad_sort_rejected(self, app_with_db, db_session):
+        client = TestClient(app_with_db)
+        assert client.get("/api/map/stories?sort=chaos").status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_explicit_date_window(self, app_with_db, db_session):
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(days=5),
+                         headline="Ancient history piece",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        _make_rich_story(db_session, day=now - timedelta(hours=1),
+                         headline="Fresh wire update",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        from urllib.parse import quote
+        start = quote((now - timedelta(hours=6)).isoformat(), safe="")
+        payload = client.get(f"/api/map/stories?min_owners=0&start={start}").json()
+        assert payload["count"] == 1
+        assert "Fresh wire" in payload["stories"][0]["headline"]
+
+
+class TestTopicSearch:
+    @pytest.mark.asyncio
+    async def test_search_matches_headline(self, app_with_db, db_session):
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Earthquake relief efforts in the valley",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Parliament debates the new budget",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        payload = client.get("/api/map/stories?min_owners=0&q=earthquake").json()
+        assert payload["count"] == 1
+        assert "Earthquake" in payload["stories"][0]["headline"]
+
+    @pytest.mark.asyncio
+    async def test_search_uses_english_translation(self, app_with_db, db_session):
+        """An English query finds a French-headline story via its translation."""
+        now = datetime.now(timezone.utc)
+        _make_rich_story(
+            db_session, day=now - timedelta(hours=2),
+            headline="Le président annonce des mesures économiques",
+            headline_en="The president announces economic measures",
+            lang="fr",
+            tier_counts=(2, 0, 0, 0), owners=2,
+        )
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        payload = client.get("/api/map/stories?min_owners=0&q=economic measures").json()
+        assert payload["count"] == 1
+        story = payload["stories"][0]
+        assert story["headline"] == "The president announces economic measures"
+        assert story["translated"] is True
+        assert story["lang"] == "fr"
+
+    @pytest.mark.asyncio
+    async def test_search_no_match_returns_empty(self, app_with_db, db_session):
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Parliament debates the new budget",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        payload = client.get("/api/map/stories?min_owners=0&q=xyznonexistent").json()
+        assert payload["count"] == 0
+
+
+class TestMapPageDiscovery:
+    @pytest.mark.asyncio
+    async def test_map_page_renders_discovery_controls(self, app_with_db, db_session):
+        """The /map page ships the search bar, tier chips, window and sort,
+        with initial state taken from the query string."""
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Earthquake relief efforts in the valley",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        response = client.get("/map?tiers=1,2&sort=newest&q=earthquake&hours=168")
+        assert response.status_code == 200
+        html = response.text
+        assert 'id="map-search"' in html
+        assert 'value="earthquake"' in html
+        assert 'id="map-window"' in html
+        assert 'id="map-sort"' in html
+        assert 'class="map-tier-chip is-on"' in html
+        # T1 and T2 on, T3 and T4 off
+        import re
+        chips = re.findall(r'class="map-tier-chip[^"]*"[^>]*aria-pressed="(\w+)"', html)
+        assert chips == ["true", "true", "false", "false"]
+        # Verification badge rendered for the story
+        assert 'map-verify-badge' in html
+
+
+class TestNearDupeCollapsing:
+    @pytest.mark.asyncio
+    async def test_same_headline_collapses_to_one(self, app_with_db, db_session):
+        now = datetime.now(timezone.utc)
+        for i in range(3):
+            _make_rich_story(db_session, day=now - timedelta(hours=2),
+                             headline="Macron et Milei veulent renforcer les liens économiques",
+                             tier_counts=(0, 0, 2, 0), owners=2)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        payload = client.get("/api/map/stories?min_owners=0").json()
+        assert payload["count"] == 1
+
+    def test_normalize_headline(self):
+        assert normalize_headline("Hello,  World!") == "hello world"
+        assert normalize_headline("Macron et Milei...") == "macron et milei"
+        assert normalize_headline(None) == ""
+        assert normalize_headline("") == ""
+
+
+class TestVerificationBadge:
+    def test_badge_corroborated(self):
+        story = Story(tier1_unit_count=2, tier2_unit_count=1,
+                      tier3_unit_count=3, tier4_unit_count=0, distinct_owners=4)
+        badge = _verification_badge(story)
+        assert badge["corroborated"] is True
+        assert badge["tier_mix"] == {"t1": 2, "t2": 1, "t3": 3, "t4": 0}
+        assert badge["best_tier"] == 1
+        assert "Corroborated" in badge["label"]
+
+    def test_badge_single_outlet(self):
+        story = Story(tier1_unit_count=0, tier2_unit_count=0,
+                      tier3_unit_count=1, tier4_unit_count=0, distinct_owners=1)
+        badge = _verification_badge(story)
+        assert badge["corroborated"] is False
+        assert badge["best_tier"] == 3
+        assert "Single outlet" in badge["label"]
+
+    @pytest.mark.asyncio
+    async def test_summary_carries_verification(self, app_with_db, db_session):
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Badge check story",
+                         tier_counts=(2, 1, 0, 0), owners=3)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        payload = client.get("/api/map/stories?min_owners=0").json()
+        v = payload["stories"][0]["verification"]
+        assert v["outlets"] == 3
+        assert v["tier_mix"]["t1"] == 2

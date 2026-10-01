@@ -54,6 +54,7 @@ def _make_story(
     events=0,
     tier1_sources=2,
     location="Kyiv",
+    headline=None,
 ):
     """Create one story with a linked unit, article and optional events."""
     story = Story(
@@ -82,7 +83,7 @@ def _make_story(
         id=unit.representative_article_id,
         url=f"https://example.com/{unit.id}",
         url_hash=str(unit.id).replace("-", ""),
-        title=f"Report from {location}",
+        title=headline or f"Report from {location}",
         source_domain="example.com",
         source_tier=SourceTier.TIER1,
         reporting_unit_id=unit.id,
@@ -357,8 +358,10 @@ class TestTopStoriesList:
     async def test_list_ranks_by_distinct_owners(self, app_with_db, db_session):
         """More independent owners ranks higher, and links to the public story."""
         now = datetime.now(timezone.utc)
-        _make_story(db_session, day=now - timedelta(hours=3), owners=5, tier1_units=6, events=3)
-        _make_story(db_session, day=now - timedelta(hours=3), owners=3, tier1_units=3, events=1)
+        _make_story(db_session, day=now - timedelta(hours=3), owners=5, tier1_units=6, events=3,
+                   headline="Ceasefire talks advance in Geneva")
+        _make_story(db_session, day=now - timedelta(hours=3), owners=3, tier1_units=3, events=1,
+                   headline="Harbor bridge reopens after inspection")
         await db_session.commit()
 
         client = TestClient(app_with_db)
