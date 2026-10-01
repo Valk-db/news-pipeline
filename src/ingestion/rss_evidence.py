@@ -526,6 +526,13 @@ def should_poll(state: FeedState, now: float) -> bool:
 # -------------------------------------------------------------------- refresh
 
 
+def _defer(report: "RefreshReport", key: str, count: int) -> None:
+    """Mark a feed as deferred by the cap, once, counting the entries it cost."""
+    if key not in report.feeds_deferred:
+        report.feeds_deferred.append(key)
+    report.skipped_by_cap += count
+
+
 @dataclass
 class RefreshReport:
     """What one refresh() did, per feed and in total."""
@@ -537,6 +544,9 @@ class RefreshReport:
     items_seen: int = 0
     items: list[dict[str, Any]] = field(default_factory=list)
     body_fetches: int = 0
+    # Entries the cap stopped us fetching this cycle. Paired with feeds_deferred:
+    # a feed is deferred when at least one of its entries did not fit the budget.
+    skipped_by_cap: int = 0
 
 
 async def refresh(
@@ -554,10 +564,12 @@ async def refresh(
     clock and without a network.
 
     Feed fetches are sequential and body fetches are capped at
-    `max_body_fetches` across the whole refresh, so the first feeds in the list
-    fill the budget and the rest are recorded as deferred. That ordering is
-    arbitrary but stable, which is what makes the cap fair over cycles: every
-    refresh moves the queue forward rather than starving the same feeds.
+    `max_body_fetches` across the whole refresh, so the feeds early in the list
+    fill the budget and the rest are recorded as deferred along with a count of
+    how many entries the cap stopped. That ordering is arbitrary but stable,
+    which is what makes the cap fair over cycles rather than starving the same
+    feeds forever. A feed that fills the budget is itself listed as deferred,
+    because it also left entries unfetched; the count says how many.
     """
     # Resolved here rather than bound as a default argument, so patching
     # extract_article on this module is what a test actually intercepts.
@@ -649,13 +661,13 @@ async def refresh(
         if budget <= 0:
             # Feeds past the cap still get counted as polled, but their items
             # wait for a later cycle rather than blowing the body budget.
-            report.feeds_deferred.append(key)
+            _defer(report, key, len(entries))
             continue
 
         for entry in entries:
             if budget <= 0:
-                report.feeds_deferred.append(key)
-                break
+                _defer(report, key, 1)
+                continue
             url = entry.get("link")
             if not url or not entry.get("title"):
                 continue
@@ -1000,6 +1012,7 @@ async def run_evidence_refresh(
         "feeds_deferred_by_cap": report.feeds_deferred,
         "feeds_failed": list(report.feeds_failed),
         "items_seen": report.items_seen,
+        "entries_skipped_by_cap": report.skipped_by_cap,
         "articles_new": len(articles),
         "body_fetches": report.body_fetches,
         "gdelt_links": 0,
@@ -1071,6 +1084,7 @@ async def run_evidence_refresh(
         recorder.drop("deferred_by_cap", len(report.feeds_deferred))
         recorder.drop("feed_failed", len(report.feeds_failed))
         recorder.drop("deduped", max(0, report.body_fetches - len(articles)))
+        recorder.drop("cap_skipped", report.skipped_by_cap)
         await _do_work()
     except Exception:
         # Close the stage row with the error text, then let the error through.

@@ -819,9 +819,11 @@ async def test_refresh_caps_body_fetches_per_cycle():
     assert report.body_fetches == 10
     assert report.items_seen == 12
     assert len(report.items) == 10
-    # Both feeds were polled; only the one that ran out of budget was deferred.
     assert report.feeds_polled == ["bbc_world", "npr_news"]
+    # Only the feed that ran out of budget left entries behind: 6 of its own plus
+    # the 4 it did fetch filled the budget, so its remaining 2 wait for later.
     assert report.feeds_deferred == ["npr_news"]
+    assert report.skipped_by_cap == 2
 
 
 async def test_refresh_defers_everything_past_the_cap():
@@ -1531,6 +1533,7 @@ async def test_run_evidence_refresh_records_cap_deferral_in_ledger(db_session, t
 
     assert result["items_seen"] == 16
     assert result["articles_new"] == 10
+    assert result["entries_skipped_by_cap"] == 6
     assert result["feeds_deferred_by_cap"] == ["npr_news"]
 
     stage = (
@@ -1541,6 +1544,7 @@ async def test_run_evidence_refresh_records_cap_deferral_in_ledger(db_session, t
     assert stage.items_in == 16
     assert stage.items_out == 10
     assert stage.items_dropped_by_reason["deferred_by_cap"] == 1
+    assert stage.items_dropped_by_reason["cap_skipped"] == 6
     assert stage.items_dropped_by_reason["deduped"] == 0
 
 
