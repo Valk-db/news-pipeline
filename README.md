@@ -161,6 +161,8 @@ src/
   verification/             # Units, stories, tiers, viewpoint clustering
   reliability/              # Fact-checking, consensus analyzer, snapshots
   enrichment/               # Media, video, social snippets, LLM snippets, embeddings
+  transparency/            # Signed Merkle log, checkpoints, inclusion proofs, anchoring
+                           # (inert: no migration yet, so nothing writes to merkle_log_entries)
   schema/models.py          # SQLAlchemy models
   shared/                   # Config, DB, LLM
   utils/                    # MinHash, NER, trafilatura
