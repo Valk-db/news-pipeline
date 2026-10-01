@@ -1,5 +1,5 @@
 /**
- * Flat map page controller.
+ * Event Map page controller.
  *
  * Plots events from GET /api/globe/events as circle markers on a Leaflet map,
  * re-querying with the visible bbox when the viewport moves.
@@ -7,19 +7,43 @@
  * A second mode, replay, swaps the viewport-scoped query for GET /api/map/replay:
  * one chronological window fetched up front, then revealed over time by a
  * bottom scrubber so a story can be watched unfolding across geography.
+ *
+ * Everything below is plain ES5 so it runs in mobile Safari without a build
+ * step, and no data logic lives here: both endpoints own the payload shape.
  */
 (function () {
     'use strict';
 
     var API_ENDPOINT = '/api/globe/events';
     var REPLAY_ENDPOINT = '/api/map/replay';
-    var TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+    /*
+     * Keyless OpenStreetMap raster tiles, one host on purpose. iOS Safari pays
+     * a DNS plus TLS setup per origin, so rotating {s} triples first-paint cost
+     * on a phone for no benefit.
+     *
+     * The dark look is a filter applied per tile image in map.css. Do not move
+     * that filter onto .leaflet-tile-pane: iOS WebKit cannot rasterize one
+     * filtered surface that large and paints the whole pane solid black, which
+     * reads as a dead basemap. A filter per 256px tile stays inside WebKit's
+     * budget and the map draws.
+     */
+    var TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
     var TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
-    var TILE_SUBDOMAINS = 'abc';
+
     var MOVE_DEBOUNCE_MS = 400;
     var EVENT_LIMIT = 500;
-    var FALLBACK_COLOR = '#7f8c8d';
     var UNKNOWN_COLOR = '#8899aa';
+    var UNKNOWN_LABEL = 'Unclassified';
+
+    /* Marker budget for the pulse animation. Every pulsing dot is its own CSS
+     * animation, so cap how many run at once. Marks beyond the cap keep the
+     * static ring, which still reads as a highlight. */
+    var PULSE_MAX = 48;
+
+    /* Freshness thresholds for the marker ring, in hours. */
+    var FRESH_HOURS = 12;
+    var RECENT_HOURS = 72;
 
     /* Mirrors the replay cap in curation_ui/main.py. MAP_REPLAY_MAX_LIMIT (1000) is
      * the server hard cap and is what a wide window is most likely to hit;
@@ -31,6 +55,13 @@
     var REPLAY_TICK_MS = 100;
     var MS_PER_HOUR = 3600000;
 
+    /* Histogram bars behind the scrubber. */
+    var HIST_BUCKETS = 56;
+
+    /* Placeholder for a value the API did not send. Spelled out rather than
+     * dashed, so no visible copy on this page carries an em dash. */
+    var UNKNOWN_VALUE = 'n/a';
+
     var REPLAY_WINDOWS = [
         { value: '24h', label: 'Last 24h', hours: 24 },
         { value: '7d', label: 'Last 7d', hours: 24 * 7 },
@@ -39,8 +70,9 @@
     ];
 
     /**
-     * Event type vocabulary mirrored from src/schema/models.py EventType,
-     * with the same colors as the globe page.
+     * Event type vocabulary mirrored from src/schema/models.py EventType.
+     * Hexes are unchanged from the globe page on purpose, so one event reads
+     * the same on both surfaces.
      */
     var EVENT_TYPES = [
         { value: 'conflict', label: 'Conflict', color: '#ff4757' },
@@ -70,19 +102,31 @@
         map: document.getElementById('map'),
         body: document.getElementById('map-body'),
         typeSelect: document.getElementById('event-type-select'),
+        modeToggle: document.getElementById('map-mode-toggle'),
         modeButtons: document.querySelectorAll('.map-mode-btn'),
         status: document.getElementById('map-status'),
         statusText: document.getElementById('map-status-text'),
+        statusMeta: document.getElementById('map-status-meta'),
+        loading: document.getElementById('map-loading'),
+        empty: document.getElementById('map-empty'),
+        emptyTitle: document.getElementById('map-empty-title'),
+        emptyBody: document.getElementById('map-empty-body'),
+        emptyPrimary: document.getElementById('map-empty-primary'),
         banner: document.getElementById('map-banner'),
         bannerMessage: document.getElementById('map-banner-message'),
+        bannerRetry: document.getElementById('map-banner-retry'),
         bannerClose: document.getElementById('map-banner-close'),
         legend: document.getElementById('map-legend'),
         legendHead: document.getElementById('map-legend-head'),
         legendList: document.getElementById('map-legend-list'),
+        legendTotal: document.getElementById('map-legend-total'),
         replay: document.getElementById('map-replay'),
+        replayRestart: document.getElementById('map-replay-restart'),
         replayPlay: document.getElementById('map-replay-play'),
         replayClock: document.getElementById('map-replay-clock'),
         replayProgress: document.getElementById('map-replay-progress'),
+        replayTrack: document.getElementById('map-replay-track'),
+        replayHist: document.getElementById('map-replay-hist'),
         replayWindow: document.getElementById('map-replay-window'),
         replaySpeed: document.getElementById('map-replay-speed'),
         replayScrub: document.getElementById('map-replay-scrub'),
@@ -99,7 +143,13 @@
     var replayController = null;
     var requestSeq = 0;
     var replaySeq = 0;
-    var state = { eventType: '', markerCount: 0, typeCounts: {}, loaded: false, mode: 'live' };
+    var state = {
+        eventType: '',
+        markerCount: 0,
+        typeCounts: {},
+        loaded: false,
+        mode: 'live'
+    };
 
     /* Replay-only state. timeline is ascending by start time; entries hold
      * markers that are created up front but only added to the map as the play
@@ -145,7 +195,7 @@
 
     function typeLabel(type) {
         if (!type) {
-            return 'Unclassified';
+            return UNKNOWN_LABEL;
         }
         return LABEL_BY_TYPE[type] || type;
     }
@@ -160,7 +210,7 @@
 
     function formatTime(isoString) {
         if (!isoString) {
-            return '—';
+            return UNKNOWN_VALUE;
         }
         var parsed = new Date(isoString);
         if (isNaN(parsed.getTime())) {
@@ -181,7 +231,7 @@
 
     function formatNumber(value) {
         if (value === null || value === undefined || value === '') {
-            return '—';
+            return UNKNOWN_VALUE;
         }
         var num = Number(value);
         if (isNaN(num)) {
@@ -193,6 +243,120 @@
     function toFiniteNumber(value, fallback) {
         var num = Number(value);
         return isFinite(num) ? num : fallback;
+    }
+
+    function isUuid(value) {
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ''));
+    }
+
+    /** Replay clock: same precision as before, but never an em dash. */
+    function formatClock(ms) {
+        if (!ms) {
+            return '--:--';
+        }
+        return formatTime(new Date(ms).toISOString());
+    }
+
+    function formatBound(ms) {
+        if (!ms) {
+            return '--';
+        }
+        return formatTime(new Date(ms).toISOString());
+    }
+
+    /** "just now", "18 min ago", "3 d ago" for a coarse freshness read. */
+    function relativeAge(isoString, now) {
+        if (!isoString) {
+            return null;
+        }
+        var ms = new Date(isoString).getTime();
+        if (isNaN(ms)) {
+            return null;
+        }
+        var delta = Math.max(0, now - ms);
+        var minutes = Math.floor(delta / 60000);
+        if (minutes < 2) {
+            return 'just now';
+        }
+        if (minutes < 60) {
+            return minutes + ' min ago';
+        }
+        var hours = Math.floor(minutes / 60);
+        if (hours < 24) {
+            return hours + (hours === 1 ? ' hour ago' : ' hours ago');
+        }
+        var days = Math.floor(hours / 24);
+        return days + (days === 1 ? ' day ago' : ' days ago');
+    }
+
+    /** Hours since start_time, or null when the event cannot be aged. */
+    function hoursSince(isoString, now) {
+        if (!isoString) {
+            return null;
+        }
+        var ms = new Date(isoString).getTime();
+        if (isNaN(ms)) {
+            return null;
+        }
+        return (now - ms) / MS_PER_HOUR;
+    }
+
+    /**
+     * A handful of entity names from the event's {"PERSON": [], "ORG": [],
+     * "GPE": []} bag, as the popup's who-is-involved line.
+     */
+    function entityNames(props, limit) {
+        var max = limit || 3;
+        var entities = props.entities;
+        if (!entities || typeof entities !== 'object') {
+            return [];
+        }
+        var names = [];
+        ['ORG', 'PERSON', 'GPE'].some(function (key) {
+            var values = entities[key];
+            if (!Array.isArray(values)) {
+                return false;
+            }
+            values.forEach(function (value) {
+                if (names.length < max && value && names.indexOf(String(value)) === -1) {
+                    names.push(String(value));
+                }
+            });
+            return names.length >= max;
+        });
+        return names;
+    }
+
+    /** Where the rest of the story lives. Only when the id is really a uuid. */
+    function storyHref(props) {
+        if (isUuid(props.story_id)) {
+            return '/story/' + encodeURIComponent(props.story_id) + '/edit';
+        }
+        return '/';
+    }
+
+    function storyHrefLabel(props) {
+        return isUuid(props.story_id) ? 'Open the story' : 'Open Curation';
+    }
+
+    function confidenceLabel(value) {
+        if (value >= 0.75) {
+            return 'Strong';
+        }
+        if (value >= 0.45) {
+            return 'Partial';
+        }
+        return 'Weak';
+    }
+
+    function confidenceTone(value) {
+        if (value >= 0.75) {
+            return 'is-strong';
+        }
+        if (value >= 0.45) {
+            return 'is-partial';
+        }
+        return 'is-weak';
     }
 
     /**
@@ -373,12 +537,19 @@
     }
 
     /* ------------------------------------------------------------------ */
-    /* Status / banner / legend                                            */
+    /* Status pill, banner, page states                                    */
     /* ------------------------------------------------------------------ */
 
-    function setStatus(text, mode) {
+    /**
+     * One line of outcome plus a quiet second line of context: which mode, and
+     * how wide the question is. Both are textContent, never markup.
+     */
+    function setStatus(text, mode, meta) {
         if (el.statusText) {
             el.statusText.textContent = text;
+        }
+        if (el.statusMeta) {
+            el.statusMeta.textContent = meta || '';
         }
         if (!el.status) {
             return;
@@ -387,6 +558,21 @@
         if (mode) {
             el.status.classList.add(mode);
         }
+    }
+
+    function scopeLabel() {
+        return state.eventType ? typeLabel(state.eventType).toLowerCase() : 'all types';
+    }
+
+    function liveMeta() {
+        return 'live view / ' + scopeLabel();
+    }
+
+    function replayMeta() {
+        var label = REPLAY_WINDOWS.filter(function (entry) {
+            return entry.value === replay.window;
+        })[0];
+        return 'replay window / ' + (label ? label.label.toLowerCase() : replay.window);
     }
 
     function showBanner(message) {
@@ -403,6 +589,79 @@
         }
     }
 
+    function showLoading(active) {
+        if (!el.loading) {
+            return;
+        }
+        el.loading.hidden = !active;
+        el.loading.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+
+    /**
+     * The zero-result state. With a type filter active it says so and offers
+     * the way out; without one it points at the region, which is the usual
+     * reason a view comes back empty.
+     */
+    function showEmpty() {
+        if (!el.empty) {
+            return;
+        }
+        var filtered = !!state.eventType;
+        if (el.emptyTitle) {
+            el.emptyTitle.textContent = filtered
+                ? 'No ' + typeLabel(state.eventType).toLowerCase() + ' events here'
+                : 'Nothing plotted here';
+        }
+        if (el.emptyBody) {
+            el.emptyBody.textContent = filtered
+                ? 'Every confirmed ' + typeLabel(state.eventType).toLowerCase() +
+                    ' event lands on this map as it happens. None have been confirmed ' +
+                    'inside the view you are looking at.'
+                : 'Every confirmed event lands on this map as it happens, at the place ' +
+                    'it happened. No events fall inside the view you are looking at.';
+        }
+        if (el.emptyPrimary) {
+            el.emptyPrimary.textContent = filtered ? 'Show all types' : 'Look at the world';
+        }
+        el.empty.hidden = false;
+    }
+
+    function hideEmpty() {
+        if (el.empty) {
+            el.empty.hidden = true;
+        }
+    }
+
+    function onEmptyPrimary() {
+        if (state.eventType) {
+            setEventType('');
+            return;
+        }
+        if (map && typeof map.setView === 'function') {
+            map.setView([20, 0], 2);
+        }
+        state.loaded = false;
+        fetchEvents();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Filters and legend                                                  */
+    /* ------------------------------------------------------------------ */
+
+    function setEventType(value) {
+        state.eventType = value || '';
+        if (el.typeSelect && el.typeSelect.value !== state.eventType) {
+            el.typeSelect.value = state.eventType;
+        }
+        syncLegendSelection();
+        hideBanner();
+        if (state.mode === 'replay') {
+            loadReplay();
+        } else {
+            scheduleFetch();
+        }
+    }
+
     function buildTypeFilter() {
         if (!el.typeSelect) {
             return;
@@ -414,13 +673,7 @@
             el.typeSelect.appendChild(option);
         });
         el.typeSelect.addEventListener('change', function () {
-            state.eventType = el.typeSelect.value || '';
-            hideBanner();
-            if (state.mode === 'replay') {
-                loadReplay();
-            } else {
-                scheduleFetch();
-            }
+            setEventType(el.typeSelect.value || '');
         });
     }
 
@@ -433,9 +686,15 @@
             item.className = 'map-legend-item is-empty';
             item.dataset.eventType = entry.value;
 
+            var hit = document.createElement('button');
+            hit.type = 'button';
+            hit.className = 'map-legend-hit';
+            hit.setAttribute('data-event-type', entry.value);
+            hit.setAttribute('aria-pressed', 'false');
+
             var swatch = document.createElement('span');
             swatch.className = 'map-legend-swatch';
-            swatch.style.background = entry.color;
+            swatch.style.setProperty('--swatch', entry.color);
 
             var label = document.createElement('span');
             label.className = 'map-legend-label';
@@ -445,17 +704,53 @@
             count.className = 'map-legend-count';
             count.textContent = '0';
 
-            item.appendChild(swatch);
-            item.appendChild(label);
-            item.appendChild(count);
+            hit.appendChild(swatch);
+            hit.appendChild(label);
+            hit.appendChild(count);
+            item.appendChild(hit);
             el.legendList.appendChild(item);
         });
 
-        if (el.legendHead) {
-            el.legendHead.addEventListener('click', function () {
-                el.legend.classList.toggle('is-collapsed');
+        if (el.legendList.addEventListener) {
+            el.legendList.addEventListener('click', function (evt) {
+                var target = evt.target;
+                var row = null;
+                while (target && target !== el.legendList) {
+                    if (target.classList && target.classList.contains('map-legend-hit')) {
+                        row = target;
+                        break;
+                    }
+                    target = target.parentNode;
+                }
+                if (!row) {
+                    return;
+                }
+                var type = row.getAttribute('data-event-type') || '';
+                setEventType(type === state.eventType ? '' : type);
             });
         }
+
+        if (el.legendHead) {
+            el.legendHead.addEventListener('click', function () {
+                var collapsed = el.legend.classList.toggle('is-collapsed');
+                el.legendHead.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            });
+        }
+    }
+
+    function syncLegendSelection() {
+        if (!el.legendList) {
+            return;
+        }
+        var items = el.legendList.querySelectorAll('.map-legend-item');
+        Array.prototype.forEach.call(items, function (item) {
+            var active = item.dataset.eventType === state.eventType;
+            item.classList.toggle('is-active', active);
+            var hit = item.querySelector('.map-legend-hit');
+            if (hit) {
+                hit.setAttribute('aria-pressed', active ? 'true' : 'false');
+            }
+        });
     }
 
     function updateLegend() {
@@ -466,60 +761,171 @@
         Array.prototype.forEach.call(items, function (item) {
             var type = item.dataset.eventType;
             var count = state.typeCounts[type] || 0;
-            item.querySelector('.map-legend-count').textContent = formatNumber(count);
+            var node = item.querySelector('.map-legend-count');
+            if (node) {
+                node.textContent = formatNumber(count);
+            }
             item.classList.toggle('is-empty', count === 0);
+            item.classList.toggle('is-active', type === state.eventType);
         });
+        if (el.legendTotal) {
+            el.legendTotal.textContent = formatNumber(state.markerCount);
+        }
     }
 
     /* ------------------------------------------------------------------ */
     /* Rendering                                                           */
     /* ------------------------------------------------------------------ */
 
-    function popupHtml(props) {
+    function popupHtml(props, now) {
         var type = props.event_type || '';
-        var confidence = toFiniteNumber(props.confidence, 0);
-        var percent = Math.round(clamp(confidence, 0, 1) * 100);
-        var sources = formatNumber(props.source_count);
+        // 0.5 is the same default the marker sizing and the API use, so the
+        // meter never disagrees with the dot the user tapped.
+        var confidence = clamp(toFiniteNumber(props.confidence, 0.5), 0, 1);
+        var percent = Math.round(confidence * 100);
+        var age = relativeAge(props.start_time, now);
+        var sourceCount = toFiniteNumber(props.source_count, null);
+        var tier1Count = toFiniteNumber(props.tier1_source_count, null);
+        var sources = sourceCount === null ? 'none yet' : formatNumber(sourceCount);
+        var tier1 = tier1Count === null ? UNKNOWN_VALUE : formatNumber(tier1Count);
+        var entities = entityNames(props, 3);
 
-        var rows = [
-            ['Event type', escapeHtml(typeLabel(type))],
-            ['Confidence', percent + '%'],
-            ['Sources', sources],
-            ['Start time', escapeHtml(formatTime(props.start_time))]
-        ];
-
-        if (props.tier1_source_count !== null && props.tier1_source_count !== undefined) {
-            rows.push(['Tier-1 sources', formatNumber(props.tier1_source_count)]);
+        var html = '<div class="map-popup" style="--m-popup-accent:' + typeColor(type) + '">';
+        html += '<div class="map-popup-eyebrow">';
+        html += '<span class="map-popup-chip">';
+        html += '<span class="map-popup-dot" style="background:' + typeColor(type) + '"></span>';
+        html += escapeHtml(typeLabel(type));
+        html += '</span>';
+        if (age) {
+            html += '<span class="map-popup-age">' + escapeHtml(age) + '</span>';
         }
-
-        var html = '<div class="map-popup">';
+        html += '</div>';
         html += '<div class="map-popup-title">' +
             escapeHtml(props.location_name || 'Unknown location');
-        html += '<span class="map-popup-type">' +
-            '<span class="map-popup-dot" style="background:' + typeColor(type) + '"></span>' +
-            escapeHtml(typeLabel(type)) + '</span></div>';
-        html += '<dl class="map-popup-rows">';
-        rows.forEach(function (row) {
-            html += '<div class="map-popup-row"><dt>' + row[0] + '</dt>';
-            if (row[0] === 'Confidence') {
-                html += '<dd><span class="map-popup-bar"><span style="width:' + percent +
-                    '%"></span></span>' + row[1] + '</dd>';
-            } else {
-                html += '<dd>' + row[1] + '</dd>';
-            }
+        html += '</div>';
+
+        if (entities.length) {
+            html += '<div class="map-popup-entities">';
+            entities.forEach(function (name) {
+                html += '<span class="map-popup-entity">' + escapeHtml(name) + '</span>';
+            });
             html += '</div>';
-        });
-        html += '</dl></div>';
+        }
+
+        html += '<div class="map-popup-meter ' + confidenceTone(confidence) + '">';
+        html += '<div class="map-popup-meter-head">';
+        html += '<span class="map-popup-meter-label">confidence</span>';
+        html += '<span class="map-popup-meter-value">' + confidenceLabel(confidence) + '</span>';
+        html += '</div>';
+        html += '<div class="map-popup-bar"><span style="width:' + percent + '%"></span></div>';
+        html += '<div class="map-popup-meter-foot">';
+        html += '<span>' + percent + '%</span>';
+        html += '<span>' + sources + '</span>';
+        if (tier1Count !== null) {
+            html += '<span>' + tier1 + (tier1Count === 1 ? ' tier 1 source' : ' tier 1') + '</span>';
+        }
+        html += '</div>';
+        html += '</div>';
+
+        html += '<dl class="map-popup-rows">';
+        html += '<div class="map-popup-row"><dt>Type</dt><dd>' +
+            escapeHtml(typeLabel(type)) + '</dd></div>';
+        html += '<div class="map-popup-row"><dt>Confidence</dt><dd>' + percent + '%</dd></div>';
+        html += '<div class="map-popup-row"><dt>Sources</dt><dd>' + sources + '</dd></div>';
+        html += '<div class="map-popup-row"><dt>Started</dt><dd>' +
+            escapeHtml(formatTime(props.start_time)) + '</dd></div>';
+        html += '</dl>';
+
+        html += '<a class="map-popup-cta" href="' + escapeHtml(storyHref(props)) + '">' +
+            escapeHtml(storyHrefLabel(props)) +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+            'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M5 12h13M12 5l7 7-7 7"></path></svg></a>';
+        html += '</div>';
         return html;
     }
 
-    function renderFeatures(features) {
+    /**
+     * How much of the map body's bottom edge the replay deck is sitting on.
+     * The map container runs the full height under the deck, so Leaflet's own
+     * auto-pan would leave a popup tucked behind it without this allowance.
+     */
+    function deckInset() {
+        if (!el.replay || el.replay.hidden) {
+            return 0;
+        }
+        return el.replay.offsetHeight || 0;
+    }
+
+    /**
+     * How one event reads on the map: radius from confidence, plus a marker
+     * class for freshness and the pulse ring. The pulse budget is spent in
+     * event order, so the highlight lands on what is new rather than on
+     * whichever feature the API happened to return first.
+     */
+    function markerStyle(props, now, budget) {
+        var confidence = clamp(toFiniteNumber(props.confidence, 0.5), 0, 1);
+        var hours = hoursSince(props.start_time, now);
+        var fresh = hours !== null && hours >= 0 && hours <= FRESH_HOURS;
+        var recent = hours !== null && hours >= 0 && hours <= RECENT_HOURS;
+        var pulse = !!budget && fresh && confidence >= 0.6 && budget.left > 0;
+
+        if (pulse) {
+            budget.left -= 1;
+        }
+
+        return {
+            radius: 4 + Math.round(confidence * 4),
+            className: 'map-marker',
+            // The pulse draws as a bright stroke on the marker's own ring, so no
+            // second shape per event and no extra SVG nodes to composite.
+            color: pulse ? typeColor(props.event_type || '') : '#05080c',
+            weight: pulse ? 2.4 : 1,
+            opacity: 0.9,
+            fillColor: typeColor(props.event_type || ''),
+            fillOpacity: fresh ? 0.95 : 0.85,
+            recent: recent,
+            pulse: pulse
+        };
+    }
+
+    /**
+     * Freshness classes live on the rendered path rather than in the Leaflet
+     * options, because the path only exists once the marker is on the map.
+     */
+    function decorateMarker(marker, style) {
+        var node = marker.getElement();
+        if (!node) {
+            return;
+        }
+        if (style.recent) {
+            node.classList.add('is-recent-event');
+        }
+        if (style.pulse) {
+            node.classList.add('is-pulse');
+        }
+    }
+
+    function createEventMarker(latlng, props, now, budget) {
+        var style = markerStyle(props, now, budget);
+        var marker = L.circleMarker(latlng, style);
+        marker.bindPopup(popupHtml(props, now), {
+            maxWidth: 300,
+            minWidth: 240,
+            autoPan: true,
+            autoPanPadding: [16, 16 + deckInset()]
+        });
+        return { marker: marker, style: style };
+    }
+
+    function renderFeatures(features, now) {
         markerLayer.clearLayers();
 
         var counts = {};
         var skipped = 0;
         var drawn = 0;
         var seen = {};
+        var budget = { left: PULSE_MAX };
 
         features.forEach(function (feature) {
             if (!feature || !feature.properties) {
@@ -543,7 +949,9 @@
             seen[key] = true;
             drawn += 1;
 
-            createEventMarker(latlng, props).addTo(markerLayer);
+            var built = createEventMarker(latlng, props, now, budget);
+            built.marker.addTo(markerLayer);
+            decorateMarker(built.marker, built.style);
         });
 
         state.markerCount = drawn;
@@ -580,7 +988,9 @@
         inflightController = typeof AbortController !== 'undefined' ? new AbortController() : null;
         state.loaded = true;
 
-        setStatus('loading…', 'is-busy');
+        hideEmpty();
+        showLoading(true);
+        setStatus('loading\u2026', 'is-busy', 'live view / querying');
 
         var requests;
         var signal = inflightController ? inflightController.signal : null;
@@ -602,7 +1012,11 @@
                     features = features.concat(batch);
                 });
                 hideBanner();
-                setStatus(renderFeatures(features));
+                showLoading(false);
+                setStatus(renderFeatures(features, Date.now()), null, liveMeta());
+                if (!state.markerCount) {
+                    showEmpty();
+                }
             })
             .catch(function (err) {
                 if (seq !== requestSeq || (err && err.name === 'AbortError')) {
@@ -612,7 +1026,8 @@
                 state.markerCount = 0;
                 state.typeCounts = {};
                 updateLegend();
-                setStatus('unavailable', 'is-error');
+                showLoading(false);
+                setStatus('unavailable', 'is-error', 'live view / failed');
                 showBanner(err && err.message ? err.message : 'Failed to load events');
             });
     }
@@ -647,40 +1062,16 @@
         return isNaN(ms) ? null : ms;
     }
 
-    function markerOptions(props) {
-        var confidence = clamp(toFiniteNumber(props.confidence, 0.5), 0, 1);
-        return {
-            radius: 4 + Math.round(confidence * 4),
-            className: 'map-marker',
-            color: '#05080c',
-            weight: 1,
-            opacity: 0.9,
-            fillColor: typeColor(props.event_type || ''),
-            fillOpacity: 0.85
-        };
-    }
-
-    /** Same marker + popup as live mode, so both modes look identical. */
-    function createEventMarker(latlng, props) {
-        var marker = L.circleMarker(latlng, markerOptions(props));
-        marker.bindPopup(popupHtml(props), {
-            maxWidth: 280,
-            minWidth: 200,
-            autoPan: true,
-            autoPanPadding: [16, 16]
-        });
-        return marker;
-    }
-
     /**
      * Ascending-by-time marker list for one replay window. Markers are built
      * but not attached, so the play head controls what is on screen. The
      * lat/lon+type dedupe mirrors live mode: a second event at the same spot
      * and type would land under the first marker anyway.
      */
-    function buildTimeline(features) {
+    function buildTimeline(features, now) {
         var entries = [];
         var seen = {};
+        var budget = { left: PULSE_MAX };
 
         features.forEach(function (feature) {
             if (!feature || !feature.properties) {
@@ -700,10 +1091,12 @@
                 return;
             }
             seen[key] = true;
+            var built = createEventMarker(latlng, props, now, budget);
             entries.push({
                 time: time,
                 type: props.event_type || '',
-                marker: createEventMarker(latlng, props)
+                marker: built.marker,
+                style: built.style
             });
         });
 
@@ -720,6 +1113,13 @@
             }
         }
         return REPLAY_WINDOWS[1].hours;
+    }
+
+    function windowLabel() {
+        var match = REPLAY_WINDOWS.filter(function (entry) {
+            return entry.value === replay.window;
+        })[0];
+        return match ? match.label.toLowerCase() : replay.window;
     }
 
     function buildReplayRequestUrl() {
@@ -759,6 +1159,9 @@
         if (el.replayPlay) {
             el.replayPlay.disabled = !enabled;
         }
+        if (el.replayRestart) {
+            el.replayRestart.disabled = !enabled;
+        }
     }
 
     function setReplayNote(message) {
@@ -770,26 +1173,30 @@
     }
 
     function setReplayPlaying(playing) {
-        if (el.replayPlay) {
-            el.replayPlay.classList.toggle('is-playing', playing);
-            el.replayPlay.setAttribute('aria-pressed', playing ? 'true' : 'false');
-            el.replayPlay.setAttribute('aria-label', playing ? 'Pause replay' : 'Play replay');
+        if (!el.replayPlay) {
+            return;
         }
+        el.replayPlay.classList.toggle('is-playing', playing);
+        el.replayPlay.setAttribute('aria-pressed', playing ? 'true' : 'false');
+        el.replayPlay.setAttribute('aria-label', playing ? 'Pause replay' : 'Play replay');
     }
 
     function syncScrub(headTime) {
-        if (!el.replayScrub) {
-            return;
-        }
         var span = replay.rangeEnd - replay.rangeStart;
         // A one-event window has no span to interpolate, so fall back to
         // whether anything has been revealed.
         var ratio = span > 0
             ? clamp((headTime - replay.rangeStart) / span, 0, 1)
             : (replay.revealed > 0 ? 1 : 0);
+        var percent = Math.round(ratio * 100);
         var step = Math.round(ratio * REPLAY_STEPS);
-        el.replayScrub.value = String(step);
-        el.replayScrub.style.setProperty('--m-scrub-fill', Math.round(ratio * 100) + '%');
+        if (el.replayScrub) {
+            el.replayScrub.value = String(step);
+            el.replayScrub.style.setProperty('--m-scrub-fill', percent + '%');
+        }
+        if (el.replayTrack) {
+            el.replayTrack.style.setProperty('--m-scrub-fill', percent + '%');
+        }
     }
 
     /**
@@ -816,6 +1223,7 @@
                 if (node) {
                     node.classList.add('is-fresh');
                 }
+                decorateMarker(entry.marker, entry.style);
                 state.typeCounts[entry.type] = (state.typeCounts[entry.type] || 0) + 1;
                 state.markerCount += 1;
                 replay.revealed += 1;
@@ -825,7 +1233,7 @@
         replay.playHead = headTime;
 
         if (el.replayClock) {
-            el.replayClock.textContent = formatTime(new Date(headTime).toISOString());
+            el.replayClock.textContent = formatClock(headTime);
         }
         if (el.replayProgress) {
             el.replayProgress.textContent = formatNumber(replay.revealed) + ' / ' +
@@ -899,6 +1307,60 @@
         applyCursor(indexAtTime(head), head);
     }
 
+    function onScrubJump() {
+        if (state.mode !== 'replay' || !replay.timeline.length) {
+            return;
+        }
+        pausePlayback();
+        applyCursor(0, replay.rangeStart);
+    }
+
+    function clearHistogram() {
+        if (!el.replayHist) {
+            return;
+        }
+        while (el.replayHist.firstChild) {
+            el.replayHist.removeChild(el.replayHist.firstChild);
+        }
+    }
+
+    /** Event density behind the track, so the scrubber shows where the story is. */
+    function buildHistogram() {
+        if (!el.replayHist) {
+            return;
+        }
+        clearHistogram();
+        var timeline = replay.timeline;
+        if (!timeline.length) {
+            return;
+        }
+        var span = replay.rangeEnd - replay.rangeStart;
+        var buckets = [];
+        var i;
+        for (i = 0; i < HIST_BUCKETS; i += 1) {
+            buckets.push(0);
+        }
+        timeline.forEach(function (entry) {
+            var ratio = span > 0 ? clamp((entry.time - replay.rangeStart) / span, 0, 1) : 0;
+            buckets[Math.min(HIST_BUCKETS - 1, Math.floor(ratio * HIST_BUCKETS))] += 1;
+        });
+        var peak = buckets.reduce(function (max, value) {
+            return Math.max(max, value);
+        }, 0) || 1;
+        buckets.forEach(function (value, index) {
+            var bar = document.createElement('i');
+            bar.className = 'map-replay-bar';
+            // 12% keeps an empty bucket visible as a baseline tick.
+            var height = Math.max(12, Math.round((value / peak) * 100));
+            bar.style.height = height + '%';
+            if (!value) {
+                bar.classList.add('is-empty');
+            }
+            bar.setAttribute('data-bucket', String(index));
+            el.replayHist.appendChild(bar);
+        });
+    }
+
     function resetReplayView() {
         markerLayer.clearLayers();
         replay.timeline = [];
@@ -915,21 +1377,23 @@
         setReplayEnabled(false);
         setReplayPlaying(false);
         setReplayNote('');
+        clearHistogram();
         if (el.replayClock) {
-            el.replayClock.textContent = '—';
+            el.replayClock.textContent = '--:--';
         }
         if (el.replayProgress) {
             el.replayProgress.textContent = '0 / 0 events';
         }
         if (el.replayStart) {
-            el.replayStart.textContent = '—';
+            el.replayStart.textContent = '--';
         }
         if (el.replayEnd) {
-            el.replayEnd.textContent = '—';
+            el.replayEnd.textContent = '--';
         }
         if (el.replayScrub) {
             el.replayScrub.value = '0';
         }
+        syncScrub(0);
     }
 
     function loadReplay() {
@@ -943,8 +1407,10 @@
         }
         replayController = typeof AbortController !== 'undefined' ? new AbortController() : null;
 
-        setStatus('loading replay…', 'is-busy');
-        setReplayNote('Loading replay window…');
+        hideEmpty();
+        showLoading(true);
+        setStatus('loading replay\u2026', 'is-busy', replayMeta());
+        setReplayNote('Loading replay window\u2026');
 
         var options = { headers: { Accept: 'application/json' }, credentials: 'same-origin' };
         if (replayController) {
@@ -979,28 +1445,34 @@
                 replay.loading = false;
                 replay.truncated = !!payload.truncated;
                 replay.maxLimit = payload.max_limit || REPLAY_MAX_LIMIT;
-                replay.timeline = buildTimeline(payload.features);
+                replay.timeline = buildTimeline(payload.features, Date.now());
                 hideBanner();
+                showLoading(false);
 
                 if (!replay.timeline.length) {
-                    setReplayNote('No events in this window. Try a wider window.');
-                    setStatus('0 events');
+                    setReplayNote(state.eventType
+                        ? 'No events in this window for ' +
+                            typeLabel(state.eventType).toLowerCase() +
+                            '. Try a wider window, or show all types.'
+                        : 'No events in this window. Try a wider window.');
+                    setStatus('0 events', null, replayMeta());
                     return;
                 }
 
                 replay.rangeStart = replay.timeline[0].time;
                 replay.rangeEnd = replay.timeline[replay.timeline.length - 1].time;
                 if (el.replayStart) {
-                    el.replayStart.textContent = formatTime(new Date(replay.rangeStart).toISOString());
+                    el.replayStart.textContent = formatBound(replay.rangeStart);
                 }
                 if (el.replayEnd) {
-                    el.replayEnd.textContent = formatTime(new Date(replay.rangeEnd).toISOString());
+                    el.replayEnd.textContent = formatBound(replay.rangeEnd);
                 }
+                buildHistogram();
                 setReplayEnabled(true);
                 applyCursor(0, replay.rangeStart);
                 // Status stays static during playback; the scrubber shows progress.
                 setStatus(formatNumber(replay.timeline.length) + ' events' +
-                    (replay.truncated ? ' (capped)' : ''));
+                    (replay.truncated ? ' (capped)' : ''), null, replayMeta());
                 setReplayNote(replay.truncated
                     ? 'Window truncated at the ' + formatNumber(replay.maxLimit) +
                         ' event API cap. Narrow the window or filter by type to see the rest.'
@@ -1012,7 +1484,8 @@
                 }
                 replay.loading = false;
                 resetReplayView();
-                setStatus('unavailable', 'is-error');
+                showLoading(false);
+                setStatus('unavailable', 'is-error', 'replay window / failed');
                 showBanner(err && err.message ? err.message : 'Failed to load replay');
             });
     }
@@ -1043,6 +1516,9 @@
         }
         if (el.replayPlay) {
             el.replayPlay.addEventListener('click', togglePlayback);
+        }
+        if (el.replayRestart) {
+            el.replayRestart.addEventListener('click', onScrubJump);
         }
         if (el.replayScrub) {
             el.replayScrub.addEventListener('input', onScrubInput);
@@ -1098,6 +1574,9 @@
             button.setAttribute('aria-pressed', active ? 'true' : 'false');
         });
 
+        if (el.modeToggle) {
+            el.modeToggle.setAttribute('data-mode', mode);
+        }
         if (el.body) {
             el.body.classList.toggle('is-replay', mode === 'replay');
         }
@@ -1107,10 +1586,12 @@
         measureReplayPanel();
 
         if (mode === 'replay') {
+            hideEmpty();
             resetReplayView();
             loadReplay();
         } else {
             resetReplayView();
+            hideEmpty();
             // Live mode's first query is worldwide; re-enter it that way.
             state.loaded = false;
             fetchEvents();
@@ -1123,11 +1604,17 @@
 
     function init() {
         if (!el.map || typeof L === 'undefined') {
-            setStatus('unavailable', 'is-error');
+            setStatus('unavailable', 'is-error', 'map library failed');
             showBanner('Map library failed to load');
             return;
         }
 
+        /*
+         * Note what is deliberately absent: no crossOrigin on the tile layer
+         * (nothing reads tile pixels back, and asking for a CORS image only
+         * adds a failure mode on iOS) and no canvas renderer (the replay reveal
+         * animation needs a real path element per marker to pulse).
+         */
         map = L.map(el.map, {
             zoomControl: false,
             worldCopyJump: true,
@@ -1138,9 +1625,7 @@
 
         L.tileLayer(TILE_URL, {
             attribution: TILE_ATTRIBUTION,
-            subdomains: TILE_SUBDOMAINS,
-            maxZoom: 19,
-            crossOrigin: true
+            maxZoom: 19
         }).addTo(map);
 
         L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -1151,13 +1636,30 @@
         buildModeToggle();
         buildReplayControls();
         measureReplayPanel();
+        syncLegendSelection();
 
         if (el.bannerClose) {
             el.bannerClose.addEventListener('click', hideBanner);
         }
+        if (el.bannerRetry) {
+            el.bannerRetry.addEventListener('click', function () {
+                hideBanner();
+                if (state.mode === 'replay') {
+                    loadReplay();
+                } else {
+                    scheduleFetch();
+                }
+            });
+        }
+        if (el.emptyPrimary) {
+            el.emptyPrimary.addEventListener('click', onEmptyPrimary);
+        }
 
-        if (window.matchMedia && window.matchMedia('(max-width: 720px)').matches) {
+        if (el.legend && window.matchMedia && window.matchMedia('(max-width: 900px)').matches) {
             el.legend.classList.add('is-collapsed');
+            if (el.legendHead) {
+                el.legendHead.setAttribute('aria-expanded', 'false');
+            }
         }
 
         map.on('moveend zoomend', scheduleFetch);
@@ -1170,6 +1672,16 @@
         window.addEventListener('resize', measureReplayPanel);
 
         fetchEvents();
+
+        // iOS Safari settles its viewport after fonts and the safe area land, so
+        // one extra size pass keeps the first tile row from being cropped.
+        setTimeout(function () {
+            if (!map) {
+                return;
+            }
+            map.invalidateSize();
+            measureReplayPanel();
+        }, 250);
     }
 
     if (document.readyState === 'loading') {

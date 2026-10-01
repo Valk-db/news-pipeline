@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-    <title>News Pipeline - Flat Map</title>
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#080d14">
+    <title>Event Map · News Pipeline</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -17,25 +19,57 @@
 </head>
 <body>
     <div class="map-shell">
+
+        <!-- ======================= COMMAND BAR ======================= -->
         <header class="map-header">
-            <div class="header-brand">
-                <span class="map-brand-mark" aria-hidden="true">
-                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                        <polygon points="1 6 1 18 8 21 16 18 23 21 23 9 16 6 8 9 1 6"></polygon>
-                        <line x1="8" y1="9" x2="8" y2="21"></line>
-                        <line x1="16" y1="6" x2="16" y2="18"></line>
-                    </svg>
-                </span>
-                <div class="map-brand-text">
-                    <h1>Event Map</h1>
-                    <span class="map-brand-subtitle">Flat Map — Global Intelligence</span>
+            <div class="map-header-bar">
+                <div class="map-brand">
+                    <span class="map-brand-mark" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+                            <circle cx="12" cy="12" r="3.1"></circle>
+                            <circle cx="12" cy="12" r="8.1" stroke-dasharray="2.6 3.4" opacity=".6"></circle>
+                            <path d="M12 1.4v2.6M12 20v2.6M1.4 12h2.6M20 12h2.6" opacity=".75"></path>
+                        </svg>
+                    </span>
+                    <span class="map-brand-text">
+                        <h1>Event Map</h1>
+                        <span class="map-brand-subtitle">Every story, at the place it happened</span>
+                    </span>
+                </div>
+
+                <div class="map-header-tail">
+                    <div class="map-status" id="map-status" role="status" aria-live="polite">
+                        <span class="status-dot" aria-hidden="true"></span>
+                        <span class="map-status-copy">
+                            <span class="status-text" id="map-status-text">loading&hellip;</span>
+                            <span class="status-meta" id="map-status-meta">connecting</span>
+                        </span>
+                    </div>
+
+                    <nav class="map-nav" aria-label="Other views">
+                        <a href="/globe" class="map-btn" title="Open the 3D globe view">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <circle cx="12" cy="12" r="9"></circle>
+                                <path d="M3 12h18M12 3c2.6 2.6 2.6 15.4 0 18M12 3c-2.6 2.6-2.6 15.4 0 18"></path>
+                            </svg>
+                            <span class="map-btn-label">Globe</span>
+                        </a>
+                        <a href="/" class="map-btn" title="Return to Curation">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M20 12H5M11 5l-7 7 7 7"></path>
+                            </svg>
+                            <span class="map-btn-label">Curation</span>
+                        </a>
+                    </nav>
                 </div>
             </div>
 
-            <div class="map-header-controls">
-                <div class="map-field">
+            <div class="map-instrument">
+                <div class="map-instrument-cell">
                     <span class="map-field-label" id="map-mode-label">Mode</span>
-                    <div class="map-mode-toggle" role="group" aria-labelledby="map-mode-label">
+                    <div class="map-mode-toggle" id="map-mode-toggle" data-mode="live"
+                         role="group" aria-labelledby="map-mode-label">
+                        <span class="map-mode-thumb" aria-hidden="true"></span>
                         <button type="button" class="map-mode-btn is-active" id="map-mode-live"
                                 data-mode="live" aria-pressed="true">Live</button>
                         <button type="button" class="map-mode-btn" id="map-mode-replay"
@@ -43,92 +77,145 @@
                     </div>
                 </div>
 
-                <div class="map-field">
-                    <label for="event-type-select">Event Type</label>
+                <div class="map-instrument-cell map-instrument-grow">
+                    <label class="map-field-label" for="event-type-select">Filter</label>
                     <select id="event-type-select" class="map-select" aria-label="Filter by event type">
-                        <option value="">All types</option>
+                        <option value="">All event types</option>
                         <!-- Populated from the EventType vocabulary in map.js -->
                     </select>
                 </div>
-
-                <div class="map-status" id="map-status" role="status" aria-live="polite">
-                    <span class="status-dot" aria-hidden="true"></span>
-                    <span class="status-text" id="map-status-text">loading…</span>
-                </div>
-
-                <a href="/globe" class="map-btn" title="Open the 3D globe view">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-                    </svg>
-                    <span class="map-btn-label">Globe</span>
-                </a>
-
-                <a href="/" class="map-btn" title="Return to Curation">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <line x1="19" y1="12" x2="5" y2="12"></line>
-                        <polyline points="12 19 5 12 12 5"></polyline>
-                    </svg>
-                    <span class="map-btn-label">Curation</span>
-                </a>
             </div>
         </header>
 
         <div class="map-body" id="map-body">
             <div id="map" role="application" aria-label="World map of news events"></div>
+            <div class="map-graticule" aria-hidden="true"></div>
+            <div class="map-vignette" aria-hidden="true"></div>
+
+            <!-- ======================= STATES ======================= -->
+
+            <div class="map-overlay map-loading" id="map-loading" aria-hidden="true" hidden>
+                <p class="map-loading-chip">
+                    <span class="map-loading-dot"></span>
+                    <span>Plotting events</span>
+                </p>
+            </div>
+
+            <section class="map-overlay map-empty" id="map-empty" aria-label="No events" hidden>
+                <div class="map-empty-card">
+                    <p class="map-empty-kicker">Empty view</p>
+                    <h2 class="map-empty-title" id="map-empty-title">Nothing plotted here</h2>
+                    <p class="map-empty-body" id="map-empty-body">
+                        Every confirmed event lands on this map as it happens, at the place it happened.
+                        No events fall inside the view you are looking at.
+                    </p>
+                    <ul class="map-empty-steps">
+                        <li>Pan or zoom to another region</li>
+                        <li>Pick a different event type</li>
+                        <li>Open Curation to queue new stories</li>
+                    </ul>
+                    <div class="map-empty-actions">
+                        <button type="button" class="map-chip-btn" id="map-empty-primary">Show all types</button>
+                        <a class="map-chip-btn map-chip-btn-ghost" href="/">Open Curation</a>
+                    </div>
+                </div>
+            </section>
 
             <div class="map-banner" id="map-banner" role="alert" hidden>
                 <span class="map-banner-icon" aria-hidden="true">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                        <line x1="12" y1="9" x2="12" y2="13"></line>
-                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path>
+                        <path d="M12 9v4.5M12 17h.01"></path>
                     </svg>
                 </span>
                 <div class="map-banner-text">
                     <span class="map-banner-title">Data unavailable</span>
                     <span class="map-banner-message" id="map-banner-message"></span>
                 </div>
-                <button type="button" class="map-banner-close" id="map-banner-close" aria-label="Dismiss">&times;</button>
+                <button type="button" class="map-banner-retry" id="map-banner-retry">Retry</button>
+                <button type="button" class="map-banner-close" id="map-banner-close" aria-label="Dismiss message">&times;</button>
             </div>
 
+            <!-- ======================= LEGEND ======================= -->
             <section class="map-legend" id="map-legend" aria-label="Event type legend">
                 <button type="button" class="map-legend-head" id="map-legend-head" aria-expanded="true" aria-controls="map-legend-list">
-                    <span>Event Types</span>
-                    <span class="map-legend-caret" aria-hidden="true">▼</span>
+                    <span class="map-legend-heading">
+                        <span class="map-legend-title">Event types</span>
+                        <span class="map-legend-total" id="map-legend-total">0</span>
+                    </span>
+                    <svg class="map-legend-caret" viewBox="0 0 12 12" fill="none" stroke="currentColor"
+                         stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M2.5 4.5 6 8l3.5-3.5"></path>
+                    </svg>
                 </button>
                 <div class="map-legend-body">
                     <ul class="map-legend-list" id="map-legend-list">
                         <!-- Populated from the EventType vocabulary in map.js -->
                     </ul>
-                    <p class="map-legend-hint">Marker size reflects confidence. Tap a marker for details.</p>
+                    <div class="map-legend-scale">
+                        <span class="map-legend-scale-label">Confidence</span>
+                        <span class="map-legend-scale-dots" aria-hidden="true">
+                            <i style="--dot:6px"></i>
+                            <i style="--dot:9px"></i>
+                            <i style="--dot:12px"></i>
+                        </span>
+                        <span class="map-legend-scale-note">low to high</span>
+                    </div>
+                    <p class="map-legend-hint">
+                        Dot size follows confidence. Bright rings pulse on fresh, well corroborated events.
+                        Tap a row to filter by that type, tap it again to clear.
+                    </p>
                 </div>
             </section>
 
-            <!-- Replay mode scrubber: hidden while the live mode toggle is active. -->
-            <section class="map-replay" id="map-replay" aria-label="Replay time scrubber" hidden>
-                <div class="map-replay-bar">
-                    <button type="button" class="map-replay-play" id="map-replay-play"
-                            aria-label="Play replay" aria-pressed="false">
-                        <svg class="map-replay-icon map-replay-icon-play" width="16" height="16"
-                             viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                            <polygon points="6 3 21 12 6 21 6 3"></polygon>
+            <!-- ======================= REPLAY DECK =======================
+                 Hidden while the live mode toggle is active. map.js owns the
+                 histogram bars, the time readout and the reveal animation. -->
+            <section class="map-replay" id="map-replay" aria-label="Replay timeline" hidden>
+                <div class="map-replay-head">
+                    <button type="button" class="map-replay-restart" id="map-replay-restart"
+                            aria-label="Jump to the start of the window" disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M4 12a8 8 0 1 0 2.6-5.9"></path>
+                            <path d="M4 4v4h4"></path>
                         </svg>
-                        <svg class="map-replay-icon map-replay-icon-pause" width="16" height="16"
-                             viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                            <rect x="5" y="3" width="5" height="18"></rect>
-                            <rect x="14" y="3" width="5" height="18"></rect>
+                    </button>
+
+                    <button type="button" class="map-replay-play" id="map-replay-play"
+                            aria-label="Play replay" aria-pressed="false" disabled>
+                        <svg class="map-replay-icon map-replay-icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <polygon points="7 4 20 12 7 20 7 4"></polygon>
+                        </svg>
+                        <svg class="map-replay-icon map-replay-icon-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <rect x="6" y="4" width="4.4" height="16" rx="1"></rect>
+                            <rect x="13.6" y="4" width="4.4" height="16" rx="1"></rect>
                         </svg>
                     </button>
 
                     <div class="map-replay-readout">
-                        <span class="map-replay-clock" id="map-replay-clock">—</span>
+                        <span class="map-replay-clock" id="map-replay-clock">pending</span>
                         <span class="map-replay-progress" id="map-replay-progress">0 / 0 events</span>
                     </div>
+                </div>
 
+                <div class="map-replay-track" id="map-replay-track">
+                    <div class="map-replay-hist" id="map-replay-hist" aria-hidden="true"></div>
+                    <div class="map-replay-played" aria-hidden="true"></div>
+                    <input type="range" class="map-replay-scrub" id="map-replay-scrub"
+                           min="0" max="1000" step="1" value="0"
+                           aria-label="Scrub replay time" disabled>
+                </div>
+
+                <div class="map-replay-scale">
+                    <span class="map-replay-bound" id="map-replay-start">pending</span>
+                    <span class="map-replay-bound" id="map-replay-end">pending</span>
+                </div>
+
+                <div class="map-replay-controls">
                     <div class="map-replay-field">
                         <label for="map-replay-window">Window</label>
-                        <select id="map-replay-window" class="map-select map-select-sm">
+                        <select id="map-replay-window" class="map-select map-select-sm" aria-label="Replay time window">
                             <option value="24h">Last 24h</option>
                             <option value="7d" selected>Last 7d</option>
                             <option value="30d">Last 30d</option>
@@ -138,7 +225,7 @@
 
                     <div class="map-replay-field">
                         <label for="map-replay-speed">Speed</label>
-                        <select id="map-replay-speed" class="map-select map-select-sm">
+                        <select id="map-replay-speed" class="map-select map-select-sm" aria-label="Replay speed">
                             <option value="0.5">0.5&times;</option>
                             <option value="1" selected>1&times;</option>
                             <option value="2">2&times;</option>
@@ -147,15 +234,6 @@
                             <option value="16">16&times;</option>
                         </select>
                     </div>
-                </div>
-
-                <input type="range" class="map-replay-scrub" id="map-replay-scrub"
-                       min="0" max="1000" step="1" value="0"
-                       aria-label="Scrub replay time" disabled>
-
-                <div class="map-replay-scale">
-                    <span class="map-replay-bound" id="map-replay-start">—</span>
-                    <span class="map-replay-bound" id="map-replay-end">—</span>
                 </div>
 
                 <p class="map-replay-note" id="map-replay-note" hidden></p>
