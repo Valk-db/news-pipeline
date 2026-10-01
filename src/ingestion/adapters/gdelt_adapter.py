@@ -31,17 +31,23 @@ class GDELTAdapter:
         succeeded = self._last_health.get("succeeded", [])
         failed = self._last_health.get("failed", [])
         skipped = self._last_health.get("skipped", [])
+        fallback_used = self._last_health.get("fallback_used", False)
+        fallback_count = self._last_health.get("fallback_count", 0)
 
         if not self._last_articles and not succeeded:
             status = "down"
-        elif failed or skipped:
+        elif failed or skipped or fallback_used:
             status = "degraded"
         else:
             status = "ok"
 
+        detail = f"GDELT: {len(succeeded)} succeeded, {len(failed)} failed, {len(skipped)} skipped"
+        if fallback_used:
+            detail += f", v1 GKG GeoJSON fallback served {fallback_count} articles"
+
         return SourceHealth(
             status=status,
-            detail=f"GDELT: {len(succeeded)} succeeded, {len(failed)} failed, {len(skipped)} skipped",
+            detail=detail,
             succeeded=succeeded,
             failed=failed,
             skipped=skipped,

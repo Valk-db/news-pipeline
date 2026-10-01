@@ -167,6 +167,7 @@ class TestIngestGdeltCircuitBreaker:
     async def test_circuit_opens_at_threshold(self):
         """Circuit opens at exactly gdelt_circuit_breaker_threshold failures."""
         with patch("src.ingestion.gdelt.fetch_gdelt_articles") as mock_fetch, \
+             patch("src.ingestion.gdelt.fetch_gkg_geojson_articles") as mock_fallback, \
              patch("src.ingestion.gdelt.get_settings") as mock_settings:
 
             mock_settings.return_value.gdelt_circuit_breaker_threshold = 3
@@ -177,21 +178,28 @@ class TestIngestGdeltCircuitBreaker:
                 DomainResult(domain="npr.org", ok=False, error="timeout"),
                 # Should not be called - no more domains after circuit opens
             ]
+            # DOC dead -> fallback runs; keep it empty so circuit assertions stay pure
+            mock_fallback.return_value = DomainResult(domain="gkg-geojson", ok=False, error="empty")
 
             articles, health = await ingest_gdelt(hours_back=24, max_per_domain=50)
 
             # Only first 3 should have been called
             assert mock_fetch.call_count == 3
+            # Fallback engaged exactly once after total DOC failure
+            assert mock_fallback.call_count == 1
 
             # Check health structure
             assert health["succeeded"] == []
-            assert health["failed"] == ["bbc.com", "theguardian.com", "npr.org"]
+            assert health["failed"] == ["bbc.com", "theguardian.com", "npr.org", "gkg-geojson"]
             assert health["skipped"] == []
+            assert health["fallback_used"] is False
+            assert articles == []
 
     @pytest.mark.asyncio
     async def test_gdelt_domains_fail_sets_tier1_critical(self):
         """GDELT domains failing sets tier1_critical_down (empty now since all have RSS backup)."""
         with patch("src.ingestion.gdelt.fetch_gdelt_articles") as mock_fetch, \
+             patch("src.ingestion.gdelt.fetch_gkg_geojson_articles") as mock_fallback, \
              patch("src.ingestion.gdelt.get_settings") as mock_settings:
 
             mock_settings.return_value.gdelt_circuit_breaker_threshold = 3
@@ -201,14 +209,69 @@ class TestIngestGdeltCircuitBreaker:
                 DomainResult(domain="theguardian.com", ok=True, articles=[]),
                 DomainResult(domain="npr.org", ok=True, articles=[]),
             ]
+            mock_fallback.return_value = DomainResult(domain="gkg-geojson", ok=False, error="empty")
 
             _, health = await ingest_gdelt(hours_back=24, max_per_domain=50)
 
             assert "bbc.com" in health["failed"]
             assert "theguardian.com" not in health["failed"]
+            assert health["fallback_used"] is False
 
             # Verify the tier1 critical domains set is now empty (all have RSS backup)
             assert GDELT_TIER1_CRITICAL_DOMAINS == set()
+
+    @pytest.mark.asyncio
+    async def test_gkg_fallback_engages_when_doc_yields_nothing(self):
+        """Total DOC failure triggers the v1 GKG GeoJSON fallback and merges its articles."""
+        fb_article = RawArticle(
+            url="https://example.com/fallback-story",
+            url_hash="fb123",
+            title="Fallback story",
+            body_text="x" * 300,
+            source_domain="example.com",
+            source_tier=SourceTier.TIER2,
+        )
+        with patch("src.ingestion.gdelt.fetch_gdelt_articles") as mock_fetch, \
+             patch("src.ingestion.gdelt.fetch_gkg_geojson_articles") as mock_fallback, \
+             patch("src.ingestion.gdelt.get_settings") as mock_settings:
+
+            mock_settings.return_value.gdelt_circuit_breaker_threshold = 10
+            mock_fetch.return_value = DomainResult(domain="bbc.com", ok=True, articles=[])
+            mock_fallback.return_value = DomainResult(
+                domain="gkg-geojson", ok=True, articles=[fb_article],
+            )
+
+            articles, health = await ingest_gdelt(hours_back=24, max_per_domain=50)
+
+            assert mock_fallback.call_count == 1
+            assert health["fallback_used"] is True
+            assert health["fallback_count"] == 1
+            assert "gkg-geojson" in health["succeeded"]
+            assert [a.url_hash for a in articles] == ["fb123"]
+
+    @pytest.mark.asyncio
+    async def test_gkg_fallback_skipped_when_doc_succeeds(self):
+        """Fallback stays out of the way when the DOC API produces articles."""
+        doc_article = RawArticle(
+            url="https://bbc.com/doc-story",
+            url_hash="doc123",
+            title="DOC story",
+            body_text="x" * 300,
+            source_domain="bbc.com",
+            source_tier=SourceTier.TIER1,
+        )
+        with patch("src.ingestion.gdelt.fetch_gdelt_articles") as mock_fetch, \
+             patch("src.ingestion.gdelt.fetch_gkg_geojson_articles") as mock_fallback, \
+             patch("src.ingestion.gdelt.get_settings") as mock_settings:
+
+            mock_settings.return_value.gdelt_circuit_breaker_threshold = 10
+            mock_fetch.return_value = DomainResult(domain="bbc.com", ok=True, articles=[doc_article])
+
+            articles, health = await ingest_gdelt(hours_back=24, max_per_domain=50)
+
+            assert mock_fallback.call_count == 0
+            assert health["fallback_used"] is False
+            assert [a.url_hash for a in articles] == ["doc123"]
 
     @pytest.mark.asyncio
     async def test_verify_sources_updated_for_domainresult(self):
