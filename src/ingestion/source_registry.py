@@ -173,6 +173,12 @@ TIER1_SOURCES = {
         owner_group="PBS",
         fetch_priority=2,
     ),
+    # AP: the two URLs below are the ones this registry has always used, and a
+    # live fetch (2026-10-01) returns HTTP 200 text/html. They are HTML hub
+    # pages, not feeds, so feedparser finds no entries. Candidate real feed
+    # paths all failed too: /apf-topnews?output=1 and /hub/ap-top-news.rss close
+    # the connection, /index.rss is 403. No working AP feed from this network.
+    # Adapter code is left intact; enabling this would just add two empty feeds.
     "apnews.com": SourceConfig(
         domain="apnews.com",
         name="Associated Press",
@@ -188,8 +194,12 @@ TIER1_SOURCES = {
         bias_rating="center",
         owner_group="Associated Press",
         fetch_priority=3,
-        enabled=False,  # Currently no working RSS
+        enabled=False,  # Verified 2026-10-01: HTML hub pages, no RSS, no working feed URL
     ),
+    # Reuters: live fetch of both URLs below (2026-10-01) returns HTTP 401, so
+    # they are bot blocked from this network. The Reuters arc news sitemap
+    # index does answer 200 with application/xml, but it is a sitemap, not a
+    # feed; the matching rss category path 404s. No working Reuters feed here.
     "reuters.com": SourceConfig(
         domain="reuters.com",
         name="Reuters",
@@ -205,7 +215,42 @@ TIER1_SOURCES = {
         bias_rating="center",
         owner_group="Reuters",
         fetch_priority=3,
-        enabled=False,  # Currently no working RSS
+        enabled=False,  # Verified 2026-10-01: HTTP 401 on both URLs, bot blocked
+    ),
+}
+
+# Hazard sensor feeds. These are not publishers, so they are tier 3 machine
+# sources with no RSS and no ownership. Both feed URLs were verified live
+# (2026-10-01) and are served by src/ingestion/sensors.py, not by the RSS
+# adapter, so rss_urls stays empty to keep them out of the RSS sweep.
+SENSOR_SOURCES = {
+    "earthquake.usgs.gov": SourceConfig(
+        domain="earthquake.usgs.gov",
+        name="USGS Earthquakes",
+        tier=SourceTier.TIER3,
+        category=SourceCategory.GOVERNMENT,
+        rss_urls=[],
+        geographic_focus="Global",
+        language="en",
+        reliability_score=0.99,
+        bias_rating="center",
+        owner_group="US Geological Survey",
+        fetch_priority=1,
+        notes="GeoJSON all_day feed, ~290 features/day, handled by sensors.usgs_earthquakes",
+    ),
+    "gdacs.org": SourceConfig(
+        domain="gdacs.org",
+        name="GDACS",
+        tier=SourceTier.TIER3,
+        category=SourceCategory.GOVERNMENT,
+        rss_urls=[],
+        geographic_focus="Global",
+        language="en",
+        reliability_score=0.90,
+        bias_rating="center",
+        owner_group="Global Disaster Alert and Coordination System",
+        fetch_priority=1,
+        notes="xml/rss.xml feed, ~223 items, handled by sensors.gdacs_alerts",
     ),
 }
 
@@ -552,6 +597,22 @@ ALL_SOURCES.update(TIER1_SOURCES)
 ALL_SOURCES.update(TIER2_SOURCES)
 ALL_SOURCES.update(TIER3_SOURCES)
 ALL_SOURCES.update(TIER4_SOURCES)
+ALL_SOURCES.update(SENSOR_SOURCES)
+
+# Sensors that have their own ingestion path, keyed by the sensors.py function.
+SENSOR_FEEDS = {
+    "earthquake.usgs.gov": "usgs_earthquakes",
+    "gdacs.org": "gdacs_alerts",
+}
+
+
+def get_enabled_sensor_feeds() -> dict[str, str]:
+    """Enabled sensor domains mapped to their sensors.py function name."""
+    return {
+        domain: SENSOR_FEEDS[domain]
+        for domain, config in SENSOR_SOURCES.items()
+        if config.enabled and domain in SENSOR_FEEDS
+    }
 
 
 def get_sources_by_tier(tier: SourceTier) -> dict[str, SourceConfig]:

@@ -1,15 +1,28 @@
-"""Main ingestion pipeline entry point."""
+"""Main ingestion pipeline entry point.
 
+All pipeline logic lives here: adapters are run in order, articles are deduped,
+persisted, then verified and grouped. scripts/ingest_gdelt_daily.py is only a
+scheduler shim that invokes this module, so do not move logic into the script.
+
+Command line options:
+  --dry-run          fetch and report, do not persist
+  --env dev|prod     select the config profile (see apply_env below)
+  --sources a,b      limit the run to these sources, by adapter name or domain
+  --tiers n          comma separated SourceTier names to ingest
+"""
+
+import argparse
 import asyncio
 import sys
 import os
 from datetime import datetime, timezone
 from typing import List, Dict, Tuple
 from src.ingestion.gdelt import GDELT_TIER1_CRITICAL_DOMAINS
-from src.ingestion.source_registry import SourceTier
+from src.ingestion.source_registry import SourceTier, get_enabled_sensor_feeds
 from src.ingestion.adapters.rss_adapter import RssAdapter
 from src.ingestion.adapters.gdelt_adapter import GDELTAdapter
 from src.ingestion.adapters.reddit_adapter import RedditAdapter
+from src.ingestion.adapters.sensor_adapter import SensorAdapter
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_dynamic_gate
@@ -147,12 +160,109 @@ async def log_status(session, phase: str, status: str, details: dict = None):
     await session.commit()
 
 
-async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = None) -> dict:
+ENV_PROFILES = ("dev", "prod")
+
+
+def apply_env(env: str) -> str:
+    """Select the config profile for a run.
+
+    pydantic-settings reads .env by default. For dev we load .env.dev when it
+    exists, on top of .env, so a local run can point at a local database. For
+    prod we use the environment only, which is what CI provides. Returns the
+    profile name.
+    """
+    if env not in ENV_PROFILES:
+        raise ValueError(f"unknown env {env!r}, expected one of {ENV_PROFILES}")
+
+    os.environ["PIPELINE_ENV"] = env
+
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return env
+
+    load_dotenv(".env", override=False)
+    if env == "dev":
+        if os.path.exists(".env.dev"):
+            load_dotenv(".env.dev", override=True)
+            print("Config profile: dev (loaded .env.dev)")
+        else:
+            print("Config profile: dev (no .env.dev, using .env)")
+    else:
+        print("Config profile: prod (environment only)")
+
+    # get_settings is lru_cached, and the profile is loaded after first import.
+    get_settings.cache_clear()
+    return env
+
+
+def build_adapters(
+    settings,
+    tiers: list[SourceTier],
+    sources: list[str] | None = None,
+) -> list:
+    """Assemble adapters for the requested tiers, optionally filtered by --sources.
+
+    A --sources entry matches an adapter name (rss_tier1, gdelt, reddit_tier3,
+    sensors) or a registry domain. Unmatched entries are reported, not fatal,
+    so a typo shows up in the log instead of silently shrinking the run.
+    """
+    candidates = []
+    if SourceTier.TIER1 in tiers:
+        candidates.append(RssAdapter(SourceTier.TIER1))
+    if SourceTier.TIER2 in tiers:
+        candidates.append(RssAdapter(SourceTier.TIER2))
+    if settings.gdelt_enabled and SourceTier.TIER1 in tiers:
+        candidates.append(GDELTAdapter())
+    if SourceTier.TIER3 in tiers:
+        candidates.append(RedditAdapter())
+    if SourceTier.TIER3 in tiers:
+        candidates.append(SensorAdapter(list(get_enabled_sensor_feeds().values())))
+
+    if not sources:
+        return candidates
+
+    wanted = {s.strip().lower() for s in sources if s.strip()}
+    if not wanted:
+        return candidates
+
+    selected = []
+    for adapter in candidates:
+        if adapter.name.lower() in wanted:
+            selected.append(adapter)
+            continue
+        # SensorAdapter reports per feed, so accept the sensor domain names too.
+        if adapter.name == "sensors" and (
+            {d for d in get_enabled_sensor_feeds()} & wanted
+        ):
+            selected.append(adapter)
+            continue
+        if isinstance(adapter, RssAdapter):
+            from src.ingestion.source_registry import get_enabled_sources_by_tier
+            domains = set(get_enabled_sources_by_tier(adapter.tier))
+            if domains & wanted:
+                selected.append(adapter)
+                continue
+
+    matched = {a.name.lower() for a in selected}
+    for entry in sorted(wanted):
+        if entry not in matched and entry not in get_enabled_sensor_feeds():
+            print(f"WARNING: --sources entry {entry!r} matched no adapter")
+
+    return selected
+
+
+async def run_ingestion(
+    dry_run: bool = False,
+    tiers: list[SourceTier] | None = None,
+    sources: list[str] | None = None,
+) -> dict:
     """Run the full ingestion → verification → grouping pipeline.
 
     Args:
         dry_run: If True, don't persist to database
         tiers: If specified, only ingest these tiers. Default: all tiers.
+        sources: If specified, only run these adapters/domains.
     """
     settings = get_settings()
     STATS.reset()
@@ -171,21 +281,8 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
         all_articles = []
 
         # Build list of adapters for requested tiers
-        adapters = []
-
-        # RSS adapters per tier
-        if SourceTier.TIER1 in tiers:
-            adapters.append(RssAdapter(SourceTier.TIER1))
-        if SourceTier.TIER2 in tiers:
-            adapters.append(RssAdapter(SourceTier.TIER2))
-
-        # GDELT (only if enabled and tier-1 requested)
-        if settings.gdelt_enabled and SourceTier.TIER1 in tiers:
-            adapters.append(GDELTAdapter())
-
-        # Reddit (tier-3)
-        if SourceTier.TIER3 in tiers:
-            adapters.append(RedditAdapter())
+        adapters = build_adapters(settings, tiers, sources)
+        print(f"  Adapters: {', '.join(a.name for a in adapters) or 'none'}")
 
         # Fetch from each adapter sequentially (match current sequential ordering
         # to avoid changing GDELT's circuit-breaker timing)
@@ -193,6 +290,7 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
         rss_tier2_count = 0
         gdelt_count = 0
         reddit_count = 0
+        sensor_count = 0
         adapter_health = {}
 
         for adapter in adapters:
@@ -214,6 +312,9 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
             elif adapter.name == "reddit_tier3":
                 reddit_count = len(articles)
                 print(f"  Tier-3 Reddit: {reddit_count}")
+            elif adapter.name == "sensors":
+                sensor_count = len(articles)
+                print(f"  Sensors: {sensor_count}")
 
         print(f"  Total fetched articles: {len(all_articles)}")
 
@@ -273,6 +374,7 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
             "rss": rss_tier1_count + rss_tier2_count,
             "gdelt": gdelt_count,
             "reddit": reddit_count,
+            "sensors": sensor_count,
             "total_fetched": len(all_articles),
             "total_new": len(new_articles),
             "url_duplicates_skipped": url_dup,
@@ -332,15 +434,75 @@ async def run_ingestion(dry_run: bool = False, tiers: list[SourceTier] | None = 
     return results
 
 
-async def main():
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse command line options for the pipeline entry point.
+
+    Reads sys.argv by default, like the pre argparse version did with
+    "--dry-run" in sys.argv. Unrecognized arguments are reported on stderr and
+    then ignored rather than aborting, so calling main() from a process that
+    owns a different command line does not kill the run. A mistyped option
+    still shows up in the log instead of being silently swallowed.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    parser = argparse.ArgumentParser(
+        prog="python -m src.ingestion.run",
+        description="Run the news ingestion, verification and grouping pipeline.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Fetch and report without persisting to the database.",
+    )
+    parser.add_argument(
+        "--env",
+        choices=list(ENV_PROFILES),
+        default=os.getenv("PIPELINE_ENV", "prod"),
+        help="Config profile to load: dev reads .env.dev on top of .env, prod uses the environment.",
+    )
+    parser.add_argument(
+        "--sources",
+        default="",
+        help="Comma separated adapter names (rss_tier1, rss_tier2, gdelt, reddit_tier3, sensors) or registry domains to limit the run to.",
+    )
+    parser.add_argument(
+        "--tiers",
+        default="",
+        help="Comma separated SourceTier names (tier1, tier2, tier3, tier4) to ingest.",
+    )
+    args, unknown = parser.parse_known_args(argv)
+    if unknown:
+        print(f"WARNING: ignoring unrecognized argument(s): {' '.join(unknown)}", file=sys.stderr)
+    return args
+
+
+def parse_tiers(raw: str) -> list[SourceTier] | None:
+    """Turn a --tiers string into SourceTier members, or None for all."""
+    names = [n.strip().upper() for n in raw.split(",") if n.strip()]
+    if not names:
+        return None
+    invalid = [n for n in names if n not in {t.name for t in SourceTier}]
+    if invalid:
+        raise ValueError(f"unknown tier(s): {', '.join(invalid)}")
+    return [SourceTier[n] for n in names]
+
+
+async def main(argv: list[str] | None = None):
     """Main entry point."""
-    dry_run = "--dry-run" in sys.argv
+    args = parse_args(argv)
+    dry_run = args.dry_run
+
+    apply_env(args.env)
 
     # Initialize DB
     await init_db()
 
     try:
-        results = await run_ingestion(dry_run=dry_run)
+        results = await run_ingestion(
+            dry_run=dry_run,
+            tiers=parse_tiers(args.tiers),
+            sources=[s for s in args.sources.split(",") if s.strip()],
+        )
         print("\nPipeline completed successfully.")
         print(json.dumps(results, indent=2))
 

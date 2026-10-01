@@ -1,10 +1,14 @@
 """GDELT adapter wrapping ingest_gdelt() from gdelt.py.
 
-Its (articles, health) return already has succeeded/failed/skipped keys —
+Its (articles, health) return already has succeeded/failed/skipped keys,
 map straight into SourceHealth. Preserve the existing
 GDELT_TIER1_CRITICAL_DOMAINS check; it currently lives in run.py computing
-tier1_critical_down — keep that computation in run.py after calling
+tier1_critical_down, keep that computation in run.py after calling
 health_check(), don't bury it inside the adapter.
+
+The adapter interface is unchanged. fetch() and health_check() keep their
+signatures; the static file count from gdelt_static is surfaced in the health
+detail only.
 """
 from src.ingestion.adapter import SourceHealth
 from src.ingestion import gdelt
@@ -20,8 +24,10 @@ class GDELTAdapter:
         self._last_articles: list = []
 
     async def fetch(self) -> list:
-        """Fetch articles from GDELT."""
-        articles, health = await gdelt.ingest_gdelt(hours_back=24, max_per_domain=50)
+        """Fetch articles from GDELT static files, DOC API as degraded fallback."""
+        articles, health = await gdelt.ingest_gdelt_with_static(
+            hours_back=24, max_per_domain=50
+        )
         self._last_articles = articles
         self._last_health = health
         return articles
@@ -33,6 +39,7 @@ class GDELTAdapter:
         skipped = self._last_health.get("skipped", [])
         fallback_used = self._last_health.get("fallback_used", False)
         fallback_count = self._last_health.get("fallback_count", 0)
+        static_count = self._last_health.get("static_count", 0)
 
         if not self._last_articles and not succeeded:
             status = "down"
@@ -41,7 +48,10 @@ class GDELTAdapter:
         else:
             status = "ok"
 
-        detail = f"GDELT: {len(succeeded)} succeeded, {len(failed)} failed, {len(skipped)} skipped"
+        detail = (
+            f"GDELT: {len(succeeded)} succeeded, {len(failed)} failed, "
+            f"{len(skipped)} skipped, static files served {static_count} articles"
+        )
         if fallback_used:
             detail += f", v1 GKG GeoJSON fallback served {fallback_count} articles"
 

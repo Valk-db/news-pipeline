@@ -1,10 +1,14 @@
 """GDELT ingestion for geopolitics and wire-service coverage.
 
-Primary path: v2 DOC API (artlist) per domain.
-Fallback path: legacy v1 GKG GeoJSON API, used only when the DOC API yields
-nothing. The v1 endpoint still serves geocoded coverage directly (the v2
-/geo/geo endpoint is dead), so fallback articles arrive with lat/lng that we
-stash in entities["GEO"].
+Primary path: GDELT 2.0 static files, handled in gdelt_static.py. Reading the
+published 15 minute files gives us real article URLs, titles and event
+geography without depending on the DOC API's rate limits.
+
+Degraded paths, in order, used only when the static files yield nothing:
+  1. v2 DOC API (artlist) per domain.
+  2. legacy v1 GKG GeoJSON API. The v1 endpoint still serves geocoded coverage
+     directly (the v2 /geo/geo endpoint is dead), so fallback articles arrive
+     with lat/lng that we stash in entities["GEO"].
 """
 
 import httpx
@@ -19,6 +23,8 @@ from src.utils.trafilatura_extract import extract_article, compute_url_hash, com
 from src.utils.ner import extract_entities_top_n
 from src.schema.models import RawArticle, SourceTier
 from src.shared.config import get_settings
+from src.shared.database import get_session
+from src.ingestion.gdelt_static import ingest_static_file_set
 import random
 
 
@@ -309,8 +315,59 @@ async def fetch_gkg_geojson_articles(
     return DomainResult(domain="gkg-geojson", articles=articles, ok=ok, error=error)
 
 
+async def fetch_static_articles(
+    max_articles_per_file: int = 500,
+    known_url_hashes: Optional[set] = None,
+) -> DomainResult:
+    """
+    Primary GDELT path: read the latest 2.0 static file set.
+
+    Returns DomainResult so callers keep one shape. Cap is the latest file set
+    only, gdelt_static never pages through history. Known url hashes are read
+    from the database so extraction is skipped for rows we already have.
+    """
+    if known_url_hashes is None:
+        known_url_hashes = set()
+        try:
+            from sqlalchemy import select
+            from datetime import timedelta
+
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            async with get_session() as session:
+                result = await session.execute(
+                    select(RawArticle.url_hash).where(RawArticle.fetched_at >= cutoff)
+                )
+                known_url_hashes = set(result.scalars().all())
+        except Exception as e:
+            # No database, or the dedup query failed. Parsing still works, the
+            # pipeline's own dedup will catch repeats.
+            logger.warning("GDELT static: could not preload url hashes: %s", e)
+
+    static = await ingest_static_file_set(
+        max_articles_per_file=max_articles_per_file,
+        known_url_hashes=known_url_hashes,
+    )
+
+    label = "gdelt-static"
+    if static.skipped_no_geo:
+        logger.info("GDELT static: %d rows skipped for missing geography", static.skipped_no_geo)
+    if static.soft_skips:
+        logger.info("GDELT static: soft skipped %s", ", ".join(static.soft_skips))
+
+    return DomainResult(
+        domain=label,
+        articles=static.articles,
+        ok=static.ok,
+        error=static.error,
+    )
+
+
 async def ingest_gdelt(hours_back: int = 24, max_per_domain: int = 50) -> tuple[List[RawArticle], dict]:
-    """Ingest from all configured domains via GDELT. Returns (articles, health)."""
+    """DOC API ingestion per domain, with the v1 GKG GeoJSON path as its fallback.
+
+    This is the degraded path. ingest_gdelt_with_static() calls it only when
+    the static files produce nothing.
+    """
     settings = get_settings()
     all_articles: List[RawArticle] = []
     seen_hashes = set()
@@ -356,6 +413,44 @@ async def ingest_gdelt(hours_back: int = 24, max_per_domain: int = 50) -> tuple[
         "fallback_count": fallback_count,
     }
     return all_articles, health
+
+
+async def ingest_gdelt_with_static(
+    hours_back: int = 24,
+    max_per_domain: int = 50,
+    max_static_articles: int = 500,
+    known_url_hashes: Optional[set] = None,
+) -> tuple[List[RawArticle], dict]:
+    """Ingest GDELT static files, falling back to the DOC API when empty.
+
+    Static files are the main feed. They are not subject to the DOC API rate
+    limits and carry article URLs, titles and event geography. Only when they
+    yield nothing do we log the degraded line and call ingest_gdelt(), which
+    runs the DOC API and then the v1 GKG GeoJSON path.
+    """
+    static_result = await fetch_static_articles(
+        max_articles_per_file=max_static_articles,
+        known_url_hashes=known_url_hashes,
+    )
+
+    if static_result.articles:
+        health = {
+            "succeeded": [static_result.domain] if static_result.ok else [],
+            "failed": [] if static_result.ok else [static_result.domain],
+            "skipped": [],
+            "static_count": len(static_result.articles),
+            "fallback_used": False,
+            "fallback_count": 0,
+        }
+        return static_result.articles, health
+
+    logger.warning("GDELT static files unavailable, falling back to DOC API (degraded)")
+
+    articles, health = await ingest_gdelt(
+        hours_back=hours_back, max_per_domain=max_per_domain
+    )
+    health["static_count"] = 0
+    return articles, health
 
 
 async def verify_sources() -> Dict[str, int]:
