@@ -111,7 +111,8 @@
                     </div>
                     <div class="detail-fact">
                         <dt>Corroboration</dt>
-                        <dd>{{ verification.label }}, {{ tier_sentence }}.</dd>
+                        {# tier_sentence already ends in a full stop, so no dot here. #}
+                        <dd>{{ verification.label }} &mdash; {{ tier_sentence }}</dd>
                     </div>
                     <div class="detail-fact">
                         <dt>Reporting units</dt>

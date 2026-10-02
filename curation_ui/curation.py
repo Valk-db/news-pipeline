@@ -188,10 +188,8 @@ def _corroboration_sentence(verification: dict) -> str:
     """
     outlets = int(verification.get("outlets", 0) or 0)
     if verification.get("corroborated"):
-        return (
-            f"Corroborated: two or more tier-1 outlets independently carried this "
-            f"story, from {_outlet_phrase(outlets)}."
-        )
+        tier1 = _tier_count(verification["tier_mix"], 1)
+        return f"Corroborated by {_outlet_phrase(outlets)}, {tier1} of them tier-1."
     if outlets == 0:
         return "Not corroborated: no outlet has been attributed to this story yet."
     if outlets == 1:
