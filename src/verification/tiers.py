@@ -549,7 +549,11 @@ async def compute_harm_level(session: AsyncSession, story: "Story") -> str:
         Claim.claim_type == ClaimType.ALLEGATION,
     )
     claim_result = await session.execute(claim_stmt)
-    has_allegation = claim_result.scalar_one_or_none() is not None
+    # A story routinely carries several ALLEGATION claims (one row per extracted
+    # claim), so take the first row rather than scalar_one_or_none(), which
+    # raises MultipleResultsFound on >1 row and would kill the gate loop
+    # before its commit ever ran (P0-2).
+    has_allegation = claim_result.scalars().first() is not None
 
     if not has_allegation:
         return "low"
@@ -569,7 +573,10 @@ async def compute_harm_level(session: AsyncSession, story: "Story") -> str:
         CanonicalEntity.entity_type == "PERSON",
     )
     entity_result = await session.execute(entity_stmt)
-    person_entity = entity_result.scalar_one_or_none()
+    # Multiple primary entities can resolve to PERSON (e.g. a Trump-and-Biden
+    # story), so take the first row rather than scalar_one_or_none(), which
+    # raises MultipleResultsFound on >1 row (P0-2).
+    person_entity = entity_result.scalars().first()
 
     return "high" if person_entity else "low"
 
