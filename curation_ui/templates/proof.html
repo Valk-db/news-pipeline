@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="map">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>Inclusion proof · {{ view.title }} · News Pipeline</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; background: #0b0e14; color: #dbe2ef;
+            font-family: "IBM Plex Sans", system-ui, sans-serif; line-height: 1.55;
+        }
+        a { color: #7fb3ff; }
+        .proof-public { max-width: 880px; margin: 0 auto; padding: 0 20px 72px; }
+        .proof-public-bar { display: flex; gap: 18px; padding: 18px 0; border-bottom: 1px solid #1d2534; }
+        .proof-public-back { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-size: 14px; }
+        .proof-public-back svg { width: 16px; height: 16px; }
+        .proof-public-main { padding-top: 28px; }
+        .proof-eyebrow { text-transform: uppercase; letter-spacing: 0.12em; font-size: 12px; color: #8b96ab; margin: 0 0 10px; }
+        .proof-headline { font-size: 30px; line-height: 1.25; margin: 0 0 10px; font-weight: 600; }
+        .proof-meta { color: #8b96ab; font-size: 14px; margin: 0 0 6px; }
+        .proof-meta .mono { font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: #aeb9cf; }
+        .proof-verdict { border-radius: 10px; padding: 16px 18px; margin: 22px 0; border: 1px solid; }
+        .proof-verdict h2 { margin: 0 0 6px; font-size: 17px; }
+        .proof-verdict p { margin: 0; font-size: 14.5px; }
+        .proof-verdict.verified { background: #0d1f16; border-color: #1f5c38; }
+        .proof-verdict.verified h2 { color: #5fd68a; }
+        .proof-verdict.failed { background: #221114; border-color: #7a2b33; }
+        .proof-verdict.failed h2 { color: #ff8a94; }
+        .proof-verdict.pending { background: #1d1607; border-color: #6b5518; }
+        .proof-verdict.pending h2 { color: #e8c15a; }
+        .proof-section { margin: 34px 0; }
+        .proof-heading { font-size: 19px; margin: 0 0 12px; font-weight: 600; }
+        .proof-kv { display: grid; grid-template-columns: 190px 1fr; gap: 8px 16px; font-size: 14px; }
+        .proof-kv dt { color: #8b96ab; }
+        .proof-kv dd { margin: 0; overflow-wrap: anywhere; }
+        .mono { font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
+        pre.proof-pre {
+            background: #101623; border: 1px solid #1d2534; border-radius: 8px;
+            padding: 14px 16px; overflow-x: auto; font-family: "JetBrains Mono", monospace;
+            font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere;
+        }
+        .proof-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+        .proof-check { border: 1px solid #1d2534; border-radius: 8px; padding: 12px 14px; font-size: 14px; }
+        .proof-check .badge { display: inline-block; font-size: 11.5px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.08em; border-radius: 20px; padding: 2px 10px; margin-right: 10px; }
+        .badge.pass { background: #123a24; color: #5fd68a; }
+        .badge.fail { background: #3d151a; color: #ff8a94; }
+        .badge.na { background: #232c3f; color: #9aa6bd; }
+        .proof-check .detail { color: #8b96ab; font-size: 13px; margin-top: 4px; }
+        .proof-steps { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .proof-steps th, .proof-steps td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #1d2534; vertical-align: top; }
+        .proof-steps th { color: #8b96ab; font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+        .proof-note { color: #8b96ab; font-size: 13.5px; }
+        .proof-siblings { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+        .proof-siblings li { font-family: "JetBrains Mono", monospace; font-size: 12px; overflow-wrap: anywhere;
+            background: #101623; border: 1px solid #1d2534; border-radius: 6px; padding: 8px 12px; }
+    </style>
+</head>
+<body>
+    <div class="proof-public">
+        <header class="proof-public-bar">
+            <a href="/map" class="proof-public-back">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 12H5M11 5l-7 7 7 7"></path>
+                </svg>
+                <span>Back to the map</span>
+            </a>
+            <a href="/globe" class="proof-public-back">Globe</a>
+        </header>
+
+        <main class="proof-public-main">
+            <p class="proof-eyebrow">
+                {% if view.state == 'verified' %}Inclusion proof · verified
+                {% elif view.state == 'failed' %}Inclusion proof · failed
+                {% else %}Inclusion proof · pending{% endif %}
+            </p>
+            <h1 class="proof-headline">{{ view.title }}</h1>
+            <p class="proof-meta">
+                <a href="{{ view.url }}" target="_blank" rel="noopener noreferrer">{{ view.source_domain }}</a>
+                {%- if view.source_tier %} · tier {{ view.source_tier }}{% endif %}
+                {%- if view.published_at %} · published {{ view.published_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
+                {%- if view.fetched_at %} · archived {{ view.fetched_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
+            </p>
+            {% if view.content_hash %}
+            <p class="proof-meta">content <span class="mono">{{ view.content_hash }}</span></p>
+            {% endif %}
+
+            <div class="proof-verdict {{ 'verified' if view.state == 'verified' else ('failed' if view.state == 'failed' else 'pending') }}">
+                <h2>{{ view.state_headline }}</h2>
+                <p>{{ view.state_detail }}</p>
+            </div>
+
+            {% if view.checks %}
+            <section class="proof-section" aria-label="Verification checklist">
+                <h2 class="proof-heading">Checks</h2>
+                <ul class="proof-checks">
+                    {% for check in view.checks %}
+                    <li class="proof-check">
+                        <span class="badge {{ 'pass' if check.passed is true else ('fail' if check.passed is false else 'na') }}">
+                            {{ 'pass' if check.passed is true else ('fail' if check.passed is false else 'n/a') }}
+                        </span>
+                        {{ check.label }}
+                        <div class="detail">{{ check.detail }}</div>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </section>
+            {% endif %}
+
+            {% if view.entry %}
+            <section class="proof-section" aria-label="The log entry">
+                <h2 class="proof-heading">The log entry</h2>
+                <dl class="proof-kv">
+                    <dt>Log index</dt><dd class="mono">#{{ view.entry.index }}</dd>
+                    <dt>Stamped at</dt><dd>{{ view.entry.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC') if view.entry.timestamp else 'unknown' }}</dd>
+                    <dt>Leaf hash</dt><dd class="mono">{{ view.entry.leaf_hash }}</dd>
+                    <dt>Chain hash</dt><dd class="mono">{{ view.entry.chain_hash }}</dd>
+                </dl>
+                <h3 class="proof-heading" style="font-size:15px;margin-top:18px;">Canonical payload (the exact bytes hashed)</h3>
+                <pre class="proof-pre">{{ view.entry.canonical_payload }}</pre>
+            </section>
+            {% endif %}
+
+            {% if view.proof %}
+            <section class="proof-section" aria-label="The inclusion proof">
+                <h2 class="proof-heading">The inclusion proof</h2>
+                <dl class="proof-kv">
+                    <dt>Entry index</dt><dd class="mono">{{ view.proof.index }}</dd>
+                    <dt>Checkpoint tree size</dt><dd class="mono">{{ view.proof.tree_size }} entries</dd>
+                    <dt>Sibling hashes</dt><dd class="mono">{{ view.proof.siblings | length }} levels</dd>
+                </dl>
+                <ol class="proof-siblings" style="margin-top:12px;">
+                    {% for sibling in view.proof.siblings %}
+                    <li>level {{ loop.index0 }} · {{ sibling }}</li>
+                    {% endfor %}
+                </ol>
+            </section>
+
+            <section class="proof-section" aria-label="Recompute it yourself">
+                <h2 class="proof-heading">Recompute it yourself</h2>
+                <p class="proof-note">
+                    Anyone can verify this proof with only a SHA-256 tool. Start from the
+                    canonical payload bytes above: their SHA-256 is the leaf hash. Then walk
+                    the levels: at each level the node's own position decides the order.
+                    An even position hashes as the left child, an odd position as the
+                    right child, always as <span class="mono">sha256(0x01 || left || right)</span>.
+                    The final digest must equal the checkpoint's Merkle root below.
+                </p>
+                <table class="proof-steps">
+                    <thead>
+                        <tr><th>Level</th><th>Position</th><th>Left child</th><th>Right child</th><th>Digest</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for step in view.steps %}
+                        <tr>
+                            <td class="mono">{{ step.level }}</td>
+                            <td class="mono">{{ step.position }}</td>
+                            <td class="mono">{{ step.left }}</td>
+                            <td class="mono">{{ step.right }}</td>
+                            <td class="mono">{{ step.digest }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <p class="proof-note">
+                    One command per level, standard library only, substituting the row's two
+                    child hashes. It must print the digest in that row's last column:
+                </p>
+                <pre class="proof-pre" id="verify-recipe">{% raw %}python3 -c 'import binascii,hashlib,sys;h=binascii.unhexlify;print(hashlib.sha256(b"\x01"+h(sys.argv[1])+h(sys.argv[2])).hexdigest())' "$LEFT_HEX" "$RIGHT_HEX"{% endraw %}</pre>
+            </section>
+            {% endif %}
+
+            {% if view.checkpoint %}
+            <section class="proof-section" aria-label="The signed checkpoint">
+                <h2 class="proof-heading">The signed checkpoint</h2>
+                <dl class="proof-kv">
+                    <dt>Tree size</dt><dd class="mono">{{ view.checkpoint.tree_size }} entries</dd>
+                    <dt>Merkle root</dt><dd class="mono">{{ view.checkpoint.merkle_root }}</dd>
+                    <dt>Chain hash</dt><dd class="mono">{{ view.checkpoint.chain_hash }}</dd>
+                    <dt>Signed at</dt><dd>{{ view.checkpoint.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC') if view.checkpoint.timestamp else 'unknown' }}</dd>
+                    <dt>Algorithm</dt><dd class="mono">{{ view.checkpoint.algorithm }}</dd>
+                    <dt>Key id</dt><dd class="mono">{{ view.checkpoint.key_id }}</dd>
+                    <dt>Signature</dt><dd class="mono">{{ view.checkpoint.signature }}</dd>
+                </dl>
+                <h3 class="proof-heading" style="font-size:15px;margin-top:18px;">Signing bytes (what the signature covers)</h3>
+                <pre class="proof-pre">{{ view.checkpoint.signing_bytes }}</pre>
+                <p class="proof-note">
+                    The signature proves this checkpoint came from the holder of
+                    <span class="mono">{{ view.checkpoint.key_id }}</span> and has not been
+                    edited since. Verify it against the operator's published public key;
+                    this page does not hold the key.
+                </p>
+            </section>
+            {% endif %}
+        </main>
+    </div>
+</body>
+</html>

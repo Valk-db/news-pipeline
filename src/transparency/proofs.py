@@ -62,23 +62,48 @@ class InclusionProof:
         )
 
 
+@dataclass(frozen=True)
+class ProofStep:
+    """One level of the leaf-to-root fold, recorded so a permalink page can
+    show every intermediate digest. `left` and `right` are the two children in
+    hash order; digest = sha256(NODE_PREFIX || left || right)."""
+    level: int
+    position: int
+    left: bytes
+    right: bytes
+    digest: bytes
+
+
+def proof_steps(leaf: bytes, index: int, siblings: Sequence[bytes]) -> list[ProofStep]:
+    """Fold a leaf and its sibling path, recording each level.
+
+    The even/odd ordering rule lives here and only here: an even position
+    hashes as the left child (0x01 || node || sibling), an odd position as the
+    right child (0x01 || sibling || node). proof_root() delegates to this so
+    the page's displayed steps and the verified root can never disagree.
+    """
+    steps: list[ProofStep] = []
+    digest = leaf
+    position = index
+    for level, sibling in enumerate(siblings):
+        if position % 2 == 0:
+            left, right = digest, sibling
+        else:
+            left, right = sibling, digest
+        digest = hashlib.sha256(NODE_PREFIX + left + right).digest()
+        steps.append(ProofStep(level=level, position=position, left=left, right=right, digest=digest))
+        position //= 2
+    return steps
+
+
 def proof_root(leaf: bytes, index: int, siblings: Sequence[bytes]) -> bytes:
     """Fold a leaf and its sibling path up to a root.
 
-    At every level the node's own position decides the order: even position
-    hashes as the left child (0x01 || node || sibling), odd as the right child
-    (0x01 || sibling || node). The duplicated odd-level node is handled by the
-    proof carrying the node itself as its own sibling.
+    Implemented through proof_steps() so the permalink page can display the
+    exact intermediate digests this fold produces.
     """
-    digest = leaf
-    position = index
-    for sibling in siblings:
-        if position % 2 == 0:
-            digest = hashlib.sha256(NODE_PREFIX + digest + sibling).digest()
-        else:
-            digest = hashlib.sha256(NODE_PREFIX + sibling + digest).digest()
-        position //= 2
-    return digest
+    steps = proof_steps(leaf, index, siblings)
+    return steps[-1].digest if steps else leaf
 
 
 async def inclusion_proof(log: MerkleLog, index: int, checkpoint_size: int) -> InclusionProof:

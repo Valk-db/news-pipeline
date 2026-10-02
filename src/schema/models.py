@@ -66,6 +66,13 @@ class RawArticle(Base):
     url_hash_v1 = Column(String(64), nullable=True)  # SHA256 hex of the u1 canonical form
     # END scheme u1, additive block.
 
+# merkle_log_entries.index for this article's evidence stamp, written by
+    # src/ingestion/rss_evidence.py stamp_observations(). Nullable because
+    # stamping is opt-in and the log was empty when the column landed: NULL
+    # means the article has not been stamped, and the public proof permalink
+    # says so plainly instead of inventing a proof.
+    log_index = Column(Integer, nullable=True)
+
     # BEGIN translation block. Every article is language-detected; non-English
     # articles get English headline/body. Originals are never modified; the UI
     # reads COALESCE(title_en, title). English articles keep _en NULL (no

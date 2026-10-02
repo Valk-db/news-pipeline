@@ -64,6 +64,7 @@
                         <span class="story-public-source-meta">
                             {{ article.source_domain }}
                             {%- if article.published_at %} · {{ article.published_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
+                            {%- if article.log_index is not none %} · <a href="/proof/{{ article.id }}">inclusion proof</a>{% endif %}
                         </span>
                         <span class="story-public-verify">
                             {% if article.tier_num %}
