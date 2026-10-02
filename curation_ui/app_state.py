@@ -46,7 +46,7 @@ def check_database_public(request: Request) -> tuple[bool, str]:
     """(available, error_message) for an anonymous surface.
 
     Same check, generic message: every route that renders this for a caller with
-    no credentials (/globe, /map, /stories/{id}, /proof/{id} and the JSON behind
+    no credentials (/map, /stories/{id}, /proof/{id} and the JSON behind
     them) goes through here, and a misconfigured deployment should not publish
     its own configuration to the public.
     """

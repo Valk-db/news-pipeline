@@ -12,7 +12,7 @@ GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → C
 Weekly (Sun 02:23 UTC):
   • Enrichment pipeline (media, video, snippets, embeddings)
   • Reliability snapshots (fact-check + consensus alignment)
-  • Globe events backfill (geospatial from canonical entities)
+  • Map events backfill (geospatial from canonical entities)
 ```
 
 ## Components
@@ -30,7 +30,7 @@ Weekly (Sun 02:23 UTC):
 | **Curation UI** | FastAPI + HTMX | Keyboard-driven triage (A/R/E) |
 | **Enrichment** | Media, YouTube/Vimeo, Reddit/Twitter, LLM snippets, embeddings | Multimedia & semantic story enrichment |
 | **Reliability** | Fact-checking (LLM + ClaimBuster) + Consensus alignment | Source trust scoring over time |
-| **Globe/Events** | Canonical entities with lat/lon → EventGeometry | Geospatial event visualization |
+| **Map/Events** | Canonical entities with lat/lon → EventGeometry | Geospatial event data behind `/map` |
 
 ## Quick Start
 
@@ -167,7 +167,7 @@ See `src/ingestion/source_registry.py` for the complete, up-to-date source regis
 ```
 .github/workflows/
   daily-ingest.yml          # Twice-daily ingestion pipeline
-  weekly-enrichment.yml     # Weekly enrichment, reliability, globe backfill
+  weekly-enrichment.yml     # Weekly enrichment, reliability, event backfill
   cleanup.yml               # Weekly scripts/cleanup_stale.py: expire stale PENDING/BLOCKED
                             # stories, drop orphaned reporting units and stale links. The
                             # retention job (scripts/run_retention.py: drop old embeddings,
@@ -218,7 +218,7 @@ replenished. See `src/shared/budget.py`.
 | Celebrity vertical | Week 3: add `tier2_gate` in `tiers.py` |
 | Enrichment provider | `src/enrichment/` (media_extractor, video_finder, social_snippets, snippet_extractor) |
 | Reliability fact-checker | `src/reliability/fact_checker.py` (ClaimBuster, custom APIs) |
-| Globe event layer | `supabase/migrations/` + `scripts/backfill_globe_events.py` |
+| Map event layer | `supabase/migrations/` + `scripts/backfill_globe_events.py` |
 
 ## Cost
 

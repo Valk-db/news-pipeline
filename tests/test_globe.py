@@ -1,4 +1,10 @@
-"""Tests for globe visualization functionality."""
+"""Tests for the event and geocoding layer behind the public map.
+
+The globe page itself was removed on Tyler's directive (2026-10-02); what
+survived is the data: the Event/EventGeometry/EventLayer models, the Nominatim
+geocoder, and scripts/backfill_globe_events.py, which is what feeds /map and
+/api/globe/events. Every test here covers that data layer, not a page.
+"""
 
 import json
 import uuid

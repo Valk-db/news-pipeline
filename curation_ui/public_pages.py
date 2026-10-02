@@ -1,4 +1,4 @@
-"""The anonymous reader surfaces: one story, one proof, and the two map pages.
+"""The anonymous reader surfaces: one story, one proof, and the map page.
 
 Every route here serves read-only HTML to callers with no credentials, so each
 one is written to disclose corroboration and nothing about the curation queue:
@@ -194,19 +194,6 @@ async def public_proof_page(article_id: uuid.UUID, request: Request):
     return templates.TemplateResponse(request, "proof.html", {
         "request": request,
         "view": view,
-    })
-
-
-# Globe page route
-@router.get("/globe", response_class=HTMLResponse)
-async def globe_page(request: Request):
-    """Globe visualization page. Public and read only."""
-    db_ok, db_msg = check_database_public(request)
-    if not db_ok:
-        return render_error_page(request, db_msg)
-
-    return templates.TemplateResponse(request, "globe.html", {
-        "request": request,
     })
 
 
