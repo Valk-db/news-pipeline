@@ -14,38 +14,45 @@ This file tracks the commercial-use licensing status of every ingestion source i
 | **dw.com** | Tier-1 RSS ingestion (all, Europe feeds) | DW Terms: "free of charge for private, non-commercial use" | **noncommercial — flag** | Yes ("DW") | RSS fetch every run; no auth |
 | **france24.com** | Tier-1 RSS ingestion (English feed) | France 24: "strictly personal and non-commercial use" | **noncommercial — flag** | Yes ("France 24") | RSS fetch every run; no auth |
 | **aljazeera.com** | Tier-1 RSS ingestion (all.xml feed) | Al Jazeera Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("Al Jazeera") | RSS fetch every run; no auth |
-| **euronews.com** | Tier-1 RSS ingestion (world theme feed) | Euronews Terms: "personal, non-commercial use" | **noncommercial — flag** | Yes ("Euronews") | RSS fetch every run; feed returns 404 |
-| **pbs.org** | Tier-1 RSS ingestion (NewsHour feed) | PBS Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("PBS NewsHour") | RSS fetch every run; feed returns 404 |
+| **euronews.com** | Tier-1 RSS ingestion (`/rss`) | Euronews Terms: "personal, non-commercial use" | **noncommercial — flag** | Yes ("Euronews") | RSS fetch every run; feed 200 with 50 items (2026-10-02) |
+| **pbs.org** | Tier-1 RSS ingestion (NewsHour feed) | PBS Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("PBS NewsHour") | RSS fetch every run; feed 200 with 20 items (2026-10-02) |
 | **apnews.com** | Tier-1 RSS ingestion (world, politics hubs) | AP Terms: commercial use requires paid license; RSS not officially provided | **noncommercial — flag** | Yes ("Associated Press") | RSS disabled (no working feed) |
 | **reuters.com** | Tier-1 RSS ingestion (world, politics feeds) | Reuters Terms: commercial use requires license; RSS is HTML not RSS | **noncommercial — flag** | Yes ("Reuters") | RSS disabled (no working feed) |
-| **nytimes.com** | Tier-2 RSS ingestion (world, politics) | NYT Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("The New York Times") | RSS fetch every run; no auth |
-| **washingtonpost.com** | Tier-2 RSS ingestion (world, politics) | WaPo Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("The Washington Post") | RSS fetch every run; no auth |
-| **wsj.com** | Tier-2 RSS ingestion (world, markets) | WSJ Terms: subscriber-only; commercial use requires license | **noncommercial — flag** | Yes ("The Wall Street Journal") | RSS fetch every run; paywalled |
-| **ft.com** | Tier-2 RSS ingestion (UK, world) | FT Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("Financial Times") | RSS fetch every run; 403 on world |
-| **economist.com** | Tier-2 RSS ingestion (international) | Economist Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("The Economist") | RSS fetch every run; no auth |
+| **nytimes.com** | Tier-2 RSS ingestion (world, politics) | NYT Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("The New York Times") | RSS disabled: 403 on article fetch across 3 healthy runs |
+| **washingtonpost.com** | Tier-2 RSS ingestion (world, politics) | WaPo Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("The Washington Post") | RSS disabled: paywall/timeout on article fetch |
+| **wsj.com** | Tier-2 RSS ingestion (world, markets) | WSJ Terms: subscriber-only; commercial use requires license | **noncommercial — flag** | Yes ("The Wall Street Journal") | RSS disabled: 401 on article fetch; paywalled |
+| **ft.com** | Tier-2 RSS ingestion (UK, world) | FT Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("Financial Times") | RSS disabled: feed 403 |
+| **economist.com** | Tier-2 RSS ingestion (international) | Economist Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("The Economist") | RSS disabled: 403 on article fetch |
 | **foreignpolicy.com** | Tier-2 RSS ingestion (main feed) | FP Terms: "personal, non-commercial use" | **noncommercial — flag** | Yes ("Foreign Policy") | RSS fetch every run; no auth |
 | **foreignaffairs.com** | Tier-2 RSS ingestion (main feed) | FA Terms: "personal, non-commercial use" | **noncommercial — flag** | Yes ("Foreign Affairs") | RSS fetch every run; no auth |
 | **csis.org** | Tier-2 RSS ingestion (main feed) | CSIS: "non-commercial use permitted with attribution" | **attribution-only** | Yes ("CSIS") | RSS fetch every run; no auth |
 | **who.int** | Tier-2 RSS ingestion (news English) | WHO: CC BY-NC-SA 3.0 IGO (non-commercial) | **noncommercial — flag** | Yes ("WHO") | RSS fetch every run; no auth |
-| **latimes.com** | Tier-2 RSS ingestion (world-nation) | LA Times Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("Los Angeles Times") | RSS fetch every run; 403 |
-| **chicagotribune.com** | Tier-2 RSS ingestion (nation-world) | Tribune Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("Chicago Tribune") | RSS fetch every run; no auth |
-| **bostonglobe.com** | Tier-2 RSS ingestion (nation) | Boston Globe Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("The Boston Globe") | RSS fetch every run; 404 |
-| **reddit.com** | Tier-3 ingestion (public RSS from subreddits) | Reddit User Agreement: commercial use requires approval; public RSS not officially supported | **noncommercial — flag** | Yes ("Reddit") | RSS fetch with 3s delay; 403 blocked |
+| **latimes.com** | Tier-2 RSS ingestion (world) | LA Times Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("Los Angeles Times") | RSS disabled: 403 on article fetch |
+| **chicagotribune.com** | Tier-2 RSS ingestion (nation-world) | Tribune Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("Chicago Tribune") | RSS disabled: feed returns 0 entries |
+| **bostonglobe.com** | Tier-2 RSS ingestion (main feed) | Boston Globe Terms: "personal, non-commercial use only" | **noncommercial — flag** | Yes ("The Boston Globe") | RSS disabled: 200 locally but unverified from CI (2026-09-28) |
+| **reddit.com** | Tier-3 ingestion (public RSS from 11 subreddits) | Reddit User Agreement: commercial use requires approval; public RSS not officially supported | **noncommercial — flag** | Yes ("Reddit") | RSS fetch, 1 subreddit per 3s, no credentials |
 | **bsky.social** | Tier-3 source (configured, not ingested) | Bluesky: AT Protocol; commercial terms unclear | **unclear — needs review** | TBD | Not yet ingested |
 | **substack.com** | Tier-4 source (configured, not ingested) | Substack: varies by newsletter; no blanket terms | **unclear — needs review** | TBD | Not yet ingested |
-| **GDELT** (gdeltproject.org) | GDELT DOC API ingestion (bbc.com, theguardian.com, npr.org domains) | GDELT Terms: "commercial use permitted with citation" | **none** | Yes (cite GDELT) | API rate limited; circuit breaker at 3 failures |
+| **GDELT** (gdeltproject.org) | GDELT DOC API ingestion (bbc.com, theguardian.com, npr.org domains) | GDELT Terms: "commercial use permitted with citation" | **none** | Yes (cite GDELT) | Disabled in the ingest workflow (`GDELT_ENABLED=false`); code default on, throttle 30s, circuit breaker at 3 failures |
 
 ---
 
 ### Summary of Risk Flags
 
-**Noncommercial — flag (21 sources)**: All tier-1 and tier-2 RSS sources except CSIS carry explicit non-commercial restrictions in their terms of use. This is a significant risk for the "sell access later" plan — these sources would need to be replaced or licensed commercially before monetization.
+**Noncommercial — flag (22 sources)**: Every tier-1 and tier-2 RSS source except CSIS carries an
+explicit non-commercial restriction in its terms of use, and so does Reddit. This is a
+significant risk for the "sell access later" plan — these sources would need to be replaced or
+licensed commercially before monetization.
 
 **Attribution-only (1 source)**: CSIS permits non-commercial use with attribution — still a restriction, but less severe.
 
 **Unclear — needs review (2 sources)**: Bluesky and Substack lack clear commercial terms for programmatic access.
 
 **None (1 source)**: GDELT explicitly permits commercial use with citation.
+
+**Not in this ledger**: the two sensor feeds the pipeline actually ingests — USGS earthquakes and
+GDACS alerts (`SENSOR_SOURCES` in `src/ingestion/source_registry.py`) — have no row here. Add
+them before this file is used for a licensing decision.
 
 ---
 
