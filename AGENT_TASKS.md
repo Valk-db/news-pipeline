@@ -1,6 +1,6 @@
 # AGENT_TASKS.md v37
 
-Supersedes v36. Rust stays PAUSED (do not touch `pipeline-rs/`, `ci-rust.yml`, `rust-port`). Python only, on `main`.
+Supersedes v36. pipeline-rs/ and ci-rust.yml were REMOVED 2026-10-01 per Tyler (frozen divergent fork; full history recoverable via git). Python only, on `main`.
 
 ## Verified from a fresh clone (no work needed)
 
