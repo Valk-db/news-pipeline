@@ -61,3 +61,7 @@ target/
 .vercel
 .env*
 .procmon-dev-env
+
+# Scratch helpers for agent batches (never committed)
+devenv.py
+scratch_*.py
