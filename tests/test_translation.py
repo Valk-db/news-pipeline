@@ -71,6 +71,52 @@ class TestTranslateArticle:
         assert art.body_text_en is None
         assert art.detected_language == "en"
 
+    def test_short_title_detected_from_body(self):
+        """A headline too short to detect on is read together with the body.
+
+        langdetect on a bare headline misfires into low-resource languages at high
+        confidence (measured 2026-10-02: 5/109 English-tier headlines became
+        no/da/fr/nl at p=0.46-1.00), and every miss then spent MyMemory quota
+        translating English copy. The body settles it.
+        """
+        art = _article(
+            title="No",
+            body="Le président a annoncé de nouvelles mesures économiques après la réunion du cabinet.",
+        )
+        stats = translate_article(art, backend=StubBackend())
+        assert stats["detected"] == "fr"
+        assert stats["translated"] is True
+
+    def test_english_title_with_nonenglish_looking_body_is_english(self):
+        """Real misfire: an English headline over an English body stays English."""
+        art = _article(
+            title="France demands belt-tightening in 2027 budget as investors sour on its debt",
+            body=(
+                "Paris - The French government on Tuesday presented a budget for 2027 that "
+                "holds spending flat while debt costs keep rising, drawing criticism from "
+                "investors who warned the deficit would widen for a third year."
+            ),
+        )
+        stats = translate_article(art, backend=StubBackend())
+        assert stats["detected"] == "en"
+        assert stats["translated"] is False
+        assert art.title_en is None
+
+    def test_body_only_article_is_detected(self):
+        """No title at all: the body alone is still a usable probe."""
+        art = _article(
+            title=None,
+            body="El gobierno anunció nuevas medidas económicas después de la reunión del gabinete.",
+        )
+        stats = translate_article(art, backend=StubBackend())
+        assert stats["detected"] == "es"
+
+    def test_no_text_at_all_stays_unknown(self):
+        art = _article(title=None, body=None)
+        stats = translate_article(art, backend=StubBackend())
+        assert stats["detected"] is None
+        assert art.detected_language is None
+
     def test_non_english_gets_translated(self):
         art = _article(
             title="Le président a annoncé de nouvelles mesures économiques ce matin à Paris",
@@ -123,7 +169,7 @@ class TestTranslateArticles:
         arts = [
             _article(title="The president announced new economic measures after the cabinet meeting today."),
             _article(title="Le président a annoncé de nouvelles mesures économiques ce matin à Paris"),
-            _article(title="x"),  # too short to detect
+            _article(title="x", body=None),  # nothing to detect on
         ]
         summary = translate_articles(arts, backend=StubBackend())
         assert summary["total"] == 3

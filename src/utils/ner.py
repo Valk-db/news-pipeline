@@ -105,6 +105,85 @@ def _normalize_text(text: str, entity_type: str = "") -> str:
     return normalized
 
 
+# English alias seed: (entity_type, alias, canonical surface).
+#
+# Story grouping compares canonical entity *IDs*, so two spellings of one entity
+# ("US" vs "United States", "Netanyahu" vs "Benjamin Netanyahu") become two
+# canonical entities and split one event into several stories. English only, and
+# deliberately small: these are the spellings that show up constantly in
+# English-language newswire copy.
+#
+# EXTENSION POINT: add rows here. Keys are normalized on load, so aliases can be
+# written the way a newsroom writes them ("U.S.", "the US", "UAE"). The canonical
+# surface is the display name the merged entity keeps. Non-English tables belong
+# in their own module alongside this one when the cross-lingual phase lands.
+ALIAS_SEED: Tuple[Tuple[str, str, str], ...] = (
+    # --- countries
+    ("GPE", "US", "United States"),
+    ("GPE", "U.S.", "United States"),
+    ("GPE", "USA", "United States"),
+    ("GPE", "America", "United States"),
+    ("GPE", "the US", "United States"),
+    ("GPE", "UK", "United Kingdom"),
+    ("GPE", "Britain", "United Kingdom"),
+    ("GPE", "Great Britain", "United Kingdom"),
+    ("GPE", "the UK", "United Kingdom"),
+    ("GPE", "UAE", "United Arab Emirates"),
+    ("GPE", "Holland", "Netherlands"),
+    # --- international organizations
+    ("ORG", "EU", "European Union"),
+    ("ORG", "the EU", "European Union"),
+    ("ORG", "UN", "United Nations"),
+    ("ORG", "the UN", "United Nations"),
+    ("ORG", "FBI", "Federal Bureau of Investigation"),
+    ("ORG", "CIA", "Central Intelligence Agency"),
+    ("ORG", "DoD", "Department of Defense"),
+    ("ORG", "Pentagon", "Department of Defense"),
+    ("ORG", "SCOTUS", "Supreme Court of the United States"),
+    ("ORG", "WHO", "World Health Organization"),
+    # --- people referred to by surname or short form
+    ("PERSON", "Trump", "Donald Trump"),
+    ("PERSON", "Biden", "Joe Biden"),
+    ("PERSON", "Pence", "Mike Pence"),
+    ("PERSON", "Obama", "Barack Obama"),
+    ("PERSON", "Musk", "Elon Musk"),
+    ("PERSON", "Netanyahu", "Benjamin Netanyahu"),
+    ("PERSON", "Putin", "Vladimir Putin"),
+    ("PERSON", "Zelensky", "Volodymyr Zelensky"),
+    ("PERSON", "Khamenei", "Ali Khamenei"),
+    ("PERSON", "Macron", "Emmanuel Macron"),
+    ("PERSON", "Merkel", "Angela Merkel"),
+    ("PERSON", "Modi", "Narendra Modi"),
+    ("PERSON", "Harris", "Kamala Harris"),
+)
+
+
+def _build_alias_indexes(rows: Tuple[Tuple[str, str, str], ...]) -> Tuple[Dict[str, str], Dict[Tuple[str, str], List[str]]]:
+    """Build the forward ("TYPE:alias" -> canonical surface) and reverse
+    ((entity_type, normalized canonical) -> normalized aliases) indexes."""
+    forward: Dict[str, str] = {}
+    reverse: Dict[Tuple[str, str], List[str]] = {}
+    for entity_type, alias, canonical in rows:
+        forward[_normalize_text(alias, entity_type)] = canonical
+        reverse.setdefault((entity_type, _normalize_text(canonical)), []).append(
+            _normalize_text(alias)
+        )
+    return forward, reverse
+
+
+ENGLISH_ALIASES, _ALIASES_BY_CANONICAL = _build_alias_indexes(ALIAS_SEED)
+
+
+def canonical_surface(surface_form: str, entity_type: str) -> str:
+    """The surface form an English alias should be canonicalized onto.
+
+    "US" -> "United States", "Netanyahu" -> "Benjamin Netanyahu", anything not in
+    the seed table -> itself. Called at canonicalization time, so aliases that
+    arrive before their long form still create one entity instead of two.
+    """
+    return ENGLISH_ALIASES.get(_normalize_text(surface_form, entity_type), surface_form)
+
+
 def _generate_aliases(base_name: str, entity_type: str) -> List[str]:
     """Generate common aliases for a canonical entity."""
     aliases = set()
@@ -138,15 +217,8 @@ def _generate_aliases(base_name: str, entity_type: str) -> List[str]:
                 if len(w) > 3:
                     aliases.add(w)
 
-    # For GPE/LOC: add common variants
-    if entity_type in ("GPE", "LOC"):
-        # "United States" -> "us", "usa", "america"
-        if "united states" in normalized:
-            aliases.update(["us", "usa", "america"])
-        if "united kingdom" in normalized:
-            aliases.update(["uk", "britain", "great britain"])
-        if "european union" in normalized:
-            aliases.update(["eu"])
+    # Curated country aliases: "United States" -> "us", "usa", "america"
+    aliases.update(_ALIASES_BY_CANONICAL.get((entity_type, normalized), ()))
 
     return list(aliases)
 
@@ -203,7 +275,7 @@ class EntityCanonicalizer:
         if not self._initialized:
             return None
 
-        normalized = _normalize_text(surface_form, entity_type)
+        normalized = _normalize_text(canonical_surface(surface_form, entity_type), entity_type)
         if normalized in self._cache:
             return self._cache[normalized]
 
@@ -252,11 +324,14 @@ class EntityCanonicalizer:
         from src.schema.models import CanonicalEntity, EntityAlias
         import uuid
 
-        # Create canonical entity
+        # Create the entity under its preferred surface ("US" -> "United States"),
+        # so the alias that arrived first still becomes the one canonical entity.
+        canonical_name = canonical_surface(surface_form, entity_type)
+
         canonical_id = uuid.uuid4()
         canonical_entity = CanonicalEntity(
             id=canonical_id,
-            canonical_name=surface_form,
+            canonical_name=canonical_name,
             entity_type=entity_type
         )
         self.session.add(canonical_entity)
@@ -269,9 +344,9 @@ class EntityCanonicalizer:
         self.session.add(alias)
 
         # Generate and add common aliases
-        for alias_text in _generate_aliases(surface_form, entity_type):
+        for alias_text in _generate_aliases(canonical_name, entity_type):
             normalized_alias = _normalize_text(alias_text, entity_type)
-            if normalized_alias != _normalize_text(surface_form, entity_type):
+            if normalized_alias != _normalize_text(canonical_name, entity_type):
                 alias_obj = EntityAlias(
                     canonical_entity_id=canonical_id,
                     alias=alias_text
@@ -281,7 +356,7 @@ class EntityCanonicalizer:
                 self._cache[normalized_alias] = CanonicalMention(
                     surface_form=alias_text,
                     canonical_id=str(canonical_id),
-                    canonical_name=surface_form,
+                    canonical_name=canonical_name,
                     entity_type=entity_type,
                     confidence=0.9
                 )
@@ -289,11 +364,11 @@ class EntityCanonicalizer:
         await self.session.flush()
 
         # Add the main entry to cache
-        normalized = _normalize_text(surface_form, entity_type)
+        normalized = _normalize_text(canonical_name, entity_type)
         mention = CanonicalMention(
             surface_form=surface_form,
             canonical_id=str(canonical_id),
-            canonical_name=surface_form,
+            canonical_name=canonical_name,
             entity_type=entity_type,
             confidence=1.0
         )
