@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 from src.utils.ner import (
     _normalize_text,
     _generate_aliases,
+    ALIAS_SEED,
     EntityCanonicalizer,
     CanonicalMention,
+    canonical_surface,
     resolve_entities_to_canonical,
     canonical_jaccard,
     get_primary_entity_set,
@@ -60,6 +62,104 @@ class TestAliasGeneration:
         aliases = _generate_aliases("European Union", "ORG")
         # Should not have duplicates
         assert len(aliases) == len(set(aliases))
+
+
+class TestEnglishAliasNormalization:
+    """The English alias seed, applied at canonicalization time."""
+
+    def test_aliases_map_to_canonical_surface(self):
+        assert canonical_surface("US", "GPE") == "United States"
+        assert canonical_surface("U.S.", "GPE") == "United States"
+        assert canonical_surface("the US", "GPE") == "United States"
+        assert canonical_surface("UK", "GPE") == "United Kingdom"
+        assert canonical_surface("UAE", "GPE") == "United Arab Emirates"
+        assert canonical_surface("FBI", "ORG") == "Federal Bureau of Investigation"
+        assert canonical_surface("Netanyahu", "PERSON") == "Benjamin Netanyahu"
+        assert canonical_surface("Trump", "PERSON") == "Donald Trump"
+
+    def test_honorifics_are_stripped_before_the_lookup(self):
+        assert canonical_surface("President Trump", "PERSON") == "Donald Trump"
+
+    def test_unknown_and_wrongly_typed_surfaces_pass_through(self):
+        assert canonical_surface("Tennessee", "GPE") == "Tennessee"
+        # "UK" as an ORG is not the country, so the GPE row must not apply
+        assert canonical_surface("UK", "ORG") == "UK"
+
+    def test_seed_rows_are_consistent(self):
+        """Every row normalizes to its own canonical surface, and every alias is
+        reachable from it -- a table that disagrees with itself is a silent bug."""
+        for entity_type, alias, canonical in ALIAS_SEED:
+            assert canonical_surface(alias, entity_type) == canonical
+            assert _normalize_text(alias) in _generate_aliases(canonical, entity_type)
+
+    @pytest.mark.asyncio
+    async def test_alias_and_long_form_share_one_canonical_entity(self, db_session):
+        """'US' then 'United States' resolve to one entity, not two."""
+        canonicalizer = EntityCanonicalizer(db_session)
+        await canonicalizer.initialize()
+
+        short = await canonicalizer.get_or_create("US", "GPE")
+        long = await canonicalizer.get_or_create("United States", "GPE")
+
+        assert short.canonical_id == long.canonical_id
+        assert short.canonical_name == long.canonical_name == "United States"
+
+    @pytest.mark.asyncio
+    async def test_long_form_first_also_shares_one_entity(self, db_session):
+        """Order does not matter: whichever spelling lands first wins."""
+        canonicalizer = EntityCanonicalizer(db_session)
+        await canonicalizer.initialize()
+
+        long = await canonicalizer.get_or_create("United States", "GPE")
+        short = await canonicalizer.get_or_create("US", "GPE")
+
+        assert short.canonical_id == long.canonical_id
+        assert short.canonical_name == "United States"
+
+    @pytest.mark.asyncio
+    async def test_only_one_row_is_written_per_entity(self, db_session):
+        """The merge is real rows merged, not two rows that resolve alike."""
+        from sqlalchemy import func, select
+
+        from src.schema.models import CanonicalEntity
+
+        canonicalizer = EntityCanonicalizer(db_session)
+        await canonicalizer.initialize()
+
+        ids, _ = await resolve_entities_to_canonical(
+            {"GPE": ["US", "United States", "USA"], "PERSON": ["Netanyahu", "Benjamin Netanyahu"]},
+            canonicalizer,
+        )
+        await db_session.commit()
+
+        assert len(ids) == 2
+        result = await db_session.execute(
+            select(func.count()).select_from(CanonicalEntity)
+        )
+        assert result.scalar() == 2
+
+    @pytest.mark.asyncio
+    async def test_story_grouping_no_longer_fragments(self, db_session):
+        """Two stories about the same event with different spellings now group.
+
+        Before the alias seed, 'US'/'United States' and 'Netanyahu'/'Benjamin
+        Netanyahu' were four distinct canonical IDs: Jaccard was 0/6 = 0.0, well
+        under the 0.4 attach threshold, so one event became two stories. Now the
+        two aliases share IDs and the units attach.
+        """
+        canonicalizer = EntityCanonicalizer(db_session)
+        await canonicalizer.initialize()
+
+        bbc, _ = await resolve_entities_to_canonical(
+            {"GPE": ["US"], "PERSON": ["Netanyahu"], "ORG": ["BBC"]}, canonicalizer
+        )
+        guardian, _ = await resolve_entities_to_canonical(
+            {"GPE": ["United States"], "PERSON": ["Benjamin Netanyahu"], "ORG": ["Guardian"]},
+            canonicalizer,
+        )
+
+        assert len(bbc & guardian) == 2
+        assert canonical_jaccard(bbc, guardian) == 0.5 >= 0.4
 
 
 class TestCanonicalJaccard:

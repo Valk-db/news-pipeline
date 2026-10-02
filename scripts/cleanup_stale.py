@@ -14,7 +14,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.verification.cleanup import run_cleanup
-from src.shared.database import init_db, get_session
+from src.shared.database import get_session
 from src.shared.config import get_settings
 
 
@@ -44,9 +44,6 @@ async def main():
     if not settings.has_database:
         print("ERROR: DATABASE_URL not configured")
         sys.exit(1)
-
-    # Initialize DB
-    await init_db()
 
     # Run cleanup
     async with get_session() as session:

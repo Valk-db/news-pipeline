@@ -60,6 +60,49 @@ async def db_session(db_engine) -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+@pytest.fixture
+def csrf_headers():
+    """Headers a mutating request needs: the token the app itself mints.
+
+    Tests ask curation_ui.security for it rather than pasting a literal, so the
+    token stays bound to whatever CURATION_PASSWORD the test configured.
+    """
+    from curation_ui.security import CSRF_HEADER, issue_csrf_token
+    return {CSRF_HEADER: issue_csrf_token()}
+
+
+@pytest.fixture(autouse=True)
+def budget_counter(tmp_path, monkeypatch):
+    """Give every test a working daily budget counter, isolated per test.
+
+    The budget fails safe by design: with no reachable counter it refuses to spend. In
+    production that is right, and in a test it would silently stop every LLM call from
+    being made at all -- the provider retry and fallback tests would see zero calls. So
+    each test gets its own file-backed SQLite counter, injected as the app's engine: the
+    cap is real (a test can spend twice and see the second refused) and one test's
+    spending never reaches the next.
+
+    The DDL is the one from supabase/migrations/20261001000800_budget_counters.sql, minus
+    the index and RLS, which SQLite has no use for.
+    """
+    from src.shared import budget as budget_module
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'budget.db'}")
+
+    async def _create():
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql(
+                "CREATE TABLE budget_counters ("
+                "name TEXT NOT NULL, day DATE NOT NULL, used BIGINT NOT NULL DEFAULT 0,"
+                "PRIMARY KEY (name, day))"
+            )
+
+    asyncio.run(_create())
+    monkeypatch.setattr(budget_module, "_get_engine", lambda: engine)
+    yield engine
+    asyncio.run(engine.dispose())
+
+
 # Sample article data for tests
 @pytest.fixture
 def sample_articles() -> list[dict]:

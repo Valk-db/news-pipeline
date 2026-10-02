@@ -217,7 +217,7 @@ class TestNoLLMConfigured:
 
     @pytest.mark.asyncio
     async def test_approve_creates_deterministic_caption(
-        self, app_with_db, forbid_llm, pending_story, db_session
+        self, app_with_db, forbid_llm, pending_story, db_session, csrf_headers
     ):
         """POST /approve succeeds with no LLM and stores the deterministic caption."""
         story, article = pending_story
@@ -229,7 +229,7 @@ class TestNoLLMConfigured:
         )
 
         client = TestClient(app_with_db)
-        response = client.post(f"/story/{story.id}/approve", auth=AUTH)
+        response = client.post(f"/story/{story.id}/approve", auth=AUTH, headers=csrf_headers)
 
         assert response.status_code == 200, response.text[:500]
         assert "AI assistance is unavailable" in response.text
@@ -250,7 +250,7 @@ class TestNoLLMConfigured:
 
     @pytest.mark.asyncio
     async def test_save_manual_caption_never_calls_llm(
-        self, app_with_db, forbid_llm, pending_story, db_session
+        self, app_with_db, forbid_llm, pending_story, db_session, csrf_headers
     ):
         """POST /save stores the caption from the form without any LLM call."""
         story, _ = pending_story
@@ -261,6 +261,7 @@ class TestNoLLMConfigured:
             f"/story/{story.id}/save",
             data={"caption": manual_caption, "platform": "twitter"},
             auth=AUTH,
+            headers=csrf_headers,
         )
 
         assert response.status_code == 200, response.text[:500]
@@ -327,12 +328,14 @@ class TestLLMConfigured:
         assert len(stub_llm.calls) == 1
 
     @pytest.mark.asyncio
-    async def test_approve_uses_ai_caption(self, app_with_db, stub_llm, pending_story, db_session):
+    async def test_approve_uses_ai_caption(
+        self, app_with_db, stub_llm, pending_story, db_session, csrf_headers
+    ):
         """POST /approve stores the caption returned by the LLM client."""
         story, _ = pending_story
 
         client = TestClient(app_with_db)
-        response = client.post(f"/story/{story.id}/approve", auth=AUTH)
+        response = client.post(f"/story/{story.id}/approve", auth=AUTH, headers=csrf_headers)
 
         assert response.status_code == 200, response.text[:500]
 

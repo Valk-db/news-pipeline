@@ -93,6 +93,49 @@
                     </select>
                 </div>
             </div>
+
+            <!-- ======================= DISCOVERY =======================
+                 Tier filter, topic search, date window, and sort. Server-rendered
+                 in their initial state from the query string so first paint
+                 already reflects the reader's filters; map.js keeps them in
+                 sync with the JSON endpoints. -->
+            <div class="map-discovery" id="map-discovery">
+                <div class="map-discovery-search">
+                    <label class="map-field-label" for="map-search">Search topics</label>
+                    <input type="search" id="map-search" class="map-search-input"
+                           placeholder="Search headlines and topics…"
+                           value="{{ active_q }}" autocomplete="off"
+                           aria-label="Search stories by topic">
+                </div>
+                <div class="map-discovery-tiers">
+                    <span class="map-field-label" id="map-tiers-label">Tiers</span>
+                    <div class="map-tier-chips" role="group" aria-labelledby="map-tiers-label">
+                        {% for t in [1, 2, 3, 4] %}
+                        <button type="button"
+                                class="map-tier-chip{% if t in active_tiers %} is-on{% endif %}"
+                                data-tier="{{ t }}" aria-pressed="{{ 'true' if t in active_tiers else 'false' }}"
+                                title="Show stories with tier {{ t }} sources">T{{ t }}</button>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="map-discovery-cell">
+                    <label class="map-field-label" for="map-window">Window</label>
+                    <select id="map-window" class="map-select" aria-label="Date window">
+                        <option value="24"{% if active_hours == 24 %} selected{% endif %}>Last 24 hours</option>
+                        <option value="168"{% if active_hours == 168 %} selected{% endif %}>Last 7 days</option>
+                        <option value="720"{% if active_hours == 720 %} selected{% endif %}>Last 30 days</option>
+                        <option value="0"{% if active_hours == 0 %} selected{% endif %}>All time</option>
+                    </select>
+                </div>
+                <div class="map-discovery-cell">
+                    <label class="map-field-label" for="map-sort">Sort</label>
+                    <select id="map-sort" class="map-select" aria-label="Sort stories">
+                        <option value="top"{% if active_sort == 'top' %} selected{% endif %}>Top corroborated</option>
+                        <option value="newest"{% if active_sort == 'newest' %} selected{% endif %}>Newest first</option>
+                        <option value="oldest"{% if active_sort == 'oldest' %} selected{% endif %}>Oldest first</option>
+                    </select>
+                </div>
+            </div>
         </header>
 
         <div class="map-body" id="map-body">
@@ -118,6 +161,15 @@
                                 <span class="map-story-rank" aria-hidden="true">{{ loop.index }}</span>
                                 <span class="map-story-main">
                                     <span class="map-story-headline">{{ item.headline }}</span>
+                                    <span class="map-story-badges">
+                                        <span class="map-verify-badge{% if item.verification.corroborated %} is-corroborated{% endif %}"
+                                              title="{{ item.verification.outlets }} outlets · tier mix T1:{{ item.verification.tier_mix.t1 }} T2:{{ item.verification.tier_mix.t2 }} T3:{{ item.verification.tier_mix.t3 }} T4:{{ item.verification.tier_mix.t4 }}">
+                                            {{ item.verification.label }}
+                                        </span>
+                                        {% if item.translated %}
+                                        <span class="map-lang-tag" title="Translated from {{ item.lang }}; original: {{ item.headline_original }}">{{ item.lang | upper }}→EN</span>
+                                        {% endif %}
+                                    </span>
                                     <span class="map-story-meta">
                                         <span class="map-story-outlets">{{ item.outlets }} outlet{{ '' if item.outlets == 1 else 's' }}</span>
                                         <span class="map-story-events">{{ item.event_count }} event{{ '' if item.event_count == 1 else 's' }}</span>

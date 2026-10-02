@@ -12,12 +12,11 @@ import json
 import os
 import sys
 
-from src.shared.database import init_db, get_session_maker
+from src.shared.database import get_session_maker
 from src.verification.claims import extract_claims_for_recent_stories
 
 
 async def main() -> None:
-    await init_db()
     session_factory = get_session_maker()
     results = await extract_claims_for_recent_stories(session_factory, hours_back=168, max_stories=100)
     print(f"Processed {len(results)} stories")

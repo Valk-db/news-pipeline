@@ -8,7 +8,7 @@
     <script src="/static/errors.js" defer></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
     <div class="container edit-page">
         <header>
             <h1>Edit Story</h1>
@@ -172,7 +172,7 @@
 
     </div>
 
-    <script>
+    <script nonce="{{ request.state.csp_nonce }}">
         // Theme toggle
         const themeToggle = document.getElementById('theme-toggle');
         const sunIcon = document.getElementById('theme-icon-sun');

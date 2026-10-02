@@ -102,6 +102,10 @@
         map: document.getElementById('map'),
         body: document.getElementById('map-body'),
         typeSelect: document.getElementById('event-type-select'),
+        searchInput: document.getElementById('map-search'),
+        tierChips: document.querySelectorAll('.map-tier-chip'),
+        windowSelect: document.getElementById('map-window'),
+        sortSelect: document.getElementById('map-sort'),
         modeToggle: document.getElementById('map-mode-toggle'),
         modeButtons: document.querySelectorAll('.map-mode-btn'),
         status: document.getElementById('map-status'),
@@ -503,6 +507,10 @@
         if (state.eventType) {
             params.set('event_type', state.eventType);
         }
+        var tiers = activeTiers();
+        if (tiers.length > 0 && tiers.length < 4) {
+            params.set('tiers', tiers.join(','));
+        }
         params.set('limit', String(EVENT_LIMIT));
         return API_ENDPOINT + '?' + params.toString();
     }
@@ -675,6 +683,99 @@
         el.typeSelect.addEventListener('change', function () {
             setEventType(el.typeSelect.value || '');
         });
+        wireDiscoveryControls();
+    }
+
+    /**
+     * Discovery controls: tier chips, topic search, date window, sort.
+     *
+     * The stories list is server-rendered, so a control change navigates to
+     * /map with the new query string and the server re-renders everything
+     * consistently. Marker fetches also carry the active tiers so the map
+     * markers respect the same filter. Search is debounced and submits on
+     * Enter to avoid a reload per keystroke.
+     */
+    function activeTiers() {
+        var tiers = [];
+        if (!el.tierChips) {
+            return tiers;
+        }
+        Array.prototype.forEach.call(el.tierChips, function (chip) {
+            if (chip.classList.contains('is-on')) {
+                tiers.push(chip.getAttribute('data-tier'));
+            }
+        });
+        return tiers;
+    }
+
+    function discoveryQuery(overrides) {
+        var params = new URLSearchParams(window.location.search);
+        var tiers = (overrides && overrides.tiers !== undefined) ? overrides.tiers : activeTiers();
+        params.delete('tiers');
+        if (tiers.length > 0 && tiers.length < 4) {
+            params.set('tiers', tiers.join(','));
+        }
+        var q = (overrides && overrides.q !== undefined) ? overrides.q : (el.searchInput ? el.searchInput.value.trim() : '');
+        params.delete('q');
+        if (q) {
+            params.set('q', q);
+        }
+        var hours = (overrides && overrides.hours !== undefined) ? overrides.hours : (el.windowSelect ? el.windowSelect.value : '24');
+        params.delete('hours');
+        params.set('hours', String(hours));
+        var sort = (overrides && overrides.sort !== undefined) ? overrides.sort : (el.sortSelect ? el.sortSelect.value : 'top');
+        params.delete('sort');
+        params.set('sort', sort);
+        return params.toString();
+    }
+
+    function navigateWithDiscovery(overrides) {
+        window.location.href = '/map?' + discoveryQuery(overrides);
+    }
+
+    function wireDiscoveryControls() {
+        if (el.tierChips) {
+            Array.prototype.forEach.call(el.tierChips, function (chip) {
+                chip.addEventListener('click', function () {
+                    var nowOn = !chip.classList.contains('is-on');
+                    chip.classList.toggle('is-on', nowOn);
+                    chip.setAttribute('aria-pressed', nowOn ? 'true' : 'false');
+                    navigateWithDiscovery({ tiers: activeTiers() });
+                });
+            });
+        }
+        if (el.windowSelect) {
+            el.windowSelect.addEventListener('change', function () {
+                navigateWithDiscovery({ hours: el.windowSelect.value });
+            });
+        }
+        if (el.sortSelect) {
+            el.sortSelect.addEventListener('change', function () {
+                navigateWithDiscovery({ sort: el.sortSelect.value });
+            });
+        }
+        if (el.searchInput) {
+            var debounce = null;
+            el.searchInput.addEventListener('input', function () {
+                if (debounce) {
+                    window.clearTimeout(debounce);
+                }
+                debounce = window.setTimeout(function () {
+                    if (el.searchInput.value.trim() !== (new URLSearchParams(window.location.search).get('q') || '')) {
+                        navigateWithDiscovery({ q: el.searchInput.value.trim() });
+                    }
+                }, 900);
+            });
+            el.searchInput.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    if (debounce) {
+                        window.clearTimeout(debounce);
+                    }
+                    navigateWithDiscovery({ q: el.searchInput.value.trim() });
+                }
+            });
+        }
     }
 
     function buildLegend() {
@@ -1131,6 +1232,10 @@
         params.set('end', new Date(Date.now()).toISOString());
         if (state.eventType) {
             params.set('event_type', state.eventType);
+        }
+        var replayTiers = activeTiers();
+        if (replayTiers.length > 0 && replayTiers.length < 4) {
+            params.set('tiers', replayTiers.join(','));
         }
         params.set('limit', String(REPLAY_LIMIT));
         return REPLAY_ENDPOINT + '?' + params.toString();

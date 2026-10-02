@@ -11,12 +11,11 @@ Usage:
 import asyncio
 from datetime import datetime, timezone
 
-from src.shared.database import init_db, get_session
+from src.shared.database import get_session
 from src.reliability.consensus_analyzer import compute_daily_reliability_snapshots
 
 
 async def main() -> None:
-    await init_db()
     async with get_session() as session:
         yesterday = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0

@@ -86,8 +86,8 @@ jobs:
             sleep 2
           done
 
-      - name: Initialize database
-        run: uv run python -m scripts.init_db
+      - name: Apply migrations
+        run: uv run python -m scripts.migrate
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_news
 

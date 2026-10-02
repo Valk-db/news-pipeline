@@ -32,3 +32,5 @@ CREATE TABLE IF NOT EXISTS url_aliases (
 
 CREATE INDEX IF NOT EXISTS ix_url_aliases_url_hash_v1
     ON url_aliases(url_hash_v1);
+
+ALTER TABLE url_aliases ENABLE ROW LEVEL SECURITY;

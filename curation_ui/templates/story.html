@@ -26,8 +26,8 @@
 
         <main class="story-public-main">
             <p class="story-public-eyebrow">
-                {% if corroborated %}Corroborated by {{ outlets }} independent outlet{{ '' if outlets == 1 else 's' }}
-                {%- else %}Awaiting a second independent outlet{% endif %}
+                <span class="map-verify-badge{% if verification.corroborated %} is-corroborated{% endif %}"
+                      title="Tier mix T1:{{ verification.tier_mix.t1 }} T2:{{ verification.tier_mix.t2 }} T3:{{ verification.tier_mix.t3 }} T4:{{ verification.tier_mix.t4 }}">{{ verification.label }}</span>
             </p>
             <h1 class="story-public-headline">{{ headline }}</h1>
             <p class="story-public-meta">
@@ -63,9 +63,17 @@
                         <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">{{ article.title }}</a>
                         <span class="story-public-source-meta">
                             {{ article.source_domain }}
-                            {%- if article.source_tier %} · tier {{ article.source_tier }}{% endif %}
                             {%- if article.published_at %} · {{ article.published_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
                             {%- if article.log_index is not none %} · <a href="/proof/{{ article.id }}">inclusion proof</a>{% endif %}
+                        </span>
+                        <span class="story-public-verify">
+                            {% if article.tier_num %}
+                            <span class="story-public-tier is-t{{ article.tier_num }}"
+                                  title="Source tier {{ article.tier_num }}">T{{ article.tier_num }}</span>
+                            {% endif %}
+                            {% if article.translated %}
+                            <span class="map-lang-tag" title="Translated from {{ article.lang }}; original: {{ article.title_original }}">{{ article.lang | upper }}→EN</span>
+                            {% endif %}
                         </span>
                     </li>
                     {% endfor %}

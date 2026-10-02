@@ -42,7 +42,7 @@ class TestApproveSaveStoryPENDINGCheck:
     """Tests that approve_story and save_story only act on PENDING stories."""
 
     @pytest.mark.asyncio
-    async def test_approve_story_fails_on_non_pending_story(self, app_with_db, db_session):
+    async def test_approve_story_fails_on_non_pending_story(self, app_with_db, db_session, csrf_headers):
         """POST /story/{id}/approve should fail if story is not PENDING."""
         # Create a QUEUED story (already approved)
         story = Story(
@@ -57,14 +57,16 @@ class TestApproveSaveStoryPENDINGCheck:
         await db_session.commit()
 
         client = TestClient(app_with_db)
-        response = client.post(f"/story/{story.id}/approve", auth=("testuser", "testpass"))
+        response = client.post(
+        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
+    )
 
         # Should fail with 400 or 409 - not 200
         assert response.status_code != 200, "approve_story should not succeed on non-PENDING story"
         assert response.status_code in (400, 409, 422), f"Expected 400/409/422, got {response.status_code}"
 
     @pytest.mark.asyncio
-    async def test_approve_story_fails_on_rejected_story(self, app_with_db, db_session):
+    async def test_approve_story_fails_on_rejected_story(self, app_with_db, db_session, csrf_headers):
         """POST /story/{id}/approve should fail if story is REJECTED."""
         story = Story(
             id=uuid.uuid4(),
@@ -78,13 +80,15 @@ class TestApproveSaveStoryPENDINGCheck:
         await db_session.commit()
 
         client = TestClient(app_with_db)
-        response = client.post(f"/story/{story.id}/approve", auth=("testuser", "testpass"))
+        response = client.post(
+        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
+    )
 
         assert response.status_code != 200
         assert response.status_code in (400, 409, 422)
 
     @pytest.mark.asyncio
-    async def test_approve_story_fails_on_posted_story(self, app_with_db, db_session):
+    async def test_approve_story_fails_on_posted_story(self, app_with_db, db_session, csrf_headers):
         """POST /story/{id}/approve should fail if story is POSTED."""
         story = Story(
             id=uuid.uuid4(),
@@ -98,13 +102,15 @@ class TestApproveSaveStoryPENDINGCheck:
         await db_session.commit()
 
         client = TestClient(app_with_db)
-        response = client.post(f"/story/{story.id}/approve", auth=("testuser", "testpass"))
+        response = client.post(
+        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
+    )
 
         assert response.status_code != 200
         assert response.status_code in (400, 409, 422)
 
     @pytest.mark.asyncio
-    async def test_save_story_fails_on_non_pending_story(self, app_with_db, db_session):
+    async def test_save_story_fails_on_non_pending_story(self, app_with_db, db_session, csrf_headers):
         """POST /story/{id}/save should fail if story is not PENDING."""
         story = Story(
             id=uuid.uuid4(),
@@ -121,14 +127,15 @@ class TestApproveSaveStoryPENDINGCheck:
         response = client.post(
             f"/story/{story.id}/save",
             data={"caption": "Test caption", "platform": "twitter"},
-            auth=("testuser", "testpass")
+            auth=("testuser", "testpass"),
+            headers=csrf_headers,
         )
 
         assert response.status_code != 200
         assert response.status_code in (400, 409, 422), f"Expected 400/409/422, got {response.status_code}"
 
     @pytest.mark.asyncio
-    async def test_approve_story_succeeds_on_pending_story(self, app_with_db, db_session):
+    async def test_approve_story_succeeds_on_pending_story(self, app_with_db, db_session, csrf_headers):
         """POST /story/{id}/approve should succeed on PENDING story."""
         story = Story(
             id=uuid.uuid4(),
@@ -149,7 +156,9 @@ class TestApproveSaveStoryPENDINGCheck:
         llm_module._llm_client = mock_llm
 
         client = TestClient(app_with_db)
-        response = client.post(f"/story/{story.id}/approve", auth=("testuser", "testpass"))
+        response = client.post(
+        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
+    )
 
         assert response.status_code == 200, f"approve_story should succeed on PENDING story: {response.text[:200]}"
 
@@ -163,7 +172,7 @@ class TestApproveSaveStoryPENDINGCheck:
         assert updated_story.status == Story.Status.QUEUED
 
     @pytest.mark.asyncio
-    async def test_save_story_succeeds_on_pending_story(self, app_with_db, db_session):
+    async def test_save_story_succeeds_on_pending_story(self, app_with_db, db_session, csrf_headers):
         """POST /story/{id}/save should succeed on PENDING story."""
         story = Story(
             id=uuid.uuid4(),
@@ -186,7 +195,8 @@ class TestApproveSaveStoryPENDINGCheck:
         response = client.post(
             f"/story/{story.id}/save",
             data={"caption": "Test caption with source https://example.com", "platform": "twitter"},
-            auth=("testuser", "testpass")
+            auth=("testuser", "testpass"),
+            headers=csrf_headers,
         )
 
         assert response.status_code == 200, f"save_story should succeed on PENDING story: {response.text[:200]}"
@@ -201,7 +211,7 @@ class TestApproveSaveStoryPENDINGCheck:
         assert updated_story.status == Story.Status.QUEUED
 
     @pytest.mark.asyncio
-    async def test_approve_story_idempotent_on_already_queued(self, app_with_db, db_session):
+    async def test_approve_story_idempotent_on_already_queued(self, app_with_db, db_session, csrf_headers):
         """Second approve on already QUEUED story should be idempotent (not create duplicate post)."""
         story = Story(
             id=uuid.uuid4(),
@@ -223,7 +233,9 @@ class TestApproveSaveStoryPENDINGCheck:
 
         client = TestClient(app_with_db)
         # First approve - should succeed
-        response1 = client.post(f"/story/{story.id}/approve", auth=("testuser", "testpass"))
+        response1 = client.post(
+        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
+    )
         assert response1.status_code == 200
 
         # Verify story is now QUEUED and CuratedPost was created
@@ -235,7 +247,9 @@ class TestApproveSaveStoryPENDINGCheck:
         assert updated_story.status == Story.Status.QUEUED
 
         # Second approve should fail (story is no longer PENDING, and CuratedPost exists)
-        response2 = client.post(f"/story/{story.id}/approve", auth=("testuser", "testpass"))
+        response2 = client.post(
+        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
+    )
         # Should return 409 (conflict) since story is now QUEUED and CuratedPost exists
         assert response2.status_code == 409
 

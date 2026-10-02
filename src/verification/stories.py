@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_VIEWPOINT_LABEL = "neutral"
 MAX_VIEWPOINT_LABEL_LEN = 32
+# Story.primary_entities is truncated to this many canonical entity IDs.
+MAX_PRIMARY_ENTITIES = 10
 
 
 def _normalize_viewpoint_label(raw: object) -> str:
@@ -377,7 +379,7 @@ async def _update_story_entities(session: AsyncSession, story_id: uuid.UUID, new
     if story:
         current_entities = set(story.primary_entities or [])
         current_entities.update(new_entities)
-        story.primary_entities = list(current_entities)[:10]
+        story.primary_entities = sorted(current_entities)[:MAX_PRIMARY_ENTITIES]
         story.updated_at = datetime.now(timezone.utc)
         await session.flush()
 
@@ -397,7 +399,10 @@ async def create_story_from_units(
 
     story = Story(
         day=day,
-        primary_entities=list(combined_entities)[:10],  # Store top 10 canonical IDs for display
+        # Store top 10 canonical IDs for display, in a stable order: set iteration
+        # follows PYTHONHASHSEED, so an unsorted truncate would drop a different 10
+        # on every process and evict entities stored by a previous run.
+        primary_entities=sorted(combined_entities)[:MAX_PRIMARY_ENTITIES],
         status=Story.Status.PENDING,
     )
     session.add(story)

@@ -35,6 +35,13 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra pipeline
 
+      - name: Schema drift check (preflight, fails the run before it starts)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          uv run python -m scripts.check_schema
+
       - name: LLM preflight (fail fast on auth errors)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -47,18 +54,6 @@ jobs:
           from src.shared.llm_preflight import run_llm_preflight_or_fail
           asyncio.run(run_llm_preflight_or_fail())
           "
-
-      - name: Schema drift check
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          GDELT_THROTTLE_SECONDS: "30"
-          PYTHONUNBUFFERED: "1"
-          GDELT_ENABLED: "false"
-        run: |
-          uv run python -m scripts.check_schema
 
       - name: Run ingestion pipeline
         id: ingest
@@ -79,6 +74,13 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           uv run python scripts/check_freshness.py --hours 30
+
+      - name: Report pipeline orphans (fail if the report is incomplete)
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          uv run python scripts/check_orphans.py
 
       - name: Heartbeat commit (keeps scheduled workflow alive)
         if: always()
