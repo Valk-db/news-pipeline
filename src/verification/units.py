@@ -8,6 +8,7 @@ from src.utils.minhash_utils import (
     cluster_articles_by_containment,
 )
 from src.shared.config import get_settings
+from src.shared.analyzer_versions import DEDUPE_VERSION, compute_input_hash
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
@@ -236,6 +237,18 @@ async def build_reporting_units(session: AsyncSession) -> int:
                 source_tiers=dict(tier_counts),
                 owner_groups=dict(owner_counts),
                 tier1_owner_groups=dict(tier1_owner_counts),
+                # What produced this row and what it was computed from, so a fix to
+                # clustering can be scoped to the units it affects instead of requiring a
+                # re-ingest. The membership and the threshold are both inputs: the threshold
+                # is folded in so lowering containment_threshold marks existing units stale in
+                # their input_hash, without anyone having to remember to bump a version for a
+                # tuning change.
+                analyzer_version=DEDUPE_VERSION,
+                input_hash=compute_input_hash(
+                    DEDUPE_VERSION,
+                    sorted(str(a.id) for a in cluster_articles),
+                    threshold,
+                ),
             )
             session.add(unit)
             await session.flush()

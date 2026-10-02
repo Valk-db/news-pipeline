@@ -14,6 +14,7 @@ from src.schema.models import (
 )
 from src.enrichment import get_embedding_service, cosine_similarity
 from src.shared.bulk_write import bulk_write
+from src.shared.analyzer_versions import RELIABILITY_VERSION, compute_input_hash
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +304,11 @@ async def compute_daily_reliability_snapshots(
             corrections_count=correction_stats["count"],
             articles_sampled=correction_stats["articles_sampled"],
             tier_at_snapshot=tier,
+            # A snapshot is one (source, day) scoring run, so the pair is its input. The
+            # scores themselves are the output and are not hashed; bump RELIABILITY_VERSION
+            # when the scoring formula changes so existing snapshots go stale.
+            analyzer_version=RELIABILITY_VERSION,
+            input_hash=compute_input_hash(RELIABILITY_VERSION, domain, date.isoformat()),
         )
         session.add(snapshot)
         snapshots_created += 1

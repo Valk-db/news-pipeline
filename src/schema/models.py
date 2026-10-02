@@ -10,6 +10,32 @@ import uuid
 Base = declarative_base()
 
 
+class DerivedStateMixin:
+    """The two columns every derived row carries: which analyzer wrote it, and from what.
+
+    Declared once here and mixed into each derived table so the columns cannot drift apart
+    between tables -- fifteen hand-copied declarations is fifteen chances to spell one of them
+    differently, and the recompute script walks all fifteen by name.
+
+    `analyzer_version` is the version constant from src/shared/analyzer_versions.py, owned by
+    the stage that CREATED the row (not the last one to mutate it). `input_hash` is SHA256 hex
+    over that stage's canonical input for the row, computed with compute_input_hash() at the
+    write point.
+
+    Both are nullable because every row predating migration
+    20261002050000_recomputable_derived_state.sql has NULL in both, and NULL means "written
+    before this was recorded" -- which is stale as far as scripts/recompute_derived.py is
+    concerned. Never give either a default: a row that claims a version nobody computed it
+    with is worse than one that admits it does not know.
+
+    raw_articles deliberately does NOT carry these: it is the immutable raw layer and nothing
+    derives it.
+    """
+
+    analyzer_version = Column(String(64), nullable=True)
+    input_hash = Column(String(64), nullable=True)
+
+
 class SourceTier(str, PyEnum):
     TIER1 = "tier1"      # BBC, Guardian, NPR, AP, Reuters (verified editorial)
     TIER2 = "tier2"      # National/regional outlets, reputable aggregators
@@ -83,7 +109,7 @@ class RawArticle(Base):
     # END translation block.
 
 
-class ReportingUnit(Base):
+class ReportingUnit(DerivedStateMixin, Base):
     """A cluster of near-duplicate articles (syndication, verbatim repub)."""
     __tablename__ = "reporting_units"
     __table_args__ = (
@@ -103,7 +129,7 @@ class ReportingUnit(Base):
     representative = relationship("RawArticle", foreign_keys=[representative_article_id], lazy="selectin")
 
 
-class Story(Base):
+class Story(DerivedStateMixin, Base):
     """A semantic group of reporting units covering the same event."""
     __tablename__ = "stories"
     __table_args__ = (
@@ -143,7 +169,7 @@ class Story(Base):
     )
 
 
-class StoryUnitLink(Base):
+class StoryUnitLink(DerivedStateMixin, Base):
     """Many-to-many: stories ↔ reporting_units."""
     __tablename__ = "story_unit_links"
     __table_args__ = (UniqueConstraint("story_id", "unit_id", name="uq_story_unit"),)
@@ -191,7 +217,7 @@ class StatusLog(Base):
     commit_sha = Column(String(40), nullable=True)
 
 
-class CanonicalEntity(Base):
+class CanonicalEntity(DerivedStateMixin, Base):
     """Canonical entity representing a real-world entity with a stable ID."""
     __tablename__ = "canonical_entities"
     __table_args__ = (
@@ -219,7 +245,7 @@ class CanonicalEntity(Base):
     aliases = relationship("EntityAlias", back_populates="canonical_entity", cascade="all, delete-orphan")
 
 
-class EntityAlias(Base):
+class EntityAlias(DerivedStateMixin, Base):
     """Alias/alternative name for a canonical entity."""
     __tablename__ = "entity_aliases"
     __table_args__ = (
@@ -262,7 +288,7 @@ class EventGeometryType(str, PyEnum):
     GEOMETRYCOLLECTION = "geometrycollection"
 
 
-class EventGeometry(Base):
+class EventGeometry(DerivedStateMixin, Base):
     """Geometry data for events (points, polygons, etc.)."""
     __tablename__ = "event_geometries"
     __table_args__ = (
@@ -305,7 +331,7 @@ class EventLayer(Base):
     events = relationship("Event", back_populates="layer")
 
 
-class Event(Base):
+class Event(DerivedStateMixin, Base):
     """Event on the map - linked to stories and geography."""
     __tablename__ = "events"
     __table_args__ = (
@@ -355,7 +381,7 @@ class Event(Base):
     layer = relationship("EventLayer", back_populates="events", foreign_keys=[layer_id])
 
 
-class ArticleEmbedding(Base):
+class ArticleEmbedding(DerivedStateMixin, Base):
     """Vector embedding for an article (for semantic search/similarity)."""
     __tablename__ = "article_embeddings"
     __table_args__ = (
@@ -373,7 +399,7 @@ class ArticleEmbedding(Base):
     article = relationship("RawArticle")
 
 
-class StoryEmbedding(Base):
+class StoryEmbedding(DerivedStateMixin, Base):
     """Vector embedding for a story (aggregated from articles)."""
     __tablename__ = "story_embeddings"
     __table_args__ = (
@@ -456,7 +482,7 @@ class MediaAsset(Base):
     story = relationship("Story")
 
 
-class SourceReliabilitySnapshot(Base):
+class SourceReliabilitySnapshot(DerivedStateMixin, Base):
     """Daily reliability score snapshot for a source."""
     __tablename__ = "source_reliability_snapshots"
     __table_args__ = (
@@ -572,7 +598,7 @@ class ClaimType(str, PyEnum):
     QUOTE = "quote"
 
 
-class Claim(Base):
+class Claim(DerivedStateMixin, Base):
     """An atomic factual assertion extracted from a story's reporting units.
 
     Distinct from FactCheckRecord (verdicts from external fact-checkers) --
@@ -602,7 +628,7 @@ class ClaimStance(str, PyEnum):
     NEUTRAL = "neutral"
 
 
-class ClaimEvidence(Base):
+class ClaimEvidence(DerivedStateMixin, Base):
     """Edge: which reporting unit said what about which claim.
 
     This is the "source A says X, source B says Y" matrix -- one row per
@@ -633,7 +659,7 @@ class EdgePredicate(str, PyEnum):
     CAUSED_BY = "caused_by"
 
 
-class EntityEdge(Base):
+class EntityEdge(DerivedStateMixin, Base):
     """Generic typed edge between two things in the graph.
 
     Polymorphic on purpose (subject_type/object_type + a UUID, no FK
@@ -693,7 +719,7 @@ class TopicGroup(Base):
     children = relationship("TopicGroup", backref=backref("parent", remote_side=[id]))
 
 
-class StoryTopicGroup(Base):
+class StoryTopicGroup(DerivedStateMixin, Base):
     """Many-to-many: stories <-> topic_groups, with an assignment confidence."""
     __tablename__ = "story_topic_groups"
     __table_args__ = (UniqueConstraint("story_id", "topic_group_id", name="uq_story_topic_group"),)

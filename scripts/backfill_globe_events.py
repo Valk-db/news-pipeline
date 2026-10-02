@@ -30,6 +30,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from src.schema.models import CanonicalEntity, Event, EventLayer, Story
 from src.shared.config import get_settings
 from src.shared.database import _get_engine, _get_session_maker, get_session
+from src.shared.analyzer_versions import GEOCODE_VERSION, compute_input_hash
 
 
 # How fine-grained a geocoded place is, finest first. Nominatim's own label is
@@ -128,6 +129,19 @@ def story_event(
         tier1_source_count=tier1,
         entities={entity.entity_type: [entity.canonical_name]},
         layer_id=layer_id,
+        # An Event's only computed content is a point, and that point came out of the
+        # geocoder -- so the geocoder is the analyzer that decides whether this row is
+        # current, which is why the version here is the geocode one and not a globe-backfill
+        # one. The hash covers the inputs the point was resolved from (story, place, the
+        # coordinates themselves), not the tier counts, which are a projection of the story.
+        analyzer_version=GEOCODE_VERSION,
+        input_hash=compute_input_hash(
+            GEOCODE_VERSION,
+            str(story.id),
+            entity.canonical_name,
+            float(entity.latitude),
+            float(entity.longitude),
+        ),
     )
 
 

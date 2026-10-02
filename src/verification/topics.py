@@ -8,6 +8,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import Story, TopicGroup, StoryTopicGroup
+from src.shared.analyzer_versions import TOPIC_VERSION, compute_input_hash
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,13 @@ async def assign_story_topic_groups(session: AsyncSession, story_id) -> list[dic
             story_id=story_id,
             topic_group_id=topic_group.id,
             confidence=confidence,
+            # The input is the (story, topic group) pair -- the same key as
+            # uq_story_topic_group -- because that is what the keyword match decided. The
+            # confidence is the match strength, recorded on the row rather than hashed.
+            analyzer_version=TOPIC_VERSION,
+            input_hash=compute_input_hash(
+                TOPIC_VERSION, str(story_id), str(topic_group.id)
+            ),
         )
         session.add(assignment)
         await session.flush()
@@ -130,6 +138,10 @@ async def assign_story_topic_groups(session: AsyncSession, story_id) -> list[dic
                 story_id=story_id,
                 topic_group_id=fallback_group.id,
                 confidence=10,
+                analyzer_version=TOPIC_VERSION,
+                input_hash=compute_input_hash(
+                    TOPIC_VERSION, str(story_id), str(fallback_group.id)
+                ),
             )
             session.add(assignment)
             await session.commit()
