@@ -6,7 +6,6 @@ from sqlalchemy import select
 from src.schema.models import CanonicalEntity
 from src.utils.ner import (
     _normalize_text,
-    _generate_aliases,
     ALIAS_SEED,
     EntityCanonicalizer,
     CanonicalMention,
@@ -31,39 +30,67 @@ class TestNormalization:
         assert _normalize_text("President Joe Biden") == "joe biden"
         assert _normalize_text("Mr. Smith") == "smith"
         assert _normalize_text("Dr. Jane Doe") == "jane doe"
+        assert _normalize_text("POTUS Donald Trump") == "donald trump"
+        assert _normalize_text("Prince Harry") == "harry"
+
+    def test_honorifics_are_only_stripped_from_the_front(self):
+        """A title word inside a name is part of the name.
+
+        The unanchored version of this rule deleted "minister" out of "Foreign
+        Minister" and would delete it out of any name containing it, which is how
+        one person's name ends up filed as another's.
+        """
+        assert _normalize_text("Foreign Minister Yemis") == "foreign minister yemis"
+        assert _normalize_text("Deputy Prime Minister Asad") == "deputy prime minister asad"
+
+    def test_trailing_possessive_is_the_same_entity(self):
+        assert _normalize_text("Andy Burnham's") == "andy burnham"
+        assert _normalize_text("Nepal's") == "nepal"
+        # Only a trailing genitive; a possessive inside the name stays part of it.
+        assert _normalize_text("Sheriff's Department") == "sheriffs department"
+
+    def test_leading_article_is_dropped_for_places_and_organizations(self):
+        assert _normalize_text("the European Union", "ORG") == "ORG:european union"
+        assert _normalize_text("the West Bank", "GPE") == "GPE:west bank"
+        # No attested PERSON surface form starts with an article, so none is dropped.
+        assert _normalize_text("the Rock", "PERSON") == "PERSON:the rock"
+
+    def test_accents_fold(self):
+        assert _normalize_text("Sébastien Lecornu") == "sebastien lecornu"
+        assert _normalize_text("Jürgen Klopp") == "jurgen klopp"
+        assert _normalize_text("Édouard Geffray") == "edouard geffray"
+        assert _normalize_text("Laurent Nuñez") == "laurent nunez"
+
+    def test_entity_type_is_part_of_the_key(self):
+        assert _normalize_text("Washington", "GPE") != _normalize_text("Washington", "PERSON")
 
     def test_collapse_whitespace(self):
         assert _normalize_text("  Joe    Biden  ") == "joe biden"
 
 
-class TestAliasGeneration:
-    """Tests for alias generation."""
+class TestPlaceNames:
+    """Nominatim display strings and the places they name.
 
-    def test_person_aliases(self):
-        aliases = _generate_aliases("Joe Biden", "PERSON")
-        assert "biden" in aliases
-        assert "j biden" in aliases
-        assert "joe biden" in aliases
+    The geocoder hands back "London, London, City Of, United Kingdom" for a place
+    the corpus also names bare as "London", and "Tabuk, Tabuk, Saudi Arabia" for
+    "Tabuk". Both spellings reached canonicalization as separate entities, so the
+    same place became two map pins and two stories.
+    """
 
-    def test_org_aliases(self):
-        aliases = _generate_aliases("European Union", "ORG")
-        assert "eu" in aliases
-        assert "e u" in aliases
+    def test_administrative_tail_is_dropped(self):
+        assert canonical_surface("London, London, City Of, United Kingdom", "GPE") == "London"
+        assert canonical_surface("Washington, Washington, United States", "GPE") == "Washington"
+        assert canonical_surface("Tabuk, Tabuk, Saudi Arabia", "GPE") == "Tabuk"
+        assert canonical_surface("Manchester, Manchester, United Kingdom", "GPE") == "Manchester"
+        assert canonical_surface("New Delhi, Delhi, India", "GPE") == "New Delhi"
 
-    def test_gpe_aliases(self):
-        aliases = _generate_aliases("United States", "GPE")
-        assert "us" in aliases
-        assert "usa" in aliases
-        assert "america" in aliases
+    def test_a_name_without_a_tail_is_untouched(self):
+        assert canonical_surface("Mumbai", "GPE") == "Mumbai"
+        assert canonical_surface("Texas, United States", "GPE") == "Texas"
 
-        aliases = _generate_aliases("United Kingdom", "GPE")
-        assert "uk" in aliases
-        assert "britain" in aliases
-
-    def test_no_duplicates(self):
-        aliases = _generate_aliases("European Union", "ORG")
-        # Should not have duplicates
-        assert len(aliases) == len(set(aliases))
+    def test_only_places_drop_a_tail(self):
+        assert canonical_surface("Smith, John and Co", "ORG") == "Smith, John and Co"
+        assert canonical_surface("Smith, John", "PERSON") == "Smith, John"
 
 
 class TestEnglishAliasNormalization:
@@ -81,6 +108,11 @@ class TestEnglishAliasNormalization:
 
     def test_honorifics_are_stripped_before_the_lookup(self):
         assert canonical_surface("President Trump", "PERSON") == "Donald Trump"
+        assert canonical_surface("POTUS Donald Trump", "PERSON") == "Donald Trump"
+
+    def test_a_possessive_is_not_minted_as_a_display_name(self):
+        assert canonical_surface("Andy Burnham's", "PERSON") == "Andy Burnham"
+        assert canonical_surface("Nepal's", "GPE") == "Nepal"
 
     def test_unknown_and_wrongly_typed_surfaces_pass_through(self):
         assert canonical_surface("Tennessee", "GPE") == "Tennessee"
@@ -88,11 +120,12 @@ class TestEnglishAliasNormalization:
         assert canonical_surface("UK", "ORG") == "UK"
 
     def test_seed_rows_are_consistent(self):
-        """Every row normalizes to its own canonical surface, and every alias is
-        reachable from it -- a table that disagrees with itself is a silent bug."""
+        """Every alias resolves to the canonical name it claims, and a canonical
+        name is never rewritten into something else -- a table that disagrees with
+        itself is a silent bug."""
         for entity_type, alias, canonical in ALIAS_SEED:
             assert canonical_surface(alias, entity_type) == canonical
-            assert _normalize_text(alias) in _generate_aliases(canonical, entity_type)
+            assert canonical_surface(canonical, entity_type) == canonical
 
     @pytest.mark.asyncio
     async def test_alias_and_long_form_share_one_canonical_entity(self, db_session):
@@ -162,6 +195,202 @@ class TestEnglishAliasNormalization:
 
         assert len(bbc & guardian) == 2
         assert canonical_jaccard(bbc, guardian) == 0.5 >= 0.4
+
+
+class TestAliasResolution:
+    """Surface forms that name one entity resolve to one canonical entity.
+
+    Every surface form below is one the corpus actually contains, except where the
+    test says otherwise. The pairs are the ones the pipeline got wrong: they either
+    became two entities for one referent, or two referents became one.
+    """
+
+    @staticmethod
+    async def _canonicalizer(session):
+        canonicalizer = EntityCanonicalizer(session)
+        await canonicalizer.initialize()
+        return canonicalizer
+
+    # --- PERSON
+
+    @pytest.mark.asyncio
+    async def test_person_title_possessive_case_and_accents_are_one_entity(self, db_session):
+        canonicalizer = await self._canonicalizer(db_session)
+
+        mentions = [
+            await canonicalizer.get_or_create(surface, "PERSON")
+            for surface in ("POTUS Donald Trump", "Donald Trump", "donald trump", "Trump's")
+        ]
+        assert len({m.canonical_id for m in mentions}) == 1
+
+        accented = [
+            await canonicalizer.get_or_create(surface, "PERSON")
+            for surface in ("Sébastien Lecornu", "Sebastien Lecornu")
+        ]
+        assert len({m.canonical_id for m in accented}) == 1
+        # The display name keeps the accents the newsroom wrote.
+        assert accented[0].canonical_name == "Sébastien Lecornu"
+
+    @pytest.mark.asyncio
+    async def test_a_bare_surname_reaches_the_only_person_it_names(self, db_session):
+        canonicalizer = await self._canonicalizer(db_session)
+
+        burnham = await canonicalizer.get_or_create("Andy Burnham", "PERSON")
+        await canonicalizer.get_or_create("Pete Hegseth", "PERSON")
+        bare = await canonicalizer.get_or_create("Burnham", "PERSON")
+
+        assert bare.canonical_id == burnham.canonical_id
+        # Lower confidence than an exact key: this one is an inference, not a lookup.
+        assert bare.confidence < 1.0
+
+    @pytest.mark.asyncio
+    async def test_a_surname_two_people_share_resolves_to_neither(self, db_session):
+        """"Lee" names three people in the corpus, so it resolves to none of them.
+
+        An earlier revision answered this with whichever Lee the cache happened to
+        hold first, so Bill Lee's coverage was filed under Hoon Lee.
+        """
+        canonicalizer = await self._canonicalizer(db_session)
+
+        people = [
+            await canonicalizer.get_or_create(name, "PERSON")
+            for name in ("Hoon Lee", "Bill Lee", "Lee Jae Myung")
+        ]
+        assert len({p.canonical_id for p in people}) == 3
+
+        bare = await canonicalizer.get_or_create("Lee", "PERSON")
+        assert bare.canonical_id not in {p.canonical_id for p in people}
+
+    @pytest.mark.asyncio
+    async def test_a_full_name_never_collapses_into_a_first_token(self, db_session):
+        """"John Trump" is not "John", however many Johns there are.
+
+        The substring fallback this replaces returned the first cached key that was
+        contained in, or contained, the surface form and shared a token with it, so
+        "John Trump" resolved to any entity named "John".
+        """
+        canonicalizer = await self._canonicalizer(db_session)
+
+        john = await canonicalizer.get_or_create("John Kerry", "PERSON")
+        john_trump = await canonicalizer.get_or_create("John Trump", "PERSON")
+
+        assert john_trump.canonical_id != john.canonical_id
+        assert john_trump.canonical_name == "John Trump"
+
+    @pytest.mark.asyncio
+    async def test_a_newly_named_person_becomes_a_surname_target_in_the_same_run(self, db_session):
+        """A bare surname needs no second pass: the run that mints the full name
+        answers the bare surname later in the same batch."""
+        canonicalizer = await self._canonicalizer(db_session)
+
+        full = await canonicalizer.get_or_create("Andreas Jansson", "PERSON")
+        bare = await canonicalizer.get_or_create("Jansson", "PERSON")
+
+        assert bare.canonical_id == full.canonical_id
+
+    @pytest.mark.asyncio
+    async def test_a_second_person_with_the_surname_retracts_the_claim(self, db_session):
+        canonicalizer = await self._canonicalizer(db_session)
+
+        await canonicalizer.get_or_create("Pete Hegseth", "PERSON")
+        await canonicalizer.get_or_create("Dan Hegseth", "PERSON")
+        bare = await canonicalizer.get_or_create("Hegseth", "PERSON")
+
+        assert bare.canonical_name == "Hegseth"
+
+    @pytest.mark.asyncio
+    async def test_a_person_and_a_place_of_the_same_name_stay_apart(self, db_session):
+        """The brief's adversarial case: "Washington" is a state and a surname."""
+        canonicalizer = await self._canonicalizer(db_session)
+
+        place = await canonicalizer.get_or_create("Washington, Washington, United States", "GPE")
+        assert place.canonical_name == "Washington"
+        person = await canonicalizer.get_or_create("George Washington", "PERSON")
+
+        bare_person = await canonicalizer.get_or_create("Washington", "PERSON")
+
+        # The state and the man are two entities, and a mention the tagger called a
+        # person resolves to the person: the entity type is part of the lookup key, so
+        # no amount of shared spelling carries one type's answer into the other.
+        assert place.canonical_id != person.canonical_id
+        assert bare_person.canonical_id != place.canonical_id
+        # "Washington" the surname reaches the one person the corpus has that way, and
+        # says so by claiming less confidence than an exact key does.
+        assert bare_person.canonical_id == person.canonical_id
+        assert bare_person.confidence < 1.0
+
+    # --- ORG
+
+    @pytest.mark.asyncio
+    async def test_organization_article_and_case_are_one_entity(self, db_session):
+        canonicalizer = await self._canonicalizer(db_session)
+
+        mentions = [
+            await canonicalizer.get_or_create(surface, "ORG")
+            for surface in ("the Supreme Court", "the supreme court", "Supreme Court")
+        ]
+        assert len({m.canonical_id for m in mentions}) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_acronym_resolves_to_its_long_form(self, db_session):
+        canonicalizer = await self._canonicalizer(db_session)
+
+        nato = await canonicalizer.get_or_create("NATO", "ORG")
+        long_form = await canonicalizer.get_or_create("the North Atlantic Treaty Organization", "ORG")
+
+        assert nato.canonical_id == long_form.canonical_id
+        assert nato.canonical_name == "North Atlantic Treaty Organization"
+
+    @pytest.mark.asyncio
+    async def test_one_word_of_an_organization_is_not_the_organization(self, db_session):
+        """"the House" is not the White House.
+
+        The generated aliases made every word of a multi-word name an alias of the
+        whole, so "house", "white", "news", "border", "court" and "google" each
+        resolved to whichever organization happened to contain them.
+        """
+        canonicalizer = await self._canonicalizer(db_session)
+
+        white_house = await canonicalizer.get_or_create("the White House", "ORG")
+        house = await canonicalizer.get_or_create("the House", "ORG")
+
+        assert house.canonical_id != white_house.canonical_id
+
+    # --- GPE
+
+    @pytest.mark.asyncio
+    async def test_place_with_and_without_an_administrative_tail_are_one_entity(self, db_session):
+        canonicalizer = await self._canonicalizer(db_session)
+
+        long_form = await canonicalizer.get_or_create(
+            "London, London, City Of, United Kingdom", "GPE"
+        )
+        bare = await canonicalizer.get_or_create("London", "GPE")
+
+        assert long_form.canonical_id == bare.canonical_id
+        assert long_form.canonical_name == bare.canonical_name == "London"
+
+    @pytest.mark.asyncio
+    async def test_place_possessive_and_article_are_one_entity(self, db_session):
+        canonicalizer = await self._canonicalizer(db_session)
+
+        nepal = await canonicalizer.get_or_create("Nepal", "GPE")
+        possessive = await canonicalizer.get_or_create("Nepal's", "GPE")
+        west_bank = await canonicalizer.get_or_create("the West Bank", "GPE")
+
+        west_bank_bare = await canonicalizer.get_or_create("West Bank", "GPE")
+
+        assert possessive.canonical_id == nepal.canonical_id
+        assert west_bank.canonical_id == west_bank_bare.canonical_id
+
+    @pytest.mark.asyncio
+    async def test_different_places_do_not_merge(self, db_session):
+        canonicalizer = await self._canonicalizer(db_session)
+
+        tabuk = await canonicalizer.get_or_create("Tabuk, Tabuk, Saudi Arabia", "GPE")
+        riyadh = await canonicalizer.get_or_create("Riyadh, Riyadh, Saudi Arabia", "GPE")
+
+        assert tabuk.canonical_id != riyadh.canonical_id
 
 
 class TestEntityGeocoding:
@@ -365,8 +594,10 @@ class TestEntityCanonicalizer:
         assert mention.canonical_name == "New Entity"
         assert mention.entity_type == "ORG"
         assert mention.confidence == 1.0
-        # Should have called session.add for canonical entity and aliases
-        assert mock_session.add.call_count >= 2  # canonical + at least one alias
+        # The entity and the one alias that named it, and nothing else: an earlier
+        # revision also wrote every bare word of the name as an alias, which is how
+        # "New" and "Entity" became organizations in their own right.
+        assert mock_session.add.call_count == 2
 
     @pytest.mark.asyncio
     async def test_get_or_create_reuses_existing(self):

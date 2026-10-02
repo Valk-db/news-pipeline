@@ -1,0 +1,444 @@
+{
+  "corpus": "dev raw_articles.entities, 1782 articles, snapshot 2026-10-02 (project ref qzothzirwwpesafzlxtw). A surface is only a fact about the newswire if the wire printed it: dev_mentions counts the mentions of that exact spelling as that entity type in this corpus, so every rule asserted below has evidence behind it. 0 means the spelling was never printed and the pair exists to pin a rule down (or because the corpus only prints another spelling of the same referent, noted in why).",
+  "labels": {
+    "same": "the two surface forms name one real-world referent, so they must resolve to one canonical entity",
+    "different": "the two surface forms name two referents, so they must not resolve to one canonical entity"
+  },
+  "entities": [
+    { "name": "Donald Trump", "type": "PERSON", "dev_mentions": 41 },
+    { "name": "Andy Burnham", "type": "PERSON", "dev_mentions": 47 },
+    { "name": "Pete Hegseth", "type": "PERSON", "dev_mentions": 6 },
+    { "name": "Volodymyr Zelensky", "type": "PERSON", "dev_mentions": 5 },
+    { "name": "Bill Lee", "type": "PERSON", "dev_mentions": 5 },
+    { "name": "Lee Jae Myung", "type": "PERSON", "dev_mentions": 4 },
+    { "name": "Hoon Lee", "type": "PERSON", "dev_mentions": 0 },
+    { "name": "John", "type": "PERSON", "dev_mentions": 1 },
+    { "name": "John Kerry", "type": "PERSON", "dev_mentions": 0 },
+    { "name": "George Washington", "type": "PERSON", "dev_mentions": 0 },
+    { "name": "Samuel Alito", "type": "PERSON", "dev_mentions": 0 },
+    { "name": "Sébastien Lecornu", "type": "PERSON", "dev_mentions": 6 },
+    { "name": "Matthias Huss", "type": "PERSON", "dev_mentions": 5 },
+    { "name": "Jürgen Klopp", "type": "PERSON", "dev_mentions": 3 },
+    { "name": "Jair Bolsonaro", "type": "PERSON", "dev_mentions": 3 },
+    { "name": "Flavio Bolsonaro", "type": "PERSON", "dev_mentions": 5 },
+    { "name": "Mark Rutte", "type": "PERSON", "dev_mentions": 4 },
+    { "name": "Edouard Geffray", "type": "PERSON", "dev_mentions": 4 },
+    { "name": "United States", "type": "GPE", "dev_mentions": 87 },
+    { "name": "London", "type": "GPE", "dev_mentions": 25 },
+    { "name": "Washington", "type": "GPE", "dev_mentions": 10 },
+    { "name": "Washington DC", "type": "GPE", "dev_mentions": 1 },
+    { "name": "New Delhi", "type": "GPE", "dev_mentions": 3 },
+    { "name": "Delhi", "type": "GPE", "dev_mentions": 4 },
+    { "name": "Dubai", "type": "GPE", "dev_mentions": 6 },
+    { "name": "Mumbai", "type": "GPE", "dev_mentions": 2 },
+    { "name": "Texas", "type": "GPE", "dev_mentions": 12 },
+    { "name": "Tabuk", "type": "GPE", "dev_mentions": 1 },
+    { "name": "Manchester", "type": "GPE", "dev_mentions": 3 },
+    { "name": "Moscow", "type": "GPE", "dev_mentions": 12 },
+    { "name": "Nepal", "type": "GPE", "dev_mentions": 8 },
+    { "name": "West Bank", "type": "GPE", "dev_mentions": 6 },
+    { "name": "North Atlantic Treaty Organization", "type": "ORG", "dev_mentions": 0 },
+    { "name": "International Monetary Fund", "type": "ORG", "dev_mentions": 0 },
+    { "name": "European Union", "type": "ORG", "dev_mentions": 2 },
+    { "name": "European Commission", "type": "ORG", "dev_mentions": 2 },
+    { "name": "White House", "type": "ORG", "dev_mentions": 2 },
+    { "name": "House", "type": "ORG", "dev_mentions": 2 },
+    { "name": "NBC News", "type": "ORG", "dev_mentions": 1 },
+    { "name": "Google Maps", "type": "ORG", "dev_mentions": 2 },
+    { "name": "Supreme Court", "type": "ORG", "dev_mentions": 3 },
+    { "name": "Green Party", "type": "ORG", "dev_mentions": 1 },
+    { "name": "Nations League", "type": "ORG", "dev_mentions": 7 }
+  ],
+  "pairs": [
+    {
+      "a": { "surface": "donald trump", "type": "PERSON", "dev_mentions": 30 },
+      "b": { "surface": "Donald Trump", "type": "PERSON", "dev_mentions": 41 },
+      "label": "same",
+      "why": "the wire switches case mid-story; normalization lowercases"
+    },
+    {
+      "a": { "surface": "Donald Trump’s", "type": "PERSON", "dev_mentions": 7 },
+      "b": { "surface": "Donald Trump", "type": "PERSON", "dev_mentions": 41 },
+      "label": "same",
+      "why": "trailing genitive, curly apostrophe, is a possessive of the name and not part of it"
+    },
+    {
+      "a": { "surface": "POTUS Donald Trump", "type": "PERSON", "dev_mentions": 1 },
+      "b": { "surface": "Donald Trump", "type": "PERSON", "dev_mentions": 41 },
+      "label": "same",
+      "why": "a title in the leading position; stripped for the key, kept out of the display name"
+    },
+    {
+      "a": { "surface": "Andy Burnham’s", "type": "PERSON", "dev_mentions": 5 },
+      "b": { "surface": "Andy Burnham", "type": "PERSON", "dev_mentions": 47 },
+      "label": "same",
+      "why": "possessive"
+    },
+    {
+      "a": { "surface": "Burnham", "type": "PERSON", "dev_mentions": 43 },
+      "b": { "surface": "Andy Burnham", "type": "PERSON", "dev_mentions": 47 },
+      "label": "same",
+      "why": "bare surname, and the corpus names exactly one Burnham: 43 bare mentions against 47 full ones"
+    },
+    {
+      "a": { "surface": "Hegseth", "type": "PERSON", "dev_mentions": 10 },
+      "b": { "surface": "Pete Hegseth", "type": "PERSON", "dev_mentions": 6 },
+      "label": "same",
+      "why": "bare surname with a single owner"
+    },
+    {
+      "a": { "surface": "volodymyr zelensky", "type": "PERSON", "dev_mentions": 1 },
+      "b": { "surface": "Volodymyr Zelensky", "type": "PERSON", "dev_mentions": 5 },
+      "label": "same",
+      "why": "case"
+    },
+    {
+      "a": { "surface": "Volodymyr Zelenskyy", "type": "PERSON", "dev_mentions": 7 },
+      "b": { "surface": "Volodymyr Zelensky", "type": "PERSON", "dev_mentions": 5 },
+      "label": "same",
+      "why": "transliteration convention: AP writes the doubled y, Reuters the single; a seed row because no rule can tell them apart"
+    },
+    {
+      "a": { "surface": "Volodymyr Zelenskyy’s", "type": "PERSON", "dev_mentions": 1 },
+      "b": { "surface": "Volodymyr Zelensky", "type": "PERSON", "dev_mentions": 5 },
+      "label": "same",
+      "why": "seed row and possessive at once"
+    },
+    {
+      "a": { "surface": "Zelensky", "type": "PERSON", "dev_mentions": 8 },
+      "b": { "surface": "Volodymyr Zelensky", "type": "PERSON", "dev_mentions": 5 },
+      "label": "same",
+      "why": "bare surname with a single owner"
+    },
+    {
+      "a": { "surface": "lee jae myung", "type": "PERSON", "dev_mentions": 3 },
+      "b": { "surface": "Lee Jae Myung", "type": "PERSON", "dev_mentions": 4 },
+      "label": "same",
+      "why": "case; three tokens, so the surname rule does not apply"
+    },
+    {
+      "a": { "surface": "george washington", "type": "PERSON", "dev_mentions": 2 },
+      "b": { "surface": "George Washington", "type": "PERSON", "dev_mentions": 0 },
+      "label": "same",
+      "why": "the corpus only ever printed the surname lowercased; same person either way"
+    },
+    {
+      "a": { "surface": "Washington", "type": "PERSON", "dev_mentions": 0 },
+      "b": { "surface": "George Washington", "type": "PERSON", "dev_mentions": 0 },
+      "label": "same",
+      "why": "constructed: dev spells Washington as a GPE ten times and as a person never, so the person-side surname has to be proven against the place of the same name"
+    },
+    {
+      "a": { "surface": "justice samuel alito", "type": "PERSON", "dev_mentions": 4 },
+      "b": { "surface": "Samuel Alito", "type": "PERSON", "dev_mentions": 0 },
+      "label": "same",
+      "why": "the wire only ever prints the titled form; an anchored honorific strip is the only thing that can reach the bare name"
+    },
+    {
+      "a": { "surface": "Sebastien Lecornu", "type": "PERSON", "dev_mentions": 1 },
+      "b": { "surface": "Sébastien Lecornu", "type": "PERSON", "dev_mentions": 6 },
+      "label": "same",
+      "why": "accent folding: one outlet strips the diacritic, the rest keep it"
+    },
+    {
+      "a": { "surface": "Huss", "type": "PERSON", "dev_mentions": 5 },
+      "b": { "surface": "Matthias Huss", "type": "PERSON", "dev_mentions": 5 },
+      "label": "same",
+      "why": "bare surname with a single owner"
+    },
+    {
+      "a": { "surface": "Jurgen Klopp", "type": "PERSON", "dev_mentions": 1 },
+      "b": { "surface": "Jürgen Klopp", "type": "PERSON", "dev_mentions": 3 },
+      "label": "same",
+      "why": "accent folding"
+    },
+    {
+      "a": { "surface": "Édouard Geffray", "type": "PERSON", "dev_mentions": 1 },
+      "b": { "surface": "Edouard Geffray", "type": "PERSON", "dev_mentions": 4 },
+      "label": "same",
+      "why": "accent folding, the reverse way round: the accented form is the rarer one here"
+    },
+    {
+      "a": { "surface": "mark rutte", "type": "PERSON", "dev_mentions": 2 },
+      "b": { "surface": "Mark Rutte", "type": "PERSON", "dev_mentions": 4 },
+      "label": "same",
+      "why": "case"
+    },
+    {
+      "a": { "surface": "US", "type": "GPE", "dev_mentions": 122 },
+      "b": { "surface": "United States", "type": "GPE", "dev_mentions": 87 },
+      "label": "same",
+      "why": "the commonest abbreviation in the corpus by a factor of 40"
+    },
+    {
+      "a": { "surface": "U.S.", "type": "GPE", "dev_mentions": 37 },
+      "b": { "surface": "United States", "type": "GPE", "dev_mentions": 87 },
+      "label": "same",
+      "why": "the dotted spelling: dropping punctuation is what makes it reach the seed row"
+    },
+    {
+      "a": { "surface": "Us", "type": "GPE", "dev_mentions": 1 },
+      "b": { "surface": "United States", "type": "GPE", "dev_mentions": 87 },
+      "label": "same",
+      "why": "case"
+    },
+    {
+      "a": { "surface": "London, London, City Of, United Kingdom", "type": "GPE", "dev_mentions": 33 },
+      "b": { "surface": "London", "type": "GPE", "dev_mentions": 25 },
+      "label": "same",
+      "why": "Nominatim display name pasted into an article; the head component is the place, and 789 of 3197 GPE mentions carry an admin tail"
+    },
+    {
+      "a": { "surface": "Washington, Washington, United States", "type": "GPE", "dev_mentions": 17 },
+      "b": { "surface": "Washington", "type": "GPE", "dev_mentions": 10 },
+      "label": "same",
+      "why": "admin tail, and the trap case: the state is also a city, so the tail has to be dropped rather than trusted as a disambiguator"
+    },
+    {
+      "a": { "surface": "New Delhi, Delhi, India", "type": "GPE", "dev_mentions": 15 },
+      "b": { "surface": "New Delhi", "type": "GPE", "dev_mentions": 3 },
+      "label": "same",
+      "why": "admin tail whose second component is a different city; the head is still the referent"
+    },
+    {
+      "a": { "surface": "Dubai, Dubayy, United Arab Emirates", "type": "GPE", "dev_mentions": 11 },
+      "b": { "surface": "Dubai", "type": "GPE", "dev_mentions": 6 },
+      "label": "same",
+      "why": "admin tail in the native spelling"
+    },
+    {
+      "a": { "surface": "Mumbai, Maharashtra, India", "type": "GPE", "dev_mentions": 10 },
+      "b": { "surface": "Mumbai", "type": "GPE", "dev_mentions": 2 },
+      "label": "same",
+      "why": "admin tail"
+    },
+    {
+      "a": { "surface": "Delhi, Delhi, India", "type": "GPE", "dev_mentions": 10 },
+      "b": { "surface": "Delhi", "type": "GPE", "dev_mentions": 4 },
+      "label": "same",
+      "why": "admin tail repeating its own head"
+    },
+    {
+      "a": { "surface": "Texas, United States", "type": "GPE", "dev_mentions": 15 },
+      "b": { "surface": "Texas", "type": "GPE", "dev_mentions": 12 },
+      "label": "same",
+      "why": "admin tail with no intermediate level"
+    },
+    {
+      "a": { "surface": "Manchester, Manchester, United Kingdom", "type": "GPE", "dev_mentions": 6 },
+      "b": { "surface": "Manchester", "type": "GPE", "dev_mentions": 3 },
+      "label": "same",
+      "why": "admin tail repeating its own head"
+    },
+    {
+      "a": { "surface": "Moscow, Moskva, Russia", "type": "GPE", "dev_mentions": 6 },
+      "b": { "surface": "Moscow", "type": "GPE", "dev_mentions": 12 },
+      "label": "same",
+      "why": "admin tail in the transliterated spelling"
+    },
+    {
+      "a": { "surface": "Tabuk, Tabuk, Saudi Arabia", "type": "GPE", "dev_mentions": 7 },
+      "b": { "surface": "Tabuk", "type": "GPE", "dev_mentions": 1 },
+      "label": "same",
+      "why": "admin tail; bare Tabuk is barely attested, so without the collapse the tail is a place nobody has heard of"
+    },
+    {
+      "a": { "surface": "Nepal’s", "type": "GPE", "dev_mentions": 1 },
+      "b": { "surface": "Nepal", "type": "GPE", "dev_mentions": 8 },
+      "label": "same",
+      "why": "possessive"
+    },
+    {
+      "a": { "surface": "the West Bank", "type": "GPE", "dev_mentions": 2 },
+      "b": { "surface": "West Bank", "type": "GPE", "dev_mentions": 6 },
+      "label": "same",
+      "why": "leading article, matched but not displayed: The Hague is a place whose name starts with the article"
+    },
+    {
+      "a": { "surface": "NATO", "type": "ORG", "dev_mentions": 13 },
+      "b": { "surface": "North Atlantic Treaty Organization", "type": "ORG", "dev_mentions": 0 },
+      "label": "same",
+      "why": "acronym 13 times against the expansion once, printed as “the North Atlantic Treaty Organization”"
+    },
+    {
+      "a": { "surface": "Nato", "type": "ORG", "dev_mentions": 6 },
+      "b": { "surface": "North Atlantic Treaty Organization", "type": "ORG", "dev_mentions": 0 },
+      "label": "same",
+      "why": "case on top of the acronym"
+    },
+    {
+      "a": { "surface": "the North Atlantic Treaty Organization", "type": "ORG", "dev_mentions": 1 },
+      "b": { "surface": "North Atlantic Treaty Organization", "type": "ORG", "dev_mentions": 0 },
+      "label": "same",
+      "why": "leading article"
+    },
+    {
+      "a": { "surface": "IMF", "type": "ORG", "dev_mentions": 1 },
+      "b": { "surface": "international monetary fund", "type": "ORG", "dev_mentions": 4 },
+      "label": "same",
+      "why": "acronym against the expansion, both attested"
+    },
+    {
+      "a": { "surface": "the International Monetary Fund", "type": "ORG", "dev_mentions": 1 },
+      "b": { "surface": "International Monetary Fund", "type": "ORG", "dev_mentions": 0 },
+      "label": "same",
+      "why": "leading article"
+    },
+    {
+      "a": { "surface": "the European Union", "type": "ORG", "dev_mentions": 9 },
+      "b": { "surface": "European Union", "type": "ORG", "dev_mentions": 2 },
+      "label": "same",
+      "why": "leading article, the commonest ORG case in the corpus"
+    },
+    {
+      "a": { "surface": "The European Union", "type": "ORG", "dev_mentions": 2 },
+      "b": { "surface": "European Union", "type": "ORG", "dev_mentions": 2 },
+      "label": "same",
+      "why": "article and case together"
+    },
+    {
+      "a": { "surface": "the European Commission", "type": "ORG", "dev_mentions": 9 },
+      "b": { "surface": "European Commission", "type": "ORG", "dev_mentions": 2 },
+      "label": "same",
+      "why": "leading article"
+    },
+    {
+      "a": { "surface": "EC", "type": "ORG", "dev_mentions": 2 },
+      "b": { "surface": "European Commission", "type": "ORG", "dev_mentions": 2 },
+      "label": "same",
+      "why": "acronym, both attested"
+    },
+    {
+      "a": { "surface": "the White House", "type": "ORG", "dev_mentions": 8 },
+      "b": { "surface": "White House", "type": "ORG", "dev_mentions": 2 },
+      "label": "same",
+      "why": "leading article"
+    },
+    {
+      "a": { "surface": "white house", "type": "ORG", "dev_mentions": 10 },
+      "b": { "surface": "White House", "type": "ORG", "dev_mentions": 2 },
+      "label": "same",
+      "why": "case; without it the corpus has two White Houses"
+    },
+    {
+      "a": { "surface": "the Supreme Court", "type": "ORG", "dev_mentions": 4 },
+      "b": { "surface": "Supreme Court", "type": "ORG", "dev_mentions": 3 },
+      "label": "same",
+      "why": "leading article"
+    },
+    {
+      "a": { "surface": "green party", "type": "ORG", "dev_mentions": 1 },
+      "b": { "surface": "Green Party", "type": "ORG", "dev_mentions": 1 },
+      "label": "same",
+      "why": "case"
+    },
+    {
+      "a": { "surface": "the Green Party", "type": "ORG", "dev_mentions": 1 },
+      "b": { "surface": "Green Party", "type": "ORG", "dev_mentions": 1 },
+      "label": "same",
+      "why": "leading article"
+    },
+    {
+      "a": { "surface": "nations league", "type": "ORG", "dev_mentions": 2 },
+      "b": { "surface": "Nations League", "type": "ORG", "dev_mentions": 7 },
+      "label": "same",
+      "why": "case"
+    },
+    {
+      "a": { "surface": "the Nations League", "type": "ORG", "dev_mentions": 4 },
+      "b": { "surface": "Nations League", "type": "ORG", "dev_mentions": 7 },
+      "label": "same",
+      "why": "leading article"
+    },
+    {
+      "a": { "surface": "Lee", "type": "PERSON", "dev_mentions": 14 },
+      "b": { "surface": "Bill Lee", "type": "PERSON", "dev_mentions": 5 },
+      "label": "different",
+      "why": "14 bare Lees in the corpus and three different men hold the name, so the surname rule must decline rather than pick"
+    },
+    {
+      "a": { "surface": "Lee", "type": "PERSON", "dev_mentions": 14 },
+      "b": { "surface": "Hoon Lee", "type": "PERSON", "dev_mentions": 0 },
+      "label": "different",
+      "why": "same reason; dev prints the name lowercased as “hoon lee”, once"
+    },
+    {
+      "a": { "surface": "Lee", "type": "PERSON", "dev_mentions": 14 },
+      "b": { "surface": "Lee Jae Myung", "type": "PERSON", "dev_mentions": 4 },
+      "label": "different",
+      "why": "same reason; a three-token name whose head is a common noun, which is what makes the bare form unresolvable"
+    },
+    {
+      "a": { "surface": "Bolsonaro", "type": "PERSON", "dev_mentions": 8 },
+      "b": { "surface": "Jair Bolsonaro", "type": "PERSON", "dev_mentions": 3 },
+      "label": "different",
+      "why": "two Bolsonaros in the corpus"
+    },
+    {
+      "a": { "surface": "Bolsonaro", "type": "PERSON", "dev_mentions": 8 },
+      "b": { "surface": "Flavio Bolsonaro", "type": "PERSON", "dev_mentions": 5 },
+      "label": "different",
+      "why": "same"
+    },
+    {
+      "a": { "surface": "Jair Bolsonaro", "type": "PERSON", "dev_mentions": 3 },
+      "b": { "surface": "Flavio Bolsonaro", "type": "PERSON", "dev_mentions": 5 },
+      "label": "different",
+      "why": "father and son, both named in the same window; merging them files one man’s statements under another"
+    },
+    {
+      "a": { "surface": "John Trump", "type": "PERSON", "dev_mentions": 1 },
+      "b": { "surface": "John", "type": "PERSON", "dev_mentions": 1 },
+      "label": "different",
+      "why": "a real 2026 headline, and the exact shape that cluster/v1 resolved onto the bare forename because “john trump” contains “john”"
+    },
+    {
+      "a": { "surface": "John Kerry", "type": "PERSON", "dev_mentions": 0 },
+      "b": { "surface": "John", "type": "PERSON", "dev_mentions": 1 },
+      "label": "different",
+      "why": "constructed on the same shape"
+    },
+    {
+      "a": { "surface": "Washington", "type": "GPE", "dev_mentions": 10 },
+      "b": { "surface": "George Washington", "type": "PERSON", "dev_mentions": 0 },
+      "label": "different",
+      "why": "the person and the state, both real, both in the corpus, never the same referent"
+    },
+    {
+      "a": { "surface": "Washington", "type": "GPE", "dev_mentions": 10 },
+      "b": { "surface": "Washington DC", "type": "GPE", "dev_mentions": 1 },
+      "label": "different",
+      "why": "the state and the capital; collapsing an admin tail must not reach across to a different place"
+    },
+    {
+      "a": { "surface": "House", "type": "ORG", "dev_mentions": 2 },
+      "b": { "surface": "White House", "type": "ORG", "dev_mentions": 2 },
+      "label": "different",
+      "why": "the US House of Representatives against the White House; cluster/v1 had “house” aliased to the White House"
+    },
+    {
+      "a": { "surface": "NBC News", "type": "ORG", "dev_mentions": 1 },
+      "b": { "surface": "Google Maps", "type": "ORG", "dev_mentions": 2 },
+      "label": "different",
+      "why": "cluster/v1 had “news” and “google” as bare-word aliases, so the two shared nothing but a generator bug"
+    },
+    {
+      "a": { "surface": "New Delhi", "type": "GPE", "dev_mentions": 3 },
+      "b": { "surface": "Delhi", "type": "GPE", "dev_mentions": 4 },
+      "label": "different",
+      "why": "the city inside the city: Delhi is 49 mentions in the corpus and New Delhi a different place, so substring matching is not closeness"
+    },
+    {
+      "a": { "surface": "London", "type": "GPE", "dev_mentions": 25 },
+      "b": { "surface": "Tabuk, Tabuk, Saudi Arabia", "type": "GPE", "dev_mentions": 7 },
+      "label": "different",
+      "why": "two admin tails that must land on two different heads"
+    },
+    {
+      "a": { "surface": "European Union", "type": "ORG", "dev_mentions": 2 },
+      "b": { "surface": "European Commission", "type": "ORG", "dev_mentions": 2 },
+      "label": "different",
+      "why": "the same first word and the same length; only the seed rows keep them apart"
+    }
+  ]
+}

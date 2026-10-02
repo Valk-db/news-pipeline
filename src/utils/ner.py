@@ -2,9 +2,10 @@
 
 import spacy
 import re
+import unicodedata
 from typing import List, Dict, Set, Optional, Tuple
 from functools import lru_cache
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from src.shared.analyzer_versions import CLUSTER_VERSION, compute_input_hash
 
@@ -97,14 +98,87 @@ def entity_set_jaccard(set_a: Set[str], set_b: Set[str]) -> float:
 
 # --- Canonicalization layer ---
 
+# Titles that newswire copy puts in front of a name. Every entry here is either
+# already in the seed table or attested in front of a name in the corpus
+# ("POTUS Donald Trump", "justice samuel alito", "prince harry", "mahatma
+# gandhi"); this list is not a place to guess.
+HONORIFICS: Tuple[str, ...] = (
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "prof",
+    "president",
+    "prime minister",
+    "pm",
+    "secretary",
+    "minister",
+    "potus",
+    "justice",
+    "prince",
+    "princess",
+    "mahatma",
+)
+
+# Longest first, so "prime minister" wins over "minister" at the same position.
+_HONORIFIC_RE = re.compile(
+    r"^(?:{})\.?\s+".format("|".join(sorted(map(re.escape, HONORIFICS), key=len, reverse=True))),
+    re.IGNORECASE,
+)
+_POSSESSIVE_RE = re.compile(r"['\u2019]s$")
+_LEADING_ARTICLE_RE = re.compile(r"^the\s+", re.IGNORECASE)
+
+# "the" is part of the name of some places and organizations ("the Hague",
+# "the Valley") and absent from the name of others ("the West Bank"), so it is
+# matched away for the two types where the corpus overwhelmingly has it and never
+# for PERSON, where no attested surface form starts with an article.
+TYPES_WITH_LEADING_ARTICLE = frozenset({"GPE", "ORG"})
+
+
+def _strip_honorifics(text: str) -> str:
+    """Drop leading titles, however many of them are stacked ("Mr. President X")."""
+    while True:
+        stripped = _HONORIFIC_RE.sub("", text, count=1)
+        if stripped == text:
+            return text
+        text = stripped
+
+
+def _fold_accents(text: str) -> str:
+    """Decompose accented characters and drop the combining marks.
+
+    Accent folding is standard text normalization (the same family as the case
+    folding two lines below) and it is what keeps one person from becoming two:
+    the corpus spells the same name both ways, "Sébastien Lecornu" and
+    "Sebastien Lecornu", "Jürgen Klopp" and "Jurgen Klopp", "Édouard Geffray"
+    and "Edouard Geffray". Folded, they are one key; the display name on the
+    canonical entity keeps the accents the newsroom wrote.
+    """
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
 # Normalization helpers
 def _normalize_text(text: str, entity_type: str = "") -> str:
-    """Normalize text for matching: lowercase, strip punctuation, collapse whitespace."""
-    text = text.lower().strip()
-    # Remove common honorifics/titles
-    text = re.sub(r'\b(mr\.?|mrs\.?|ms\.?|dr\.?|prof\.?|president|prime minister|pm|secretary|minister)\s+', '', text)
+    """Normalize text for matching: lowercase, strip punctuation, collapse whitespace.
+
+    Match-only: nothing here changes what a human reads, because the display name
+    lives on the canonical entity. Each step is there because the corpus contains
+    the case it removes, and the surface forms it folds together are the same
+    entity rather than two of them.
+    """
+    text = _fold_accents(text.lower().strip())
+    # Titles only ever lead a name, so this is anchored: the unanchored version ate
+    # "minister" out of "Foreign Minister" and would eat any name containing one of
+    # these words mid-string.
+    text = _strip_honorifics(text)
+    # "Andy Burnham's" and "Nepal's" are the same entity as "Andy Burnham" and
+    # "Nepal"; only a trailing genitive, which is the only place one appears.
+    text = _POSSESSIVE_RE.sub("", text)
+    if entity_type in TYPES_WITH_LEADING_ARTICLE:
+        text = _LEADING_ARTICLE_RE.sub("", text)
     # Remove punctuation except hyphens in names
-    text = re.sub(r'[^\w\s-]', '', text)
+    text = re.sub(r"[^\w\s-]", '', text)
     # Collapse whitespace
     text = re.sub(r'\s+', ' ', text)
     normalized = text.strip()
@@ -150,6 +224,13 @@ ALIAS_SEED: Tuple[Tuple[str, str, str], ...] = (
     ("ORG", "Pentagon", "Department of Defense"),
     ("ORG", "SCOTUS", "Supreme Court of the United States"),
     ("ORG", "WHO", "World Health Organization"),
+    # Acronyms attested in the corpus alongside their long form, so both spellings
+    # are known to name one organization. An acronym whose long form the corpus has
+    # never used is not listed: that would be inventing a name, and the row would
+    # mint an entity nothing else ever resolves to.
+    ("ORG", "NATO", "North Atlantic Treaty Organization"),
+    ("ORG", "EC", "European Commission"),
+    ("ORG", "IMF", "International Monetary Fund"),
     # --- people referred to by surname or short form
     ("PERSON", "Trump", "Donald Trump"),
     ("PERSON", "Biden", "Joe Biden"),
@@ -159,6 +240,11 @@ ALIAS_SEED: Tuple[Tuple[str, str, str], ...] = (
     ("PERSON", "Netanyahu", "Benjamin Netanyahu"),
     ("PERSON", "Putin", "Vladimir Putin"),
     ("PERSON", "Zelensky", "Volodymyr Zelensky"),
+    # The same newsroom spells this name both ways, and the doubled form is the
+    # commoner one here: 7 mentions of "Volodymyr Zelenskyy" against 5 of
+    # "Volodymyr Zelensky". Accent folding does not reach it, because no accent is
+    # involved -- this is a transliteration convention, so it belongs in the table.
+    ("PERSON", "Volodymyr Zelenskyy", "Volodymyr Zelensky"),
     ("PERSON", "Khamenei", "Ali Khamenei"),
     ("PERSON", "Macron", "Emmanuel Macron"),
     ("PERSON", "Merkel", "Angela Merkel"),
@@ -167,69 +253,69 @@ ALIAS_SEED: Tuple[Tuple[str, str, str], ...] = (
 )
 
 
-def _build_alias_indexes(rows: Tuple[Tuple[str, str, str], ...]) -> Tuple[Dict[str, str], Dict[Tuple[str, str], List[str]]]:
-    """Build the forward ("TYPE:alias" -> canonical surface) and reverse
-    ((entity_type, normalized canonical) -> normalized aliases) indexes."""
+def _build_alias_index(rows: Tuple[Tuple[str, str, str], ...]) -> Dict[str, str]:
+    """Build the forward index: "TYPE:alias" -> canonical display name."""
     forward: Dict[str, str] = {}
-    reverse: Dict[Tuple[str, str], List[str]] = {}
     for entity_type, alias, canonical in rows:
         forward[_normalize_text(alias, entity_type)] = canonical
-        reverse.setdefault((entity_type, _normalize_text(canonical)), []).append(
-            _normalize_text(alias)
-        )
-    return forward, reverse
+    return forward
 
 
-ENGLISH_ALIASES, _ALIASES_BY_CANONICAL = _build_alias_indexes(ALIAS_SEED)
+ENGLISH_ALIASES = _build_alias_index(ALIAS_SEED)
 
 
 def canonical_surface(surface_form: str, entity_type: str) -> str:
-    """The surface form an English alias should be canonicalized onto.
+    """The display name an English alias should be canonicalized onto.
 
-    "US" -> "United States", "Netanyahu" -> "Benjamin Netanyahu", anything not in
-    the seed table -> itself. Called at canonicalization time, so aliases that
-    arrive before their long form still create one entity instead of two.
+    "US" -> "United States", "Netanyahu" -> "Benjamin Netanyahu", "London, London,
+    City Of, United Kingdom" -> "London", "POTUS Donald Trump" -> "Donald Trump",
+    anything not reducible -> itself. Called at canonicalization time, so aliases
+    that arrive before their long form still create one entity instead of two.
+
+    Two kinds of edit happen here. Dropping a title or a possessive genitive is
+    cleanup: the mention keeps its own row in ``entity_aliases``, so what the text
+    actually said is still recorded, and the canonical name is simply the name
+    rather than the way the sentence introduced it. Dropping an administrative tail
+    is a real merge -- "London, London, City Of, United Kingdom" is Nominatim's
+    display string for a place the corpus also names bare as "London", and storing
+    the long form under its own canonical entity is what put two pins on the map.
     """
-    return ENGLISH_ALIASES.get(_normalize_text(surface_form, entity_type), surface_form)
+    text = " ".join(surface_form.split())
+    text = _strip_honorifics(text)
+    text = _POSSESSIVE_RE.sub("", text).strip()
+    seeded = ENGLISH_ALIASES.get(_normalize_text(text, entity_type))
+    if seeded:
+        return seeded
+    if entity_type in GEOCODABLE_ENTITY_TYPES and "," in text:
+        head = text.split(",", 1)[0].strip()
+        if head and head != text:
+            return ENGLISH_ALIASES.get(_normalize_text(head, entity_type), head)
+    return text
 
 
-def _generate_aliases(base_name: str, entity_type: str) -> List[str]:
-    """Generate common aliases for a canonical entity."""
-    aliases = set()
-    normalized = _normalize_text(base_name)
-    aliases.add(normalized)
+def _person_surnames(mentions: Dict[str, CanonicalMention]) -> Dict[str, CanonicalMention]:
+    """Surname -> the one canonical name that ends with it, for unambiguous surnames only.
 
-    # For PERSON: add first/last name variants
-    if entity_type == "PERSON":
-        parts = normalized.split()
-        if len(parts) >= 2:
-            # "Joe Biden" -> "biden", "joe biden", "j biden"
-            aliases.add(parts[-1])  # Last name only
-            aliases.add(f"{parts[0][0]} {parts[-1]}")  # Initial + last
-            aliases.add(f"{parts[0]} {parts[-1]}")  # First + last
-        if len(parts) >= 3:
-            # "President Joe Biden" -> "biden", "joe biden"
-            pass
+    Wire copy says "Burnham said" as often as it says "Andy Burnham", so a bare
+    surname has to reach the person it names. It is only allowed to where the corpus
+    leaves no choice: a surname two different people answer to ("Lee" -> Bill Lee,
+    Hoon Lee, Lee Jae Myung) is dropped rather than guessed at, because guessing
+    files one person's news under another.
 
-    # For ORG: add acronyms
-    if entity_type == "ORG":
-        words = normalized.split()
-        if len(words) >= 2:
-            # "European Union" -> "eu", "e u"
-            acronym = ''.join(w[0] for w in words if w)
-            if len(acronym) >= 2:
-                aliases.add(acronym)
-                aliases.add(' '.join(w[0] for w in words))
-            # "Federal Bureau of Investigation" -> "fbi"
-            # Also add common abbreviation patterns
-            for w in words:
-                if len(w) > 3:
-                    aliases.add(w)
-
-    # Curated country aliases: "United States" -> "us", "usa", "america"
-    aliases.update(_ALIASES_BY_CANONICAL.get((entity_type, normalized), ()))
-
-    return list(aliases)
+    Only multi-token, all-alphabetic names contribute a surname, which is what keeps
+    the junk out: a canonical name minted from a bad spaCy span
+    ("Burnham - Published Andy Burnham") or a role phrase ("Flydubai attacker")
+    never ends in a bare surname token.
+    """
+    owners: Dict[str, CanonicalMention] = {}
+    for name, mention in mentions.items():
+        tokens = name.split()
+        if len(tokens) >= 2 and all(token.isalpha() for token in tokens):
+            owners.setdefault(name, mention)
+    claims: Dict[str, List[CanonicalMention]] = {}
+    for name, mention in owners.items():
+        claims.setdefault(name.split()[-1], []).append(mention)
+    return {surname: found[0] for surname, found in claims.items() if len(found) == 1}
 
 
 class EntityCanonicalizer:
@@ -238,6 +324,7 @@ class EntityCanonicalizer:
     def __init__(self, session=None):
         self.session = session
         self._cache: Dict[str, CanonicalMention] = {}  # normalized surface -> CanonicalMention
+        self._surnames: Dict[str, CanonicalMention] = {}  # normalized surname -> CanonicalMention
         self._initialized = False
 
     async def initialize(self):
@@ -251,8 +338,14 @@ class EntityCanonicalizer:
         from sqlalchemy.orm import selectinload
         from src.schema.models import CanonicalEntity
 
-        # Load all canonical entities with their aliases (eager load to avoid MissingGreenlet)
-        stmt = select(CanonicalEntity).options(selectinload(CanonicalEntity.aliases))
+        # Load all canonical entities with their aliases (eager load to avoid MissingGreenlet).
+        # Ordered so the index is a function of database content alone: two entities that
+        # normalize to the same key then resolve the same way on every run.
+        stmt = (
+            select(CanonicalEntity)
+            .options(selectinload(CanonicalEntity.aliases))
+            .order_by(CanonicalEntity.entity_type, CanonicalEntity.canonical_name, CanonicalEntity.id)
+        )
         result = await self.session.execute(stmt)
         canonical_entities = result.scalars().all()
 
@@ -274,6 +367,20 @@ class EntityCanonicalizer:
                 confidence=1.0
             )
 
+        self._surnames = _person_surnames(
+            {
+                _normalize_text(entity.canonical_name): CanonicalMention(
+                    surface_form=entity.canonical_name,
+                    canonical_id=str(entity.id),
+                    canonical_name=entity.canonical_name,
+                    entity_type=entity.entity_type,
+                    confidence=1.0
+                )
+                for entity in canonical_entities
+                if entity.entity_type == "PERSON"
+            }
+        )
+
         self._initialized = True
 
     def resolve(self, surface_form: str, entity_type: str) -> Optional[CanonicalMention]:
@@ -285,33 +392,34 @@ class EntityCanonicalizer:
             return None
 
         normalized = _normalize_text(canonical_surface(surface_form, entity_type), entity_type)
-        if normalized in self._cache:
-            return self._cache[normalized]
+        mention = self._cache.get(normalized)
+        if mention is not None:
+            return mention
 
-        # Try fuzzy matching for common variations
-        for cached_key, mention in self._cache.items():
-            if mention.entity_type != entity_type:
-                continue
-            # Simple fuzzy: check if one contains the other
-            if normalized in cached_key or cached_key in normalized:
-                # Additional check: they should share significant tokens
-                norm_tokens = set(normalized.split())
-                cached_tokens = set(cached_key.split())
-                if norm_tokens & cached_tokens:
-                    return CanonicalMention(
-                        surface_form=surface_form,
-                        canonical_id=mention.canonical_id,
-                        canonical_name=mention.canonical_name,
-                        entity_type=entity_type,
-                        confidence=0.8
-                    )
+        if entity_type != "PERSON":
+            return None
 
-        return None
+        # A bare surname, and only a bare surname. "Burnham" reaches "Andy Burnham"
+        # because the corpus names exactly one person that way. "John Trump" does not
+        # reach anybody: dropping a token to find a match is what let a bare "Lee" land
+        # on whichever Lee happened to be cached first.
+        surname = normalized.partition(":")[2]
+        if " " in surname:
+            return None
+        owner = self._surnames.get(surname)
+        if owner is None:
+            return None
+        return replace(owner, surface_form=surface_form, confidence=0.8)
 
     async def get_or_create(self, surface_form: str, entity_type: str) -> CanonicalMention:
         """
         Resolve or create a canonical entity for a surface form.
-        Creates new canonical entity + aliases if not found.
+
+        A new entity gets one alias: the surface form that named it. Earlier revisions
+        also minted every bare word of a multi-word name, which is what put "house",
+        "news" and "google" into the alias table as organizations in their own right
+        (and "attacker" as a person); the only aliases minted now are the ones the
+        corpus attests plus the curated ALIAS_SEED.
         """
         # Try to resolve first
         resolved = self.resolve(surface_form, entity_type)
@@ -360,26 +468,6 @@ class EntityCanonicalizer:
         )
         self.session.add(alias)
 
-        # Generate and add common aliases
-        for alias_text in _generate_aliases(canonical_name, entity_type):
-            normalized_alias = _normalize_text(alias_text, entity_type)
-            if normalized_alias != _normalize_text(canonical_name, entity_type):
-                alias_obj = EntityAlias(
-                    canonical_entity_id=canonical_id,
-                    alias=alias_text,
-                    analyzer_version=CLUSTER_VERSION,
-                    input_hash=compute_input_hash(CLUSTER_VERSION, alias_text),
-                )
-                self.session.add(alias_obj)
-                # Add to cache
-                self._cache[normalized_alias] = CanonicalMention(
-                    surface_form=alias_text,
-                    canonical_id=str(canonical_id),
-                    canonical_name=canonical_name,
-                    entity_type=entity_type,
-                    confidence=0.9
-                )
-
         await self.session.flush()
 
         # A brand new GPE is a place the pipeline has never seen, so this is the
@@ -410,7 +498,27 @@ class EntityCanonicalizer:
         )
         self._cache[normalized] = mention
 
+        # A person named in this run is a surname target for the rest of the run, so a
+        # bare "Burnham" further down the same batch reaches "Andy Burnham" instead of
+        # waiting for the next run to notice. Claimed only while exactly one name ends
+        # with it, so the second person to share a surname retracts the claim instead
+        # of inheriting it.
+        if entity_type == "PERSON":
+            self._claim_surname(mention)
+
         return mention
+
+    def _claim_surname(self, mention: CanonicalMention) -> None:
+        """Add a freshly minted name to the surname index, unless it makes a surname ambiguous."""
+        tokens = _normalize_text(mention.canonical_name).split()
+        if len(tokens) < 2 or not all(token.isalpha() for token in tokens):
+            return
+        surname = tokens[-1]
+        claimed = self._surnames.get(surname)
+        if claimed is None:
+            self._surnames[surname] = mention
+        elif claimed.canonical_id != mention.canonical_id:
+            del self._surnames[surname]
 
 
 async def resolve_entities_to_canonical(
