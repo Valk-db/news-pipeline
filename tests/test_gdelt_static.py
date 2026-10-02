@@ -4,7 +4,6 @@ All fixtures are tiny hand written TSV rows in the real column layout, so the
 tests run offline and never touch the network.
 """
 
-import io
 import os
 import zipfile
 
