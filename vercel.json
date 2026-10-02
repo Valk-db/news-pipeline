@@ -1,1 +1,1 @@
-{"functions":{"api/index.py":{"maxDuration":60}},"rewrites":[{"destination":"/api/index","source":"/(.*)"}]}
+{"functions":{"api/index.py":{"maxDuration":60}},"rewrites":[{"destination":"/api/index","source":"/(.*)"}],"crons":[{"path":"/api/cron/checkpoint","schedule":"0 6 * * *"},{"path":"/api/cron/checkpoint/watchdog","schedule":"30 6 * * *"}]}

@@ -23,7 +23,7 @@ from sqlalchemy import Column, DateTime, Index, Integer, String, Text, desc, sel
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.transparency.checkpoint import SignedCheckpoint
+from src.transparency.checkpoint import FORMAT_JSON_V1, SignedCheckpoint
 from src.transparency.log import TransparencyBase, _utc
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,11 @@ class TransparencyCheckpoint(TransparencyBase):
     A permalink anchors its proof to the newest checkpoint covering the
     entry's index, so readers never need to trust the operator's current
     head -- only a checkpoint the operator signed and published.
+
+    checkpoint_format, key_name and previous_digest arrived with the v2 signer
+    (20261002200000). All three are nullable so the rows signed under v1 keep
+    loading and keep verifying byte-for-byte: a row with no format IS v1, which
+    is why to_signed() defaults the format rather than requiring the column.
     """
 
     __tablename__ = "transparency_checkpoints"
@@ -50,6 +55,10 @@ class TransparencyCheckpoint(TransparencyBase):
     signature = Column(Text, nullable=False)  # hex of the detached signature
     algorithm = Column(String(64), nullable=False)  # e.g. "ed25519", "hmac-sha256-dev"
     key_id = Column(String(128), nullable=False)
+    checkpoint_format = Column(String(32))  # "n1-json-v1" (v1) or "c2sp-tlog-checkpoint-v2"
+    key_name = Column(String(128))  # C2SP signed-note key name (v2 only)
+    previous_digest = Column(String(64))  # hex digest of the previous signed checkpoint
+    log_id = Column(String(128))  # which log this row covers, matching the note's origin
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     def to_signed(self) -> SignedCheckpoint:
@@ -62,20 +71,31 @@ class TransparencyCheckpoint(TransparencyBase):
                 "signature": self.signature,
                 "algorithm": self.algorithm,
                 "key_id": self.key_id,
+                # Absent on v1 rows: a row with no format value is v1, which is
+                # what Checkpoint.from_dict defaults to.
+                "format": self.checkpoint_format,
+                "key_name": self.key_name,
+                "previous_digest": self.previous_digest,
+                "origin": self.log_id,
             }
         )
 
 
 async def save_checkpoint(session: AsyncSession, signed: SignedCheckpoint) -> TransparencyCheckpoint:
     """Persist a signed checkpoint. Appends; never updates or deletes."""
+    checkpoint = signed.checkpoint
     row = TransparencyCheckpoint(
-        tree_size=signed.checkpoint.tree_size,
-        merkle_root=signed.checkpoint.merkle_root.hex(),
-        chain_hash=signed.checkpoint.chain_hash.hex(),
-        timestamp=signed.checkpoint.timestamp,
+        tree_size=checkpoint.tree_size,
+        merkle_root=checkpoint.merkle_root.hex(),
+        chain_hash=checkpoint.chain_hash.hex(),
+        timestamp=checkpoint.timestamp,
         signature=signed.signature.hex(),
         algorithm=signed.algorithm,
         key_id=signed.key_id,
+        checkpoint_format=checkpoint.format,
+        key_name=signed.key_name,
+        previous_digest=checkpoint.previous_digest.hex() if checkpoint.previous_digest else None,
+        log_id=checkpoint.origin if checkpoint.format != FORMAT_JSON_V1 else None,
     )
     session.add(row)
     await session.flush()
@@ -105,6 +125,6 @@ async def checkpoints_covering(session: AsyncSession, index: int) -> list[Signed
     rows = await session.execute(
         select(TransparencyCheckpoint)
         .where(TransparencyCheckpoint.tree_size > index)
-        .order_by(desc(TransparencyCheckpoint.tree_size))
+        .order_by(desc(TransparencyCheckpoint.tree_size), desc(TransparencyCheckpoint.created_at))
     )
     return [row.to_signed() for row in rows.scalars().all()]
