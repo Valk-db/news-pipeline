@@ -34,8 +34,8 @@ WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 STAMPING_COMMAND_RE = re.compile(
     r"src\.ingestion\.run[^\n#]*?--sources[= ]+[\"']?([A-Za-z0-9_,]+)",
 )
-SCHEDULE_RE = re.compile(r"schedule:\s*\n\s*-\s*(?:cron:\s*)?[\"']?([^\"'\n#]+)", re.MULTILINE)
-ANY_SCHEDULE_RE = re.compile(r"^\s*schedule:\s*$", re.MULTILINE)
+SCHEDULE_RE = re.compile(r"^\s*schedule:\s*$", re.MULTILINE)
+CRON_ITEM_RE = re.compile(r"^\s*-\s*(?:cron:\s*)?['\"]?([^'\"#]+?)['\"]?\s*$")
 
 
 def _workflow_files() -> list[Path]:
@@ -80,18 +80,32 @@ def _checkpoint_cron_minutes() -> list[int]:
     return _cron_windows(checkpoint[0])
 
 
+def _declared_crons(text: str) -> list[str]:
+    """Every cron spec under the workflow's `schedule:` block, comments skipped."""
+    crons: list[str] = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not SCHEDULE_RE.match(line):
+            continue
+        for candidate in lines[index + 1 :]:
+            match = CRON_ITEM_RE.match(candidate)
+            if match:
+                crons.append(match.group(1))
+    return crons
+
+
 def _stamping_workflows() -> list[tuple[Path, str, str]]:
     """(path, raw command fragment, cron spec) for every scheduled stamping run."""
     found = []
     for path in _workflow_files():
         text = _workflow_text(path)
-        if not ANY_SCHEDULE_RE.search(text):
+        if not SCHEDULE_RE.search(text):
             continue
         for match in STAMPING_COMMAND_RE.finditer(text):
             if "rss_evidence" in match.group(1).split(","):
-                crons = SCHEDULE_RE.findall(text)
+                crons = _declared_crons(text)
                 assert crons, f"{path.name} stamps on a schedule it does not declare"
-                found.append((path, match.group(0).strip(), crons[0].strip()))
+                found.append((path, match.group(0).strip(), crons[0]))
     return found
 
 
@@ -139,6 +153,6 @@ def test_every_scheduled_workflow_declares_a_bounded_timeout():
     the concurrency group.
     """
     for path in _workflow_files():
-        if not ANY_SCHEDULE_RE.search(_workflow_text(path)):
+        if not SCHEDULE_RE.search(_workflow_text(path)):
             continue
         assert "timeout-minutes:" in _workflow_text(path), f"{path.name} has no timeout-minutes"
