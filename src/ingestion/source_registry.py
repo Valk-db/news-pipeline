@@ -811,6 +811,18 @@ TIER3_SOURCES = {
         bias_rating="mixed",
         owner_group="Bluesky Social",
         fetch_priority=1,
+        # Disabled 2026-10-02: no ingestion adapter exists for this domain and
+        # the only code that talks to it (enrichment/social_snippets.py
+        # BlueskyFinder) needs BLUESKY_HANDLE + BLUESKY_PASSWORD, i.e. a real
+        # account. Listing it enabled made the registry claim coverage the
+        # pipeline does not have; being disabled is the honest state until an
+        # account-free adapter exists.
+        enabled=False,
+        notes=(
+            "No adapter. The only Bluesky code path requires an account "
+            "(BLUESKY_HANDLE/BLUESKY_PASSWORD), so it is enrichment-only and "
+            "was never an article source."
+        ),
     ),
 }
 
@@ -828,6 +840,17 @@ TIER4_SOURCES = {
         bias_rating="mixed",
         owner_group="Substack Inc",
         fetch_priority=1,
+        # Disabled 2026-10-02: no adapter, no feed list, and no account-free
+        # index. Substack has no cross-publisher feed directory, so a feed can
+        # only be added one newsletter at a time, and the only public way to
+        # enumerate them is a logged-in session. Enabled with an empty
+        # rss_urls this entry was indistinguishable from a working source.
+        enabled=False,
+        notes=(
+            "No adapter and no feed index: Substack publishes per-newsletter "
+            "RSS only, with no public all-publisher feed and no account-free "
+            "enumeration. Add specific newsletter feeds here to re-enable."
+        ),
     ),
 }
 

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
 from src.utils.ner import extract_entities_top_n
 from src.utils.ingest_stats import STATS
+from src.ingestion.feed_health import active as active_feed_health, record_poll
 from src.schema.models import RawArticle
 from src.shared.config import get_settings
 import asyncio
@@ -33,6 +34,19 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
     max_retries = settings.rss_max_retries
     retry_delay = settings.rss_retry_delay
 
+    # Every terminal exit below records what this poll saw, so a feed that keeps
+    # returning nothing is reported dead after DEAD_AFTER_EMPTY_POLLS runs
+    # instead of vanishing quietly. The detail is the same stat key the health
+    # report already exposes, so the dead report says *why*, not just *that*.
+    def _record(entries: int, detail: str) -> None:
+        record_poll(
+            active_feed_health(),
+            feed_url,
+            entries,
+            source_key=source_key,
+            detail=detail,
+        )
+
     for attempt in range(max_retries):
         try:
             response = await client.get(feed_url, timeout=timeout, follow_redirects=True)
@@ -51,12 +65,23 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
                     bozo,
                 )
                 STATS.record(source_key, "feed_failed:not_a_feed")
+                _record(0, "not_a_feed")
                 return None
             STATS.record(source_key, "feed_ok")
             if bozo:
                 # Recognized feed (or entries) but malformed XML; still usable,
                 # recorded separately so tier-1 health can see the wobble.
                 STATS.record(source_key, "feed_bozo")
+            # entries, not articles: a feed yielding 50 entries whose pages all
+            # 403 is a healthy feed that ingests nothing, and only the entries
+            # count can tell those two situations apart.
+            if not entries:
+                # A well-formed feed with nothing in it: the fetch worked, there
+                # is simply nothing to report, and the health report should say
+                # that rather than call it a failure.
+                _record(0, "0_entries")
+            else:
+                _record(len(entries), "ok_bozo" if bozo else "ok")
             return feed
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
@@ -78,6 +103,7 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
             else:
                 logger.error("Failed to fetch %s after %d attempt(s): %s", feed_url, attempt + 1, e)
                 STATS.record(source_key, f"feed_failed:http_{status}")
+                _record(0, f"http_{status}")
                 return None
         except httpx.TimeoutException:
             if attempt < max_retries - 1:
@@ -86,6 +112,7 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
             else:
                 logger.error("Timeout fetching %s after %d attempts", feed_url, max_retries)
                 STATS.record(source_key, "feed_failed:timeout")
+                _record(0, "timeout")
                 return None
         except Exception as e:
             # Network errors (connection refused, DNS, etc.) retry
@@ -95,6 +122,7 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
             else:
                 logger.error("Failed to fetch %s after %d attempts: %s", feed_url, max_retries, e)
                 STATS.record(source_key, f"feed_failed:error_{type(e).__name__}")
+                _record(0, f"error_{type(e).__name__}")
                 return None
 
 

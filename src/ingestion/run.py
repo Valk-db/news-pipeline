@@ -34,6 +34,12 @@ from src.shared.database import get_session
 from src.schema.models import RawArticle, StatusLog
 from src.shared.config import get_settings
 from src.utils.ingest_stats import STATS
+from src.ingestion.feed_health import (
+    DEAD_AFTER_EMPTY_POLLS,
+    load_active,
+    report_dead_feeds,
+    save_active,
+)
 import json
 
 
@@ -308,6 +314,9 @@ async def run_ingestion(
     """
     settings = get_settings()
     STATS.reset()
+    # Load the cross-run feed health so the empty-streak counters survive restarts,
+    # and so a feed that died yesterday is still reported dead today.
+    feed_health = load_active()
     results = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "phases": {},
@@ -498,6 +507,33 @@ async def run_ingestion(
         # Add extraction stats to ingestion results
         stats_snapshot = STATS.snapshot()
 
+        # Persist what this run saw before anything can return early, and state
+        # the dead feeds out loud: a feed that yielded nothing three runs running
+        # is a coverage hole, and the only way it stays invisible is if nobody
+        # says it. The counters count entries fetched, not articles stored, so a
+        # feed whose article pages all 403 does not look healthy.
+        feed_health_saved = save_active()
+        dead_feeds = report_dead_feeds(feed_health)
+        for dead in dead_feeds:
+            logger.warning(
+                "Feed DEAD (no entries in %d consecutive polls): %s (%s)",
+                dead["consecutive_empty"], dead["url"], dead["last_detail"],
+            )
+        if dead_feeds:
+            print(
+                f"  Feed health: {len(dead_feeds)} DEAD feed(s) "
+                f"(no entries in {DEAD_AFTER_EMPTY_POLLS}+ consecutive polls) - "
+                f"see `python scripts/report_feed_health.py`"
+            )
+            for dead in dead_feeds:
+                print(
+                    f"    DEAD {dead['url']} "
+                    f"[{dead['source_key']}] last: {dead['last_detail']} "
+                    f"(empty {dead['consecutive_empty']}x, {dead['polls']} polls total)"
+                )
+        else:
+            print("  Feed health: no dead feeds")
+
         results["phases"]["ingestion"] = {
             "rss": rss_tier1_count + rss_tier2_count,
             "gdelt": gdelt_count,
@@ -517,6 +553,15 @@ async def run_ingestion(
             },
             "tier1_critical_down": tier1_critical_down,
             "extraction_stats": stats_snapshot,
+            "feed_health": {
+                "state_saved": feed_health_saved,
+                "dead_feeds": dead_feeds,
+                "empty_feeds": [
+                    {"url": f.url, "source_key": f.source_key,
+                     "consecutive_empty": f.consecutive_empty, "last_detail": f.last_detail}
+                    for f in sorted(feed_health.empty(), key=lambda x: x.url)
+                ],
+            },
             "adapter_health": {
                 name: {
                     "status": health.status,
