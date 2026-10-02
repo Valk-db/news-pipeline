@@ -160,6 +160,12 @@ class TestGroqSuccess:
         assert "never translate what a name means" in prompt
         assert "never summarize" in prompt
         assert "only the translation" in prompt
+        # The worked example is load-bearing, measured live on 2026-10-02: with the
+        # rules but no example, gpt-oss still rendered the Pezeshkian headline as
+        # "protest against physicians" and the Finnish one as "Risk:" -- MyMemory's
+        # own mangling. Rules plus this example kept both names.
+        assert "masoud peze" in prompt
+        assert "not \"masoud the physician\"" in prompt
 
     def test_spends_one_request_of_the_daily_budget(self, groq):
         """Counted in the pipeline's table, not in an int in a process."""

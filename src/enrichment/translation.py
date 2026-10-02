@@ -91,7 +91,10 @@ _TRANSLATION_RULES = (
     "- Proper nouns (people, places, organizations) must stay recognizable: keep the\n"
     "  original spelling or its standard English transliteration (for example\n"
     "  \"Pezeshkian\"), and never translate what a name means.\n"
-    "- Keep numbers, dates, units and titles as written.\n"
+    "- A word that could be a person's name is a name, even when it also spells an\n"
+    "  ordinary word and even when the language adds a case ending to it.\n"
+    "  «مسعود پزشکیان» is \"Masoud Pezeshkian\", not \"Masoud the physician\".\n"
+    "- Keep numbers, dates, units, months and titles as written.\n"
 )
 
 class TranslationUnavailable(Exception):
