@@ -1,13 +1,18 @@
 """Topic group assignment for stories.
 
-V1 uses keyword/entity matching against story.primary_entities.
+V1 uses keyword/entity matching against story.primary_entities. The stored
+primary_entities are canonical entity UUID strings, so they are resolved to
+their CanonicalEntity.canonical_name display names before matching --
+matching keywords against raw UUIDs scores 0 on every keyword.
 Future: upgrade to LLM-classified or claim-informed assignment.
 """
 
+import json
 import logging
+import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.schema.models import Story, TopicGroup, StoryTopicGroup
+from src.schema.models import Story, TopicGroup, StoryTopicGroup, CanonicalEntity
 from src.shared.analyzer_versions import TOPIC_VERSION, compute_input_hash
 
 logger = logging.getLogger(__name__)
@@ -33,7 +38,14 @@ FALLBACK_GROUP = "Geopolitics"
 
 
 def _match_topic_groups(entities: list[str]) -> list[tuple[str, int]]:
-    """Match story entities to topic groups, returning list of (group_name, confidence)."""
+    """Match story entity surface names to topic groups, returning list of
+    (group_name, confidence).
+
+    The entities MUST be display names (CanonicalEntity.canonical_name), not
+    canonical entity UUID strings -- a UUID contains no English keyword, so
+    passing raw primary_entities here scores 0 on every keyword and returns
+    the fallback unconditionally. Use _resolve_entity_names() first.
+    """
     if not entities:
         return [(FALLBACK_GROUP, 10)]  # Low confidence fallback
 
@@ -60,6 +72,44 @@ def _match_topic_groups(entities: list[str]) -> list[tuple[str, int]]:
     return matches
 
 
+async def _resolve_entity_names(
+    session: AsyncSession, entities: list[str]
+) -> list[str]:
+    """Resolve story.primary_entities to surface names for keyword matching.
+
+    primary_entities stores canonical entity UUID strings (see
+    stories.create_story_from_units). Each UUID is looked up in
+    canonical_entities and replaced by its canonical_name; entries that are
+    not UUIDs (legacy surface-form data) pass through unchanged; UUIDs with
+    no canonical row are dropped (they cannot match a keyword anyway).
+    Non-list payloads (observed: a dict on some dev rows) are treated as
+    empty rather than iterated.
+    """
+    if isinstance(entities, str):
+        try:
+            entities = json.loads(entities)
+        except (ValueError, TypeError):
+            entities = []
+    if not isinstance(entities, (list, tuple)):
+        return []
+
+    canonical_ids: list[uuid.UUID] = []
+    passthrough: list[str] = []
+    for e in entities:
+        try:
+            canonical_ids.append(uuid.UUID(str(e)))
+        except (ValueError, AttributeError, TypeError):
+            passthrough.append(str(e))
+
+    names = list(passthrough)
+    if canonical_ids:
+        stmt = select(CanonicalEntity.canonical_name).where(
+            CanonicalEntity.id.in_(canonical_ids)
+        )
+        names.extend((await session.execute(stmt)).scalars().all())
+    return names
+
+
 async def assign_story_topic_groups(session: AsyncSession, story_id) -> list[dict]:
     """Assign topic groups to a story based on its primary_entities.
 
@@ -72,7 +122,10 @@ async def assign_story_topic_groups(session: AsyncSession, story_id) -> list[dic
     if not story:
         return [{"story_id": str(story_id), "error": "Story not found"}]
 
-    entities = list(story.primary_entities or [])
+    # primary_entities holds canonical UUID strings -- resolve to display
+    # names before keyword matching, or every keyword scores 0 and every
+    # story falls back to Geopolitics.
+    entities = await _resolve_entity_names(session, story.primary_entities)
     matches = _match_topic_groups(entities)
 
     for group_name, confidence in matches:

@@ -35,7 +35,7 @@ async def cleanup_stale_stories(
 
     PENDING: story waiting for curator action - expire after 5 days (curator didn't act)
     BLOCKED: story failed tier-1 gate - expire after 7 days (unlikely to get new coverage)
-    QUEUED: story passed gate but not approved - OPT-IN only (default disabled, 0 = never expire)
+    QUEUED: curator-approved story ready to post - OPT-IN only (default disabled, 0 = never expire)
     POSTED/REJECTED: never expired (curator explicitly acted)
     """
     result = CleanupResult()
