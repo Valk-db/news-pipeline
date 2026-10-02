@@ -52,12 +52,14 @@ scripts/
 # Source code not needed for UI
 src/ingestion/
 src/utils/
-src/verification/
+src/verification/*
 src/celery/
 src/worker/
-# Keep src/shared and src/schema for UI imports
+# Keep src/shared, src/schema and the UI-imported verification module
 !src/shared/
 !src/schema/
+!src/verification/__init__.py
+!src/verification/event_identity.py
 
 # Node (if any)
 node_modules/

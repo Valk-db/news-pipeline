@@ -66,7 +66,12 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 
 from src.schema.models import Event, Story
-from src.utils.ner import canonical_surface
+
+
+# NOTE: src.utils.ner is intentionally NOT imported at module level.
+# src/utils/ is excluded from the Vercel serverless bundle (spacy), so a
+# top-level import here would crash the UI deploy. canonical_surface is
+# imported lazily inside _event_keys() instead.
 
 # Measured on the dev corpus, not guessed: duplicates at 0.0 km, nearest non-duplicate
 # 194.6 km. See the module docstring.
@@ -187,6 +192,9 @@ def event_entity_keys(event: Event, story_entities=None) -> FrozenSet[str]:
     if keys:
         return keys
     if event.location_name:
+        # Lazy: src.utils/ is excluded from the serverless bundle.
+        from src.utils.ner import canonical_surface
+
         return frozenset({canonical_surface(event.location_name, "GPE")})
     return frozenset()
 
