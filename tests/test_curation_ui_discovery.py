@@ -116,6 +116,11 @@ def _card_ids(html):
     return re.findall(r'data-story-id="([0-9a-f-]+)"', html)
 
 
+def _cards(html):
+    """One entry per rendered card, in order."""
+    return re.findall(r'<article class="story-card".*?</article>', html, re.S)
+
+
 class TestToolbar:
     @pytest.mark.asyncio
     async def test_toolbar_renders_with_query_state(self, app_with_db, db_session):
@@ -304,6 +309,7 @@ class TestTopicSearch:
 class TestVerificationBadge:
     @pytest.mark.asyncio
     async def test_card_states_corroboration(self, app_with_db, db_session):
+        """The card says in words whether the story is corroborated, and by how many."""
         now = datetime.now(timezone.utc)
         corroborated = _make_pending_story(db_session, headline="Corroborated summit report",
                                            tier_counts=(3, 1, 0, 0), owners=4, created_at=now)
@@ -312,105 +318,96 @@ class TestVerificationBadge:
         await db_session.commit()
 
         html = TestClient(app_with_db).get("/", auth=AUTH).text
-        cards = re.findall(r'<div class="story-card".*?</div>\s*(?=<div class="story-card"|</div>)',
-                           html, re.S)
+        cards = _cards(html)
         assert len(cards) == 2
 
         good_card = next(c for c in cards if str(corroborated.id) in c)
-        assert "verify-badge is-corroborated" in good_card
+        assert "story-corroboration is-corroborated" in good_card
         assert "Corroborated" in good_card
-        assert "T1:3 T2:1 T3:0 T4:0" in good_card  # tier mix in the tooltip
+        # Named tiers with counts, not a tooltip string of bare digits.
+        assert "Tier 1" in good_card
+        assert "3 outlets" in good_card
+        assert "Tier 2" in good_card
+        assert "1 outlet" in good_card
+        assert "T1:3" not in good_card
 
         thin_card = next(c for c in cards if str(singleton.id) in c)
         assert "is-corroborated" not in thin_card
-        assert "verify-badge" in thin_card
+        assert "story-corroboration" in thin_card
         assert "unconfirmed" in thin_card.lower()
 
     @pytest.mark.asyncio
-    async def test_badge_sits_next_to_the_status_badge(self, app_with_db, db_session):
-        """Dominance is a placement requirement, not only a color one: the badge
-        belongs in the card header row, before the day and gate text."""
+    async def test_card_reads_top_down_headline_first(self, app_with_db, db_session):
+        """Dominance is a placement requirement, not only a colour one: the headline
+        comes first, then the tier chips that say what makes it trustworthy, then
+        the source list, then the small print."""
         _make_pending_story(db_session, headline="Placement check",
                             tier_counts=(2, 0, 0, 0), owners=2)
         await db_session.commit()
 
         html = TestClient(app_with_db).get("/", auth=AUTH).text
-        header = re.search(r'<div class="story-header">(.*?)</div>', html, re.S).group(1)
-        status_at = header.index("badge-warning")
-        verify_at = header.index("verify-badge")
-        gate_at = header.index("story-gate")
-        assert status_at < verify_at < gate_at
+        card = _cards(html)[0]
+        assert (card.index("story-headline")
+                < card.index("story-tiers")
+                < card.index("story-corroboration")
+                < card.index("story-sources")
+                < card.index("story-card-footer"))
 
 
-class TestFiltersSurviveMutations:
+class TestFiltersSurviveNavigation:
+    """The card carries the active filters onto the detail view, and the detail
+    view carries them back, so a filtered queue survives the round trip. The
+    mutations that used to be tested here are gone with the approve and reject
+    flows."""
+
     @pytest.mark.asyncio
-    async def test_card_buttons_carry_the_active_filters(self, app_with_db, db_session):
-        _make_pending_story(db_session, headline="Harbor bridge reopens to traffic",
-                            tier_counts=(2, 0, 0, 0), owners=2)
+    async def test_card_detail_link_carries_the_active_filters(self, app_with_db, db_session):
+        story = _make_pending_story(db_session, headline="Harbor bridge reopens to traffic",
+                                    tier_counts=(2, 0, 0, 0), owners=2)
         await db_session.commit()
 
         html = TestClient(app_with_db).get("/?tiers=1,2&sort=oldest&hours=168&q=bridge",
                                            auth=AUTH).text
         # The ampersands are HTML-escaped in the attribute, which the browser
-        # unescapes before htmx issues the request.
-        assert "?tiers=1%2C2&amp;sort=oldest&amp;hours=168&amp;q=bridge" in html
-        assert 'hx-post="/story/' in html
-        assert "/approve?" in html
-        assert "/reject?" in html
+        # unescapes before it issues the request.
+        expected = "?tiers=1%2C2&amp;sort=oldest&amp;hours=168&amp;q=bridge"
+        assert f'href="/story/{story.id}{expected}"' in html
 
     @pytest.mark.asyncio
     async def test_unfiltered_cards_carry_no_query_string(self, app_with_db, db_session):
-        _make_pending_story(db_session, headline="No filters here",
-                            tier_counts=(2, 0, 0, 0), owners=2)
+        story = _make_pending_story(db_session, headline="No filters here",
+                                    tier_counts=(2, 0, 0, 0), owners=2)
         await db_session.commit()
 
         html = TestClient(app_with_db).get("/", auth=AUTH).text
-        assert "/approve\"" in html
-        assert "/reject\"" in html
+        assert f'href="/story/{story.id}"' in html
 
     @pytest.mark.asyncio
-    async def test_reject_re_renders_inside_the_filters(self, app_with_db, db_session, csrf_headers):
+    async def test_detail_view_links_back_into_the_filters(self, app_with_db, db_session):
+        story = _make_pending_story(db_session, headline="Keep the queue filtered",
+                                    tier_counts=(2, 0, 0, 0), owners=2)
+        await db_session.commit()
+
+        html = TestClient(app_with_db).get(
+            f"/story/{story.id}?tiers=1%2C2&sort=oldest", auth=AUTH
+        ).text
+        back = "?tiers=1%2C2&amp;sort=oldest"
+        assert f'href="/{back}"' in html
+
+    @pytest.mark.asyncio
+    async def test_detail_view_of_a_hidden_story_is_still_reachable_directly(self, app_with_db, db_session):
+        """Direct navigation is not filtered; only the queue listing is. A curator
+        following a link to a story must not get a 404 because a chip is off."""
         now = datetime.now(timezone.utc)
-        target = _make_pending_story(db_session, headline="Reject me, filtered queue",
-                                     tier_counts=(2, 0, 0, 0), owners=2, created_at=now)
-        hidden = _make_pending_story(db_session, headline="Only tier three, stays hidden",
+        target = _make_pending_story(db_session, headline="Tier three only",
                                      tier_counts=(0, 0, 3, 0), owners=3, created_at=now)
         await db_session.commit()
 
         client = TestClient(app_with_db)
-        response = client.post(
-            f"/story/{target.id}/reject?tiers=1,2&sort=oldest",
-            auth=AUTH,
-            headers=csrf_headers,
-        )
+        assert _card_ids(client.get("/?tiers=1,2", auth=AUTH).text) == []
+        response = client.get(f"/story/{target.id}?tiers=1%2C2", auth=AUTH)
         assert response.status_code == 200
-        # The grid came back filtered, so the tier-3-only story never appears
-        # even though it is still pending.
-        assert _card_ids(response.text) == []
-        assert str(hidden.id) not in response.text
-
-    @pytest.mark.asyncio
-    async def test_approve_re_renders_inside_the_filters(self, app_with_db, db_session, csrf_headers):
-        now = datetime.now(timezone.utc)
-        target = _make_pending_story(db_session, headline="Approve me, filtered queue",
-                                     tier_counts=(2, 0, 0, 0), owners=2, created_at=now)
-        other = _make_pending_story(db_session, headline="Still pending after the approval",
-                                   tier_counts=(2, 1, 0, 0), owners=3, created_at=now)
-        tier3_only = _make_pending_story(db_session, headline="Tier three only, stays hidden",
-                                         tier_counts=(0, 0, 2, 0), owners=2, created_at=now)
-        await db_session.commit()
-
-        client = TestClient(app_with_db)
-        response = client.post(
-            f"/story/{target.id}/approve?tiers=1,2&q=approval",
-            auth=AUTH,
-            headers=csrf_headers,
-        )
-        assert response.status_code == 200
-        assert _card_ids(response.text) == [str(other.id)]
-        assert str(tier3_only.id) not in response.text
-        # The filters themselves are still on, so the next click keeps them.
-        assert "/approve?tiers=1%2C2&amp;q=approval" in response.text
+        assert "Tier three only" in response.text
 
 
 class TestEmptyState:
@@ -421,7 +418,8 @@ class TestEmptyState:
         client = TestClient(app_with_db)
 
         unfiltered = client.get("/", auth=AUTH).text
-        assert "No pending stories. Run the ingestion pipeline" in unfiltered
+        assert "No stories are waiting." in unfiltered
+        assert "Run the ingestion pipeline" in unfiltered
         assert "match these filters" not in unfiltered
 
     @pytest.mark.asyncio

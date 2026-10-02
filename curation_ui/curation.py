@@ -31,6 +31,7 @@ from curation_ui.discovery import (
 )
 from curation_ui.security import require_auth
 from src.schema.models import (
+    CanonicalEntity,
     Claim,
     ClaimEvidence,
     EdgePredicate,
@@ -399,7 +400,7 @@ async def _render_stories_grid(
     media_result = await session.execute(
         select(MediaAsset)
         .where(MediaAsset.story_id.in_(story_ids))
-        .order_by(MediaAsset.media_type, desc(MediaAsset.created_at))
+        .order_by(MediaAsset.media_type, desc(MediaAsset.created_at), MediaAsset.id)
     )
     media_by_story: dict[str, list] = {}
     for media in media_result.scalars().all():
@@ -643,7 +644,7 @@ async def _story_detail_bundle(session: AsyncSession, story: Story) -> dict:
     media_result = await session.execute(
         select(MediaAsset)
         .where(MediaAsset.story_id == story_id)
-        .order_by(desc(MediaAsset.created_at))
+        .order_by(desc(MediaAsset.created_at), MediaAsset.id)
     )
     media = _lead_media(list(media_result.scalars().all()))
 
@@ -675,7 +676,37 @@ async def _story_detail_bundle(session: AsyncSession, story: Story) -> dict:
         "narrative_arcs": narrative_arcs,
         "snippets": snippets,
         "reliability_by_domain": reliability_by_domain,
+        "primary_entity_names": await _primary_entity_names(session, story),
     }
+
+
+async def _primary_entity_names(session: AsyncSession, story: Story) -> list[str]:
+    """The story's primary entities as names, never as canonical ids.
+
+    `Story.primary_entities` is a JSON array of canonical entity UUIDs (see
+    `src/verification/stories.py`). A raw uuid in the markup is exactly the debug
+    spew this page was rebuilt to remove, and the curation card has a standing
+    regression test asserting entity ids never reach it, so the detail view
+    resolves them the same way `src/verification/topics.py` does and drops the
+    ones with no canonical row.
+    """
+    raw = story.primary_entities or []
+    if isinstance(raw, dict):  # observed on some dev rows; treat as empty
+        return []
+    ids: list[uuid.UUID] = []
+    names: list[str] = []
+    for entry in raw:
+        try:
+            ids.append(uuid.UUID(str(entry)))
+        except (AttributeError, TypeError, ValueError):
+            # Legacy surface-form data passes straight through.
+            names.append(str(entry))
+    if not ids:
+        return names
+    result = await session.execute(
+        select(CanonicalEntity.canonical_name).where(CanonicalEntity.id.in_(ids))
+    )
+    return names + list(result.scalars().all())
 
 
 async def _story_source_articles(session: AsyncSession, story_id: uuid.UUID):

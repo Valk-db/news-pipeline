@@ -767,3 +767,45 @@ body.is-detail-page {
     margin-left: 0;
   }
 }
+/* Media gathered from the sources. One item per media type, deduplicated by
+   _lead_media in curation.py, so this is a short strip and not a gallery. */
+.detail-media-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.detail-media-item a {
+  display: block;
+  border: 1px solid var(--border, #d8d5cf);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  text-decoration: none;
+  color: inherit;
+  min-width: 8rem;
+}
+
+.detail-media-item img {
+  display: block;
+  width: 100%;
+  max-width: 12rem;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 6px;
+  margin-bottom: 0.4rem;
+}
+
+.detail-media-type {
+  display: block;
+  font-size: 0.8rem;
+  text-transform: capitalize;
+  color: var(--text-dim, #6b675f);
+}
+
+.detail-media-link {
+  font-size: 0.85rem;
+  text-decoration: underline;
+}

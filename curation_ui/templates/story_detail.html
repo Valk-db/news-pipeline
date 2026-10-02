@@ -170,6 +170,29 @@
                 {% endif %}
             </section>
 
+            {# ---------- 3b. Media from the sources ----------
+                 The card gets one lead image. Everything else the sources
+                 published belongs here, or nowhere: this is the page somebody
+                 opens on purpose. #}
+            {% if media %}
+                <section class="detail-section" aria-labelledby="detail-media">
+                    <h2 class="detail-heading" id="detail-media">Media</h2>
+                    <ul class="detail-media-list">
+                        {% for asset in media %}
+                            <li class="detail-media-item">
+                                <a href="{{ asset.url | is_safe_url }}" target="_blank" rel="noopener noreferrer">
+                                    {%- if asset.thumbnail_url %}
+                                        <img src="{{ asset.thumbnail_url | is_safe_url }}" alt="" loading="lazy" decoding="async">
+                                    {%- endif %}
+                                    <span class="detail-media-type">{{ asset.media_type }}</span>
+                                    <span class="detail-media-link">open &#8599;</span>
+                                </a>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </section>
+            {% endif %}
+
             {# ---------- 4. The diagnostics, behind a disclosure ----------
                  The key=value internals are still here, still rendered from the
                  same data the card used to print inline, but a reader has to
@@ -212,10 +235,10 @@
                                 <dt>Created</dt>
                                 <dd><code>{{ story.created_at.isoformat() if story.created_at else 'unknown' }}</code></dd>
                             </div>
-                            {% if story.primary_entities %}
+                            {% if primary_entity_names %}
                                 <div class="detail-kv-row">
                                     <dt>Primary entities</dt>
-                                    <dd>{% for kind, names in story.primary_entities.items() %}{{ kind }}: {{ names | join(', ') }}<br>{% endfor %}</dd>
+                                    <dd>{{ primary_entity_names | join(', ') }}</dd>
                                 </div>
                             {% endif %}
                         </dl>

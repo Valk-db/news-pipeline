@@ -135,7 +135,7 @@ class TestIsCacheableMapRead:
         assert not is_cacheable_map_read("/api/secret", "GET")
 
     def test_authenticated_paths_are_not(self):
-        for path in ("/posts", "/healthz/details", "/api/stories/{story_id}/sources"):
+        for path in ("/story/{story_id}", "/healthz/details", "/api/stories/{story_id}/sources"):
             assert not is_cacheable_map_read(path, "GET")
 
 
@@ -284,7 +284,7 @@ class TestEndToEndThroughTheRealApp:
     def test_authenticated_route_sends_no_public_cache_control(self, client):
         """401 is the unauthenticated answer here, which is the safe one; the
         assertion that matters is that nothing public is attached to it."""
-        response = client.get("/posts")
+        response = client.get("/story/00000000-0000-0000-0000-000000000000")
         assert response.status_code == 401
         assert "public" not in response.headers.get("Cache-Control", "")
 
