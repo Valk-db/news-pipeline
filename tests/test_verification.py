@@ -3,11 +3,16 @@
 import pytest
 import pytest_asyncio
 from datetime import datetime, timezone
+import json
+import os
+import subprocess
+import sys
 import uuid
+from pathlib import Path
 from sqlalchemy import select, text
 
 from src.verification.units import get_owner_group, build_reporting_units
-from src.verification.stories import build_stories
+from src.verification.stories import build_stories, MAX_PRIMARY_ENTITIES
 from src.verification.tiers import apply_tier1_gate, evaluate_tier1_gate
 from src.shared.database import get_session
 from src.schema.models import (
@@ -350,3 +355,155 @@ async def test_cross_run_story_attachment(db_session):
         select(StoryUnitLink).where(StoryUnitLink.story_id == blocked_story_id)
     )
     assert len(result.scalars().all()) == 2
+
+
+# Story.primary_entities truncation must be deterministic across processes, not just within
+# one. Set iteration order follows PYTHONHASHSEED, so a set truncated with [:10] keeps a
+# different 10 in every process: entities churn between runs and entities stored by an
+# earlier run get evicted. PYTHONHASHSEED is fixed at interpreter start, so no in-process
+# test can detect this. These tests run the real truncate sites in subprocesses started
+# under different seeds and require identical output.
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Runs the real src.verification.stories call sites against an in-process fake session.
+# The fake is enough because the truncation happens before any SQL: create_story_from_units
+# sets primary_entities in the Story constructor, _update_story_entities sets it on the
+# loaded row, and both only need add/flush/commit plus one execute returning a row.
+SEED_PROBE = """
+import asyncio
+import json
+import sys
+import uuid
+from datetime import datetime, timezone
+
+from src.schema.models import Story
+from src.verification.stories import (
+    MAX_PRIMARY_ENTITIES,
+    _update_story_entities,
+    create_story_from_units,
+)
+
+
+class _Result:
+    def __init__(self, row):
+        self._row = row
+
+    def scalar_one_or_none(self):
+        return self._row
+
+
+class _FakeSession:
+    def __init__(self, row=None):
+        self.row = row
+        self.added = []
+
+    async def execute(self, stmt):
+        return _Result(self.row)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def flush(self):
+        pass
+
+    async def commit(self):
+        pass
+
+
+class _Unit:
+    def __init__(self, seed):
+        self.id = uuid.UUID(int=seed)
+
+
+def _ids(n, offset=0):
+    return {str(uuid.UUID(int=offset + i)) for i in range(1, n + 1)}
+
+
+async def main():
+    created_ids = _ids(25)
+    incoming_ids = _ids(25, offset=1000)
+
+    create_session = _FakeSession()
+    unit = _Unit(7)
+    story = await create_story_from_units(
+        create_session,
+        datetime.now(timezone.utc),
+        [unit],
+        {unit.id: created_ids},
+        combined_entities=created_ids,
+    )
+    created = list(story.primary_entities)
+
+    row = Story(id=uuid.UUID(int=99), day=datetime.now(timezone.utc))
+    row.primary_entities = sorted(created_ids)[:MAX_PRIMARY_ENTITIES]
+    merge_session = _FakeSession(row)
+    await _update_story_entities(merge_session, row.id, incoming_ids)
+    merged = list(row.primary_entities)
+
+    json.dump(
+        {
+            "created": created,
+            "merged": merged,
+            "created_expected": sorted(created_ids)[:MAX_PRIMARY_ENTITIES],
+            "merged_expected": sorted(created_ids | incoming_ids)[:MAX_PRIMARY_ENTITIES],
+        },
+        sys.stdout,
+    )
+
+
+asyncio.run(main())
+"""
+
+# 0 disables randomization; the other two are independent random seeds.
+HASH_SEEDS = ["0", "1", "424242"]
+
+
+def _probe_truncation(seed: str) -> dict:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONHASHSEED": seed,
+        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", SEED_PROBE],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert proc.returncode == 0, f"seed {seed} probe failed:\n{proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+@pytest.fixture(scope="session")
+def hash_seed_probes() -> dict[str, dict]:
+    """Probe results keyed by hash seed, computed once: each import costs seconds."""
+    return {seed: _probe_truncation(seed) for seed in HASH_SEEDS}
+
+
+class TestPrimaryEntitiesDeterminismAcrossHashSeeds:
+    """Truncation output must not depend on PYTHONHASHSEED."""
+
+    def test_create_and_merge_output_identical_across_seeds(self, hash_seed_probes):
+        probes = list(hash_seed_probes.values())
+        assert probes[0]["created"] == probes[1]["created"] == probes[2]["created"]
+        assert probes[0]["merged"] == probes[1]["merged"] == probes[2]["merged"]
+
+    def test_truncation_keeps_lexicographically_lowest_ids(self, hash_seed_probes):
+        """The kept 10 are the sorted-first 10 in every process, not just one lucky seed."""
+        for seed, result in hash_seed_probes.items():
+            assert result["created"] == result["created_expected"], (
+                f"seed {seed} kept the wrong 10 at create"
+            )
+            assert result["merged"] == result["merged_expected"], (
+                f"seed {seed} kept the wrong 10 at merge"
+            )
+
+    def test_inputs_exceed_the_cap_so_truncation_actually_happens(self, hash_seed_probes):
+        """Guards the test itself: a smaller input would make the assertions vacuous."""
+        result = hash_seed_probes[HASH_SEEDS[0]]
+        assert len(result["created_expected"]) == MAX_PRIMARY_ENTITIES
+        assert len(result["merged_expected"]) == MAX_PRIMARY_ENTITIES
