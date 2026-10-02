@@ -23,12 +23,30 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import func, select  # noqa: E402
-from sqlalchemy.exc import ProgrammingError  # noqa: E402
+from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from src.schema.models import RawArticle  # noqa: E402
+from src.shared.database import prepare_database_url  # noqa: E402
 from src.transparency.log import MerkleLogEntry  # noqa: E402
+
+# The daily cadence of .github/workflows/transparency-stamp.yml. Named here so
+# the report can point at the schedule it is checking, and so a test can assert
+# the two agree.
+SCHEDULED_STAMP_CRON = "04:47 UTC"
+STALE_HOURS = 48
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Postgres hands back aware datetimes; SQLite hands back naive ones.
+
+    Comparing a naive value against ``datetime.now(timezone.utc)`` raises, which
+    would turn a working report into a traceback on any non-Postgres database.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
 
 
 def render_report(
@@ -60,6 +78,46 @@ def render_report(
     return "\n".join(lines)
 
 
+async def read_state(session) -> dict:
+    """Read the counters this report is about. Index-only counts, no row bodies."""
+    return {
+        "log_entries": (
+            await session.execute(select(func.count()).select_from(MerkleLogEntry))
+        ).scalar_one(),
+        "stamped_articles": (
+            await session.execute(
+                select(func.count())
+                .select_from(RawArticle)
+                .where(RawArticle.log_index.is_not(None))
+            )
+        ).scalar_one(),
+        "total_articles": (
+            await session.execute(select(func.count()).select_from(RawArticle))
+        ).scalar_one(),
+        "last_entry_at": _as_utc(
+            (await session.execute(select(func.max(MerkleLogEntry.timestamp)))).scalar_one()
+        ),
+    }
+
+
+def staleness_warning(last_entry_at, now=None, stale_hours=STALE_HOURS) -> str | None:
+    """Warn when the newest log entry is older than the daily cadence allows.
+
+    This is the symptom of the bug this script was written for: a scheduled
+    stamping run that has quietly stopped. Pure, so the threshold is testable.
+    """
+    if last_entry_at is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    age_hours = (now - last_entry_at).total_seconds() / 3600
+    if age_hours < stale_hours:
+        return None
+    return (
+        f"WARNING: newest log entry is {age_hours:.1f}h old. The stamping workflow "
+        f"is scheduled daily at {SCHEDULED_STAMP_CRON}; check whether it is failing."
+    )
+
+
 async def check() -> int:
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -68,55 +126,34 @@ async def check() -> int:
 
     print("Reading transparency log state...")
 
-    # Supabase pooler uses pgbouncer which doesn't support prepared statements
-    engine = create_async_engine(database_url, echo=False, connect_args={"statement_cache_size": 0})
+    # Reuse the app's own URL translation: a plain ``postgresql://`` from a
+    # dashboard has to become asyncpg, and the Supabase pooler cannot keep
+    # prepared statements. Building the engine by hand here is how this script
+    # first shipped broken (psycopg rejects ``statement_cache_size``).
+    url, connect_args = prepare_database_url(database_url)
+    engine = create_async_engine(url, echo=False, connect_args=connect_args)
     async_session = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     try:
         async with async_session() as session:
-            log_entries = (
-                await session.execute(select(func.count()).select_from(MerkleLogEntry))
-            ).scalar_one()
-            stamped = (
-                await session.execute(
-                    select(func.count())
-                    .select_from(RawArticle)
-                    .where(RawArticle.log_index.is_not(None))
-                )
-            ).scalar_one()
-            total = (
-                await session.execute(select(func.count()).select_from(RawArticle))
-            ).scalar_one()
-            last_entry_at = (
-                await session.execute(select(func.max(MerkleLogEntry.timestamp)))
-            ).scalar_one()
-    except ProgrammingError as exc:
-        print(f"FAIL: transparency tables are not queryable: {exc}")
-        print("The merkle log is the backbone of /proof; this is a schema defect.")
+            state = await read_state(session)
+    except SQLAlchemyError as exc:
+        # Any failure to read the counters means the state of the log is
+        # unknown, and "unknown" must not be reported as "fine".
+        print(f"FAIL: could not read the transparency log state: {exc}")
+        print("The merkle log is the backbone of /proof; this is a schema or "
+              "connectivity defect.")
         await engine.dispose()
         return 1
 
-    print(
-        render_report(
-            log_entries=log_entries,
-            stamped_articles=stamped,
-            total_articles=total,
-            last_entry_at=last_entry_at,
-        )
-    )
+    print(render_report(**state))
 
-    if stamped and last_entry_at is None:
+    if state["stamped_articles"] and state["last_entry_at"] is None:
         print("WARNING: articles are stamped but the log has no entries; inconsistent.")
 
-    age_note_cutoff = datetime.now(timezone.utc).timestamp() - 48 * 3600
-    if last_entry_at is not None:
-        stamped_at = last_entry_at.timestamp()
-        if stamped_at < age_note_cutoff:
-            hours = (datetime.now(timezone.utc) - last_entry_at).total_seconds() / 3600
-            print(
-                f"WARNING: newest log entry is {hours:.1f}h old. The stamping workflow "
-                f"is scheduled daily at 04:47 UTC; check whether it is failing."
-            )
+    warning = staleness_warning(state["last_entry_at"])
+    if warning:
+        print(warning)
 
     await engine.dispose()
     print("OK")
