@@ -1709,6 +1709,55 @@ async def test_adapter_uses_the_configured_feed_list():
     assert captured["feeds"] == [FEED_B]
 
 
+async def test_adapter_persists_language_detection(db_session, tmp_path, monkeypatch):
+    """The rows this adapter writes carry detected_language, or nobody ever sets it.
+
+    run.py sees these articles as already-present rows and skips them on the
+    url_hash dedupe, so its own translation phase never touches them: detection
+    has to happen here, while the session that persists them still owns them.
+    Committing and re-reading proves the field is in the row and not just on an
+    in-memory object the adapter is about to detach.
+
+    The stub backend also fails if it is ever asked to translate: these articles
+    are English, and an English row costs nothing (no title_en, no quota).
+    """
+    monkeypatch.setenv("RSS_EVIDENCE_STATE_PATH", str(tmp_path / "state.json"))
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            return db_session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _NoQuotaBackend:
+        name = "no-quota"
+
+        def translate(self, text, source_lang, target_lang="en"):
+            raise AssertionError("an English row must not be sent to a translation backend")
+
+    monkeypatch.setattr(
+        "src.ingestion.adapters.rss_evidence_adapter.get_session", _SessionCtx
+    )
+    monkeypatch.setattr(
+        "src.enrichment.translation.select_backend", lambda: _NoQuotaBackend()
+    )
+
+    with patch.object(rss_evidence, "extract_entities_top_n", return_value={"ORG": ["BBC"]}):
+        with patch.object(
+            rss_evidence, "fetch_feed_polite", return_value=(200, RSS20_BYTES, None, None, None)
+        ):
+            with patch.object(rss_evidence, "extract_article", side_effect=_extract_ok):
+                await RssEvidenceAdapter(feeds=[FEED_A]).fetch()
+
+    await db_session.commit()
+    rows = (await db_session.execute(select(RawArticle))).scalars().all()
+    assert len(rows) == 3
+    assert all(row.detected_language == "en" for row in rows)
+    # Null-for-English is the design: the reader coalesces title_en or title.
+    assert all(row.title_en is None and row.body_text_en is None for row in rows)
+
+
 async def test_adapter_health_degraded_on_failures_and_empty_refresh():
     """Failed feeds or zero new articles degrade the health, with no network call."""
     adapter = RssEvidenceAdapter()
