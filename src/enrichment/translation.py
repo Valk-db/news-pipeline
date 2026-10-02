@@ -66,7 +66,8 @@ def detect_language(text: str | None) -> str | None:
     """Detect the ISO 639-1 language of text, offline via langdetect.
 
     Returns None for empty/short text or when detection fails, so callers
-    treat it as unknown rather than guessing.
+    treat it as unknown rather than guessing. Give it as much text as you have:
+    see the probe in translate_article() for why a bare headline is not enough.
     """
     if not text or len(text.strip()) < 12:
         return None
@@ -212,7 +213,12 @@ def translate_article(article, backend: TranslationBackend | None = None) -> dic
     backend = backend or select_backend()
     stats = {"detected": None, "translated": False, "backend": backend.name, "error": None}
 
-    probe = article.title or article.body_text or ""
+    # Detect on title AND body together. langdetect needs enough text to work and
+    # has no confidence floor worth trusting here: measured on 2026-10-02, a bare
+    # headline from the English-tier feeds (BBC/Guardian/NPR/France24) came back
+    # as no/da/fr/nl at p=0.46-1.00 for 5 of 109 items, and each miss spent
+    # MyMemory quota "translating" English copy. Title + body is right for 109/109.
+    probe = "\n".join(part for part in (article.title, article.body_text) if part)
     lang = detect_language(probe)
     article.detected_language = lang
     stats["detected"] = lang
