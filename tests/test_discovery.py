@@ -49,8 +49,12 @@ def app_with_db(test_settings, db_engine):
     import src.shared.llm as llm_module
     llm_module._llm_client = None
 
-    # Reset the trigram probe cache: SQLite never has pg_trgm.
-    main_module._trigram_available_cache = False
+    # Reset the trigram probe cache: SQLite never has pg_trgm. The probe and its
+    # cache live in curation_ui.discovery since the module split; patching the
+    # old curation_ui.main home would silently stop taking effect.
+    import curation_ui.discovery as discovery_module
+
+    discovery_module._trigram_available_cache = False
 
     return app
 

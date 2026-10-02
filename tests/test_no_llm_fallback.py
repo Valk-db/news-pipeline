@@ -68,13 +68,15 @@ def forbid_llm(monkeypatch):
     async def _no_caption(*args, **kwargs):
         raise AssertionError("generate_caption must not be called with no LLM configured")
 
-    import curation_ui.main as main_module
+    # The triage routes moved out of curation_ui.main into curation_ui.curation
+    # in the module split; that is where get_llm_client is looked up now.
+    import curation_ui.curation as curation_module
     import src.shared.llm as llm_module
 
     monkeypatch.setattr(llm_module, "_llm_client", None)
     monkeypatch.setattr(llm_module, "get_llm_client", _no_client)
     monkeypatch.setattr(llm_module.LLMClient, "generate_caption", _no_caption)
-    monkeypatch.setattr(main_module, "get_llm_client", _no_client)
+    monkeypatch.setattr(curation_module, "get_llm_client", _no_client)
     return llm_module
 
 
