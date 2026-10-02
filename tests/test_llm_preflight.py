@@ -3,7 +3,12 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.shared.llm_preflight import run_llm_preflight, run_llm_preflight_or_fail
+from src.shared.llm_preflight import (
+    _detail,
+    _reason,
+    run_llm_preflight,
+    run_llm_preflight_or_fail,
+)
 
 OK_RESPONSE = {"choices": [{"message": {"content": "pong"}}]}
 
@@ -122,20 +127,38 @@ async def test_preflight_or_fail_success():
 
 
 @pytest.mark.asyncio
-async def test_preflight_or_fail_failure():
-    """A configured provider that is rejected fails the run."""
+async def test_preflight_or_fail_billing_dead_fallback_only_warns(capsys):
+    """A 402 Cerebras (trial over, key still set) must not kill a healthy Groq run."""
+    with patch("src.shared.llm_preflight.run_llm_preflight", new_callable=AsyncMock) as mock_preflight:
+        mock_preflight.return_value = {
+            "groq": {"status": 200, "ok": True},
+            "cerebras": {"status": 402, "ok": False, "error": "Error code: 402 - payment required"},
+        }
+        await run_llm_preflight_or_fail()  # must not raise SystemExit
+
+    out = capsys.readouterr().out
+    assert "continuing on Groq" in out
+    assert "Cerebras unavailable (402 out of credit" in out
+    assert "auth rejected" not in out
+
+
+@pytest.mark.asyncio
+async def test_preflight_or_fail_dead_primary_healthy_fallback_continues(capsys):
+    """Groq is the preferred provider, not a requirement: Cerebras alone still runs."""
     with patch("src.shared.llm_preflight.run_llm_preflight", new_callable=AsyncMock) as mock_preflight:
         mock_preflight.return_value = {
             "groq": {"status": 401, "ok": False, "error": "Unauthorized"},
             "cerebras": {"status": 200, "ok": True},
         }
-        with pytest.raises(SystemExit) as exc_info:
-            await run_llm_preflight_or_fail()
-        assert exc_info.value.code == 1
+        await run_llm_preflight_or_fail()  # must not raise SystemExit
+
+    out = capsys.readouterr().out
+    assert "continuing on Cerebras" in out
+    assert "Groq unavailable (401 auth rejected (bad key))" in out
 
 
 @pytest.mark.asyncio
-async def test_preflight_or_fail_optional_backup_not_configured_is_fine():
+async def test_preflight_or_fail_optional_backup_not_configured_is_fine(capsys):
     """README: Cerebras is an optional backup. An unset key must not fail the run."""
     with patch("src.shared.llm_preflight.run_llm_preflight", new_callable=AsyncMock) as mock_preflight:
         mock_preflight.return_value = {
@@ -143,6 +166,41 @@ async def test_preflight_or_fail_optional_backup_not_configured_is_fine():
             "cerebras": {"status": None, "ok": False, "configured": False, "error": "No API key configured"},
         }
         await run_llm_preflight_or_fail()  # must not raise SystemExit
+
+    out = capsys.readouterr().out
+    assert "Cerebras unavailable (not configured (optional fallback))" in out
+
+
+@pytest.mark.asyncio
+async def test_preflight_or_fail_warns_as_actions_annotation(monkeypatch, capsys):
+    """The dead provider must be visible in the Actions UI, not just in the log."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    with patch("src.shared.llm_preflight.run_llm_preflight", new_callable=AsyncMock) as mock_preflight:
+        mock_preflight.return_value = {
+            "groq": {"status": 200, "ok": True},
+            "cerebras": {"status": 402, "ok": False, "error": "Error code: 402"},
+        }
+        await run_llm_preflight_or_fail()
+
+    out = capsys.readouterr().out
+    assert "::warning title=LLM provider unavailable::Cerebras unavailable: 402 out of credit" in out
+
+
+@pytest.mark.asyncio
+async def test_preflight_or_fail_all_providers_dead_exits(capsys):
+    """Nothing usable left: that is the one case worth failing the whole ingest for."""
+    with patch("src.shared.llm_preflight.run_llm_preflight", new_callable=AsyncMock) as mock_preflight:
+        mock_preflight.return_value = {
+            "groq": {"status": 401, "ok": False, "error": "Unauthorized"},
+            "cerebras": {"status": 402, "ok": False, "error": "Error code: 402"},
+        }
+        with pytest.raises(SystemExit) as exc_info:
+            await run_llm_preflight_or_fail()
+        assert exc_info.value.code == 1
+
+    out = capsys.readouterr().out
+    assert "no usable LLM provider" in out
+    assert "Groq" in out and "Cerebras" in out  # per-provider detail, not just the verdict
 
 
 @pytest.mark.asyncio
@@ -155,3 +213,32 @@ async def test_preflight_or_fail_no_provider_configured():
         with pytest.raises(SystemExit) as exc_info:
             await run_llm_preflight_or_fail()
         assert exc_info.value.code == 1
+
+
+@pytest.mark.parametrize(
+    "result, expected",
+    [
+        ({"status": 402, "ok": False, "error": "payment required"}, "402 out of credit / billing dead"),
+        ({"status": 401, "ok": False, "error": "Unauthorized"}, "401 auth rejected (bad key)"),
+        ({"status": 403, "ok": False, "error": "Forbidden"}, "403 auth rejected (bad key)"),
+        (
+            {"status": None, "ok": False, "configured": False, "error": "No API key configured"},
+            "not configured (optional fallback)",
+        ),
+        (
+            {"status": 500, "ok": False, "error": "InternalServerError: boom"},
+            "500 InternalServerError: boom",
+        ),
+    ],
+)
+def test_detail_classifies_failures(result, expected):
+    assert expected in _detail(result)
+
+
+def test_reason_402_is_billing_not_auth():
+    """402 means the key works but the account is empty; calling that an auth failure sends
+    operators chasing the wrong fix (rotate the key) instead of topping up."""
+    assert _reason({"status": 402, "ok": False, "error": "payment required"}) == (
+        "out of credit / billing dead — treated as unavailable"
+    )
+    assert "auth" not in _detail({"status": 402, "ok": False, "error": "payment required"})
