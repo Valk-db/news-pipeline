@@ -1,186 +1,100 @@
-<div class="story-card" data-story-id="{{ item.story.id }}" tabindex="0">
-    <div class="story-header">
-        <span class="badge badge-{{ 'success' if item.story.status.value == 'queued' else 'warning' }}">
-            {{ item.story.status.value|upper }}
-        </span>
-        {% if item.verification %}
-        <span class="verify-badge{% if item.verification.corroborated %} is-corroborated{% endif %}"
-              title="{{ item.verification.outlets }} distinct outlet{{ 's' if item.verification.outlets != 1 else '' }} · tier mix T1:{{ item.verification.tier_mix.t1 }} T2:{{ item.verification.tier_mix.t2 }} T3:{{ item.verification.tier_mix.t3 }} T4:{{ item.verification.tier_mix.t4 }}">
-            {% if item.verification.corroborated %}
-            <svg class="verify-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M20 6L9 17l-5-5"></path>
-            </svg>
-            {% else %}
-            <svg class="verify-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="8"></circle>
-                <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"></circle>
-            </svg>
-            {% endif %}
-            <span class="verify-label">{{ item.verification.label }}</span>
-        </span>
-        {% endif %}
-        <span class="story-day">{{ item.story.day.strftime('%Y-%m-%d') }}</span>
-        <span class="story-gate">{{ item.story.gate_reason or 'Pending review' }}</span>
-    </div>
+{# One story, read at a glance on a phone.
 
-    <div class="story-tier-badges">
-        <span class="tier-badge tier1" title="Tier-1 units (verified editorial)">{{ item.story.tier1_unit_count }}</span>
-        <span class="tier-badge tier2" title="Tier-2 units (reputable outlets)">{{ item.story.tier2_unit_count }}</span>
-        <span class="tier-badge tier3" title="Tier-3 units (social/forums)">{{ item.story.tier3_unit_count }}</span>
-        <span class="tier-badge tier4" title="Tier-4 units (niche/newsletters)">{{ item.story.tier4_unit_count }}</span>
-        <span class="owner-badge" title="Distinct tier-1 owners">{{ item.story.distinct_owners }}</span>
-    </div>
+   The order is the point of the redesign: headline first, then what makes it
+   trustworthy, then who said it, then how to go deeper. Nothing on this card
+   exists only to be debugged. The claim matrix, the evidence stances with their
+   confidence percentages, the unit id prefixes, the topic-group tags and the
+   semantic edge triples all moved to the detail page, where a reader who
+   opened the story on purpose will find them.
 
-    {% if item.media %}
+   The headline link carries the card: its ::after covers the card, so the
+   whole surface is one tap target, while the source links sit above it and
+   stay independently tappable. #}
+<article class="story-card" data-story-id="{{ item.story.id }}">
+
+  {% if item.lead_image %}
     <div class="story-media">
-        {% for asset in item.media %}
-        {% if asset.media_type.value == 'image' %}
-            <img src="{{ (asset.thumbnail_url or asset.url) | is_safe_url }}" alt="{{ asset.alt_text or 'Article image' }}" class="media-thumbnail" loading="lazy">
-        {% elif asset.media_type.value == 'video' %}
-            <a href="{{ asset.url | is_safe_url }}" target="_blank" class="media-video-link" title="{{ asset.alt_text or 'Video' }}">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                </svg>
-                <span>{{ asset.source|title }}</span>
-                {% if asset.duration_seconds %}
-                <span class="video-duration">{{ (asset.duration_seconds // 60)|int }}:{{ "%02d"|format(asset.duration_seconds % 60) }}</span>
-                {% endif %}
-            </a>
-        {% elif asset.media_type.value == 'embed' %}
-            <a href="{{ asset.url | is_safe_url }}" target="_blank" class="media-embed-link" title="{{ asset.alt_text or 'Embed' }}">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
-                    <polyline points="17 2 17 7 22 7"></polyline>
-                </svg>
-                <span>{{ asset.source|title }}</span>
-            </a>
-        {% elif asset.media_type.value == 'audio' %}
-            <a href="{{ asset.url | is_safe_url }}" target="_blank" class="media-audio-link" title="{{ asset.alt_text or 'Audio' }}">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M11 5v14"></path>
-                    <path d="M19 9v6"></path>
-                    <path d="M3 17v-6"></path>
-                    <path d="M9 5v14"></path>
-                </svg>
-                <span>Audio</span>
-            </a>
-        {% endif %}
-        {% endfor %}
+      <img src="{{ item.lead_image.url | is_safe_url }}" alt="" loading="lazy" decoding="async">
     </div>
+  {% endif %}
+
+  <div class="story-body">
+
+    <h2 class="story-headline">
+      <a href="/story/{{ item.story.id }}{{ item.filter_query }}">{{ item.headline.headline }}</a>
+    </h2>
+
+    <p class="story-headline-byline">
+      {% if item.headline.source_domain %}
+        Reported first by <span class="story-outlet">{{ item.headline.source_domain }}</span>
+      {% else %}
+        No reporting outlet attributed yet
+      {% endif %}
+      {% if item.headline.translated %}
+        <span class="story-translated">translated</span>
+      {% endif %}
+    </p>
+
+    {# Tier in words. The chip names its tier and counts its outlets, and what
+       that tier means rides along as text a screen reader reads out, so nothing
+       here depends on a hover tooltip that never appears on a phone. #}
+    {% if item.tier_chips %}
+      <ul class="story-tiers">
+        {% for chip in item.tier_chips %}
+          <li class="story-tier tier-{{ chip.tier }}">
+            <span class="story-tier-name">Tier {{ chip.tier }}</span>
+            <span class="story-tier-count">{{ chip.count }} {{ chip.noun }}</span>
+            <span class="visually-hidden">({{ chip.meaning }})</span>
+          </li>
+        {% endfor %}
+      </ul>
     {% endif %}
 
+    <p class="story-corroboration {{ 'is-corroborated' if item.verification.corroborated }}">
+      {{ item.corroboration_sentence }}
+    </p>
+
+    {# Every attributed source, not a sample: a claim of corroboration is only
+       as good as the list of outlets printed underneath it. #}
     <div class="story-sources">
-        {% for article in item.articles %}
-        <div class="source-item">
-            <a href="{{ article.url | is_safe_url }}" target="_blank" class="source-title">
-                {{ article.title[:120] }}{% if article.title|length > 120 %}...{% endif %}
-            </a>
-            <span class="source-meta">
-                {{ article.source_domain }} •
-                {% if article.published_at %}{{ article.published_at.strftime('%H:%M UTC') }}{% endif %}
-                • <span class="tier-{{ article.source_tier.value }}">Tier: {{ article.source_tier.value }}</span>
-                {% if item.reliability_by_domain.get(article.source_domain) is not none %}
-                {% set score = item.reliability_by_domain[article.source_domain] %}
-                <span class="reliability-badge
-                    {% if score >= 70 %}reliability-green
-                    {% elif score >= 40 %}reliability-yellow
-                    {% else %}reliability-red{% endif %}"
-                    title="Reliability score: {{ score }}/100">
-                    {{ score }}
-                </span>
-                {% endif %}
-            </span>
-        </div>
-        {% endfor %}
+      <h3 class="story-sources-heading">
+        {{ item.sources | length }} {{ 'source' if item.sources | length == 1 else 'sources' }}
+      </h3>
+      {% if item.sources %}
+        <ul class="source-list">
+          {% for row in item.sources %}
+            <li class="source-item">
+              <span class="source-domain">{{ row.domain }}</span>
+              {% if row.tier_num %}
+                <span class="story-tier story-tier-inline tier-{{ row.tier_num }}">Tier {{ row.tier_num }}</span>
+              {% else %}
+                <span class="story-tier story-tier-inline tier-unknown">Tier unknown</span>
+              {% endif %}
+              {% if row.published_at %}
+                <time class="source-time" datetime="{{ row.published_at.isoformat() }}">{{ row.published_at.strftime('%d %b %H:%M UTC') }}</time>
+              {% else %}
+                <span class="source-time">no timestamp</span>
+              {% endif %}
+              {% if row.url %}
+                <a class="source-link" href="{{ row.url | is_safe_url }}" target="_blank" rel="noopener noreferrer">read &#8599;</a>
+              {% else %}
+                <span class="source-link source-link-absent">no link</span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="story-sources-empty">
+          No source has been attributed to this story yet, so it cannot be corroborated.
+        </p>
+      {% endif %}
     </div>
 
-    {% if item.snippets %}
-    <div class="story-snippets">
-        {% for snippet in item.snippets %}
-        <blockquote class="snippet-item snippet-{{ snippet.snippet_type.value }}">
-            <span class="snippet-type-badge">{{ snippet.snippet_type.value|title }}</span>
-            <p>{{ snippet.text }}</p>
-            <footer>Confidence: {{ snippet.confidence }}%</footer>
-        </blockquote>
-        {% endfor %}
-    </div>
-    {% endif %}
+    <footer class="story-card-footer">
+      <span class="story-status">{{ item.verification.label }}</span>
+      <span class="story-freshness">arrived {{ item.freshness }}</span>
+      <span class="story-more">All details &#8594;</span>
+    </footer>
 
-    <div class="story-units">
-        <small>
-            {{ item.units|length }} reporting unit{% if item.units|length != 1 %}s{% endif %} •
-            {{ item.story.distinct_owners }} owner{% if item.story.distinct_owners != 1 %}s{% endif %}
-        </small>
-    </div>
-
-    {% if item.story.viewpoint_cluster_id %}
-    <div class="story-viewpoints">
-        <small class="viewpoint-badge">Has {{ item.story.viewpoint_count or '? '}} viewpoint sub-clusters</small>
-        <a href="/api/stories/{{ item.story.id }}/viewpoints" class="btn btn-ghost btn-sm" target="_blank">
-            View Perspectives
-        </a>
-    </div>
-    {% endif %}
-
-    {% if item.claims %}
-    <div class="story-claims">
-        <small class="claim-badge">Claims: {{ item.claims|length }}</small>
-        <details class="claims-details">
-            <summary>View Claim Matrix</summary>
-            {% for claim_data in item.claims %}
-            <div class="claim-item claim-{{ claim_data.claim.claim_type.value }}">
-                <div class="claim-text">{{ claim_data.claim.text }}</div>
-                <div class="claim-meta">
-                    <span class="claim-type-badge">{{ claim_data.claim.claim_type.value|title }}</span>
-                    <span class="claim-date">First seen: {{ claim_data.claim.first_seen_at.strftime('%Y-%m-%d %H:%M') }}</span>
-                </div>
-                {% if claim_data.evidence %}
-                <div class="claim-evidence">
-                    {% for ev in claim_data.evidence %}
-                    <span class="evidence-badge evidence-{{ ev.stance.value }}" title="Unit {{ ev.unit_id[:8] }}: {{ ev.stance.value }} (conf: {{ ev.confidence }})">
-                        {{ ev.stance.value|title }} ({{ ev.confidence }}%)
-                    </span>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </div>
-            {% endfor %}
-        </details>
-    </div>
-    {% endif %}
-
-    {% if item.topic_groups %}
-    <div class="story-topics">
-        <small class="topic-badge">Topics:</small>
-        {% for tg in item.topic_groups %}
-        {% if tg.topic_group %}
-        <span class="topic-tag" title="Confidence: {{ tg.confidence }}%">{{ tg.topic_group.name }}</span>
-        {% endif %}
-        {% endfor %}
-    </div>
-    {% endif %}
-
-    {% if item.narrative_arcs %}
-    <div class="story-narrative">
-        <small class="narrative-badge">Narrative Links:</small>
-        {% for edge in item.narrative_arcs %}
-        <span class="narrative-tag narrative-{{ edge.predicate.value }}"
-              title="{{ edge.predicate.value|replace('_', ' ') }} (conf: {{ edge.confidence }}%)">
-            {{ edge.predicate.value|replace('_', ' ')|title }} → {{ edge.object_id[:8] }}
-        </span>
-        {% endfor %}
-    </div>
-    {% endif %}
-
-    <div class="story-actions">
-        <button class="btn btn-success" hx-post="/story/{{ item.story.id }}/approve{{ item.filter_query or '' }}" hx-target="#stories" hx-swap="outerHTML">
-            Approve (A)
-        </button>
-        <button class="btn btn-danger" hx-post="/story/{{ item.story.id }}/reject{{ item.filter_query or '' }}" hx-target="#stories" hx-swap="outerHTML">
-            Reject (R)
-        </button>
-        <a href="/story/{{ item.story.id }}/edit" class="btn btn-primary">
-            Edit (E)
-        </a>
-    </div>
-</div>
+  </div>
+</article>
