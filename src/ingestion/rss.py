@@ -195,7 +195,13 @@ async def ingest_rss_feeds(
                 feed_tasks.append((source_key, feed_url, source_info_dict))
 
         # Fetch all feeds concurrently with bounded semaphore
-        fetch_sem = asyncio.Semaphore(10)
+        fetch_sem = asyncio.Semaphore(settings.rss_fetch_concurrency)
+        logger.info(
+            "RSS fetch: %d feed(s), concurrency=%d, timeout=%ss",
+            len(feed_tasks),
+            settings.rss_fetch_concurrency,
+            timeout,
+        )
 
         async def _bounded_fetch(source_key: str, feed_url: str) -> tuple:
             async with fetch_sem:

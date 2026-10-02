@@ -164,14 +164,24 @@ async def log_status(session, phase: str, status: str, details: dict = None):
 
 ENV_PROFILES = ("dev", "prod")
 
+# Dev-only fetch tuning (Tyler-approved). Dev ingests crawl through the egress
+# proxy, so at the production concurrency they crawl: a wider semaphore and a
+# shorter per-feed timeout keep a dev run bounded and quick. Production values
+# stay 10 / 30s and are never touched by this table.
+DEV_ENV_DEFAULTS = {
+    "RSS_FETCH_CONCURRENCY": "25",
+    "RSS_FETCH_TIMEOUT": "15",
+}
+
 
 def apply_env(env: str) -> str:
     """Select the config profile for a run.
 
     pydantic-settings reads .env by default. For dev we load .env.dev when it
     exists, on top of .env, so a local run can point at a local database. For
-    prod we use the environment only, which is what CI provides. Returns the
-    profile name.
+    prod we use the environment only, which is what CI provides. Dev also gets
+    DEV_ENV_DEFAULTS, applied last so an explicit value from the process
+    environment, .env, or .env.dev always wins. Returns the profile name.
     """
     if env not in ENV_PROFILES:
         raise ValueError(f"unknown env {env!r}, expected one of {ENV_PROFILES}")
@@ -190,6 +200,12 @@ def apply_env(env: str) -> str:
             print("Config profile: dev (loaded .env.dev)")
         else:
             print("Config profile: dev (no .env.dev, using .env)")
+        applied = [k for k, v in DEV_ENV_DEFAULTS.items() if not os.environ.get(k)]
+        for key, value in DEV_ENV_DEFAULTS.items():
+            os.environ.setdefault(key, value)
+        if applied:
+            applied_text = ", ".join(f"{k}={DEV_ENV_DEFAULTS[k]}" for k in applied)
+            print(f"Config profile: dev (fetch tuning defaults applied: {applied_text})")
     else:
         print("Config profile: prod (environment only)")
 

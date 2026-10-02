@@ -75,6 +75,11 @@ uv run python -m scripts.migrate
 # Test ingestion (dry run)
 uv run python -m src.ingestion.run --dry-run
 
+# Dev runs (`--env dev` loads .env.dev over .env, and in CI
+# `.github/workflows/daily-ingest.yml` sets them when target_db=dev):
+# RSS_FETCH_CONCURRENCY=25 and RSS_FETCH_TIMEOUT=15. Production keeps the
+# defaults 10 / 30s.
+
 # Start curation UI
 uv run uvicorn curation_ui.main:app --reload
 # Open http://localhost:8000

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
 
     # Ingestion settings
+    # RSS_FETCH_CONCURRENCY bounds the feed-fetch semaphore in src/ingestion/rss.py.
+    # ge=1 because Semaphore(0) would deadlock every fetch instead of failing loudly.
+    rss_fetch_concurrency: int = Field(default=10, ge=1)
     rss_fetch_timeout: int = 30
     max_articles_per_feed: int = 50
     gdelt_throttle_seconds: float = 5.0

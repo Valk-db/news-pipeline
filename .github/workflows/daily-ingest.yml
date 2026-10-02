@@ -74,6 +74,12 @@ jobs:
           GDELT_THROTTLE_SECONDS: "30"
           PYTHONUNBUFFERED: "1"
           GDELT_ENABLED: "false"
+          # Dev runs crawl through the egress proxy, so they use a wider fetch
+          # semaphore and a shorter per-feed timeout. Scheduled and prod runs
+          # keep the production defaults (10 / 30s) spelled out here so a dev
+          # value can never leak into production.
+          RSS_FETCH_CONCURRENCY: ${{ inputs.target_db == 'dev' && '25' || '10' }}
+          RSS_FETCH_TIMEOUT: ${{ inputs.target_db == 'dev' && '15' || '30' }}
         run: |
           uv run python -m src.ingestion.run
 
