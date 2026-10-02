@@ -240,7 +240,7 @@ async def test_dynamic_gate_records_the_score_it_decided_on(db_session):
         await db_session.commit()
 
         result = await apply_dynamic_gate(db_session, [story.id])
-        assert result == {"queued": 1, "blocked": 0}
+        assert result == {"queued": 1, "blocked": 0, "errors": 0}
 
         (row,) = await _decisions(db_session, story.id)
         assert row.gate_name == "dynamic"
@@ -272,7 +272,7 @@ async def test_shadow_mode_records_both_the_decision_and_the_score(db_session):
         await db_session.commit()
 
         result = await apply_dynamic_gate(db_session, [story.id])
-        assert result == {"queued": 1, "blocked": 0}
+        assert result == {"queued": 1, "blocked": 0, "errors": 0}
 
         rows = _by_gate(await _decisions(db_session, story.id))
         assert set(rows) == {"tier1", "dynamic"}
@@ -455,7 +455,7 @@ async def test_score_agrees_with_the_boolean_gate_on_independence(db_session):
         }
 
         result = await apply_dynamic_gate(db_session, [story.id])
-        assert result == {"queued": 0, "blocked": 1}, "the score must not admit what the gate held"
+        assert result == {"queued": 0, "blocked": 1, "errors": 0}, "the score must not admit what the gate held"
 
         (score_row,) = [
             row for row in await _decisions(db_session, story.id) if row.gate_name == "dynamic"
@@ -495,7 +495,7 @@ async def test_independently_corroborated_story_still_scores_above_threshold(db_
         await db_session.commit()
 
         result = await apply_dynamic_gate(db_session, [story.id])
-        assert result == {"queued": 1, "blocked": 0}
+        assert result == {"queued": 1, "blocked": 0, "errors": 0}
 
         (row,) = await _decisions(db_session, story.id)
         assert row.gate_name == "dynamic"
@@ -539,9 +539,13 @@ async def test_score_agrees_with_the_boolean_gate_across_owner_counts(db_session
             ]
             owners = row.distinct_owners
             assert owners == len(set(get_owner_group(d) for d in domains))
-            assert boolean == dynamic == (
-                {"queued": 1, "blocked": 0} if expect_queued else {"queued": 0, "blocked": 1}
-            ), f"{len(domains)} unit(s), {owners} owner(s)"
+            # apply_tier1_gate returns {"queued", "blocked"}; apply_dynamic_gate adds "errors"
+            # (item (a) resilience: one bad story must not cost the run). Compare the counters
+            # they share.
+            expected = {"queued": 1, "blocked": 0} if expect_queued else {"queued": 0, "blocked": 1}
+            assert boolean == expected, f"{len(domains)} unit(s), {owners} owner(s)"
+            assert {k: dynamic[k] for k in expected} == expected
+            assert dynamic["errors"] == 0
             assert row.passed is (row.score >= row.pass_threshold)
             assert row.passed is expect_queued
     finally:
