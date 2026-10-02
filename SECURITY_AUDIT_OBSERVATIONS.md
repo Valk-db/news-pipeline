@@ -6,10 +6,10 @@
 > **Reconciled 2026-10-02** (docs pass, `procmon/batch-p8-docs`). The two findings below are
 > the audit's own record and are kept as written. Corrected since: the rate limiter described in
 > Finding #2 was never in the tree — the `slowapi` code and dependency claims are deleted and
-> replaced with what actually protects the auth route now; Finding #1's line reference and test
-> counts are refreshed; and the non-blocking observations that the 2026-10-02 security batch
-> (public status filter, globe limit clamp, CSP, failed-auth limiter, CSRF, trimmed `/healthz`)
-> has since closed are marked as closed.
+> replaced with what actually protects the auth route now; Finding #1's line reference is
+> refreshed and its stale test tallies are dropped rather than restated; and the non-blocking
+> observations that the 2026-10-02 security batch (public status filter, globe limit clamp, CSP,
+> failed-auth limiter, CSRF, trimmed `/healthz`) has since closed are marked as closed.
 
 ---
 
