@@ -236,9 +236,11 @@ async def test_compute_admission_score_basic(mock_session, sample_story):
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
-    score, breakdown = await compute_admission_score(mock_session, story, 2, 2)
+    score, breakdown = await compute_admission_score(mock_session, story, 2)
 
-    # tier_baseline=40 (tier1>=2) + corroboration=20 (2*10) + owners=10 (2*5) + virality=0 + harm=0 = 70
+    # 2 independent owners: baseline=40 (owners>=2) + corroboration=20 (2*10) + owners=10 (2*5)
+    # + virality=0 + harm=0 = 70
+    assert breakdown["independent_owners"] == 2
     assert breakdown["tier_baseline"] == 40
     assert breakdown["corroboration"] == 20
     assert breakdown["distinct_owners"] == 10
@@ -284,7 +286,7 @@ async def test_compute_admission_score_harm_high(mock_session, sample_story_high
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
-    score, breakdown = await compute_admission_score(mock_session, story, 2, 2)
+    score, breakdown = await compute_admission_score(mock_session, story, 2)
 
     # base_score=70, harm_penalty=-20, final=50
     assert breakdown["harm_level"] == "high"
@@ -321,12 +323,35 @@ async def test_compute_admission_score_virality(mock_session, sample_story_viral
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
-    score, breakdown = await compute_admission_score(mock_session, story, 2, 2)
+    score, breakdown = await compute_admission_score(mock_session, story, 2)
 
     # base=70, virality=10 (5*2), final=80
     assert breakdown["virality"] == 10
     assert breakdown["final_score"] == 80
     assert breakdown["passes"] is True
+
+
+@pytest.mark.asyncio
+async def test_score_counts_independent_owners_not_articles(mock_session, sample_story):
+    """Four tier-1 articles from one owner score below the threshold; four owners do not.
+
+    The collapse fixture's shape -- one outlet's reporting carried by several papers -- reached the
+    old score as a high article count and passed, while the boolean gate blocked it. With the score
+    counting independent owners, the two agree on independence: a single owner cannot reach 50, and
+    the breakdown says which count it was given.
+    """
+    for distinct_owners, expected_base in ((1, 15), (2, 70), (4, 90)):
+        mock_session.execute.side_effect = [
+            make_result_mock([]),            # compute_virality_signal: no tier3/4 units
+            make_scalar_mock(None),          # compute_harm_level: no ALLEGATION claim
+        ]
+        score, breakdown = await compute_admission_score(
+            mock_session, sample_story, distinct_owners
+        )
+        assert breakdown["independent_owners"] == distinct_owners
+        assert breakdown["base_score"] == expected_base
+        assert score == expected_base
+        assert breakdown["passes"] is (expected_base >= 50)
 
 
 @pytest.mark.asyncio

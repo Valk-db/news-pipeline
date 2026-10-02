@@ -598,27 +598,41 @@ async def compute_virality_signal(session: AsyncSession, story: "Story") -> int:
 async def compute_admission_score(
     session: AsyncSession,
     story: "Story",
-    tier1_unit_count: int,
     distinct_owners: int,
 ) -> tuple[int, dict]:
     """Returns (score 0-100, breakdown dict for gate_reason logging).
 
+    Every owner-based factor counts the POST-COLLAPSE `distinct_owners`: the number of ownership
+    groups the tier-1 articles attribute to once syndicated wire copies have been folded onto the
+    wire service that reported them (`src/verification/corroboration.py`). The raw tier-1 article
+    count is deliberately not an input here. It counts one piece of reporting as many, so a score
+    built on it would pass a story the boolean gate blocks -- and with the dynamic gate enabled the
+    score *is* the admission decision, so that disagreement would admit exactly the stories
+    corroboration exists to hold out. The factors that do not measure independence (virality, harm)
+    are unchanged, and neither is the harm-raised threshold.
+
     Factors:
-    1. source_tier_baseline: 40 if tier1_unit_count >= 2 else 0
-    2. corroboration: min(tier1_unit_count * 10, 30)
+    1. source_tier_baseline: 40 if distinct_owners >= TIER1_MIN_OWNERS else 0
+    2. corroboration: min(distinct_owners * 10, 30) -- independent corroborating voices
     3. distinct_owners: min(distinct_owners * 5, 20)
     4. virality_signal: min(virality_signal * 2, 10) -- tier3/4 article count
     5. harm_level penalty: -20 if 'high', else 0 -- raises the bar
 
-    If harm_level == 'high', the required score to pass is increased by 20
-    (i.e., need 70 instead of 50). This implements 'scales the bar' not
-    'gates alone' per GRAND_PLAN §3.
-    """
-    # 1. Source tier baseline (matches old boolean gate)
-    tier_baseline = 40 if tier1_unit_count >= TIER1_MIN_UNITS else 0
+    Factor 1 is the boolean gate's admission condition restated in the score's own arithmetic:
+    >= 2 tier-1 units from >= 2 distinct owners. A story that clears it scores at least 70
+    (40 + 20 + 10) and a story that fails it cannot reach the 50 threshold, so on independence the
+    score and `evaluate_tier1_gate` cannot disagree. `harm_level == 'high'` raising the bar to 70
+    remains the one place they can part company, by design per GRAND_PLAN §3 ('scales the bar' not
+    'gates alone').
 
-    # 2. Corroboration (more tier-1 units = more corroboration)
-    corroboration = min(tier1_unit_count * 10, 30)
+    `distinct_owners` is recorded in the breakdown as `independent_owners` so a recorded decision
+    states the basis it was counted on, not just the points it awarded.
+    """
+    # 1. Independence baseline (mirrors the boolean gate's admission condition)
+    tier_baseline = 40 if distinct_owners >= TIER1_MIN_OWNERS else 0
+
+    # 2. Corroboration (more independent owners = more corroboration; a wire copy is not a voice)
+    corroboration = min(distinct_owners * 10, 30)
 
     # 3. Distinct owners
     owners_score = min(distinct_owners * 5, 20)
@@ -640,6 +654,7 @@ async def compute_admission_score(
     passes = final_score >= pass_threshold
 
     breakdown = {
+        "independent_owners": distinct_owners,
         "tier_baseline": tier_baseline,
         "corroboration": corroboration,
         "distinct_owners": owners_score,
@@ -716,11 +731,11 @@ async def apply_dynamic_gate(
 
         # Compute admission scores for comparison logging
         for story in stories:
+            # The score counts independent owners; the raw tier-1 article count is read only to
+            # record on the decision row, which keeps reporting the counter `gate_reason` shows.
             tier1_unit_count = story.tier1_unit_count
             distinct_owners = story.distinct_owners
-            score, breakdown = await compute_admission_score(
-                session, story, tier1_unit_count, distinct_owners
-            )
+            score, breakdown = await compute_admission_score(session, story, distinct_owners)
 
             # Determine boolean gate decision for this story, from the same resolution.
             units = story_units.get(story.id, [])
@@ -802,15 +817,14 @@ async def apply_dynamic_gate(
     )
 
     for story in stories:
-        # Use already-computed counters (from recompute_story_counters)
+        # Use already-computed counters (from recompute_story_counters). The score below counts
+        # distinct_owners only; tier1_unit_count rides along on the decision row, not the score.
         tier1_unit_count = story.tier1_unit_count
         distinct_owners = story.distinct_owners
         units = story_units.get(story.id, [])
 
         # Compute admission score
-        score, breakdown = await compute_admission_score(
-            session, story, tier1_unit_count, distinct_owners
-        )
+        score, breakdown = await compute_admission_score(session, story, distinct_owners)
 
         # Determine pass/fail
         passes = breakdown["passes"]

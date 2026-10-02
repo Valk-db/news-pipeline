@@ -99,10 +99,12 @@ RELIABILITY_VERSION = "reliability/v1"
 
 # The corroboration gate (src/verification/tiers.py): every decision it makes, appended to
 # gate_decisions. Bumping this says "a decision row written before this bump was made under
-# different counting rules" -- and, because the wire-collapse in src/verification/corroboration.py
-# changed what "distinct owner" means, it is the signal that earlier decisions were counted with
-# the syndicated-copies bug and should be re-gated to be comparable.
-GATE_VERSION = "gate/v1"
+# different counting rules". v2 is the wire-collapse counting change, and it counts in both gates:
+# the boolean gate and the admission score both now measure independence post wire-collapse, so
+# v1 rows were counted with the syndicated-copies bug in one of the two and are not comparable
+# with v2 rows. The ledger is append-only, so a v1 row stays exactly as it was written and reads
+# under its own version -- re-gating a v1 story appends a v2 row beside it instead of rewriting it.
+GATE_VERSION = "gate/v2"
 
 
 # =============================================================================

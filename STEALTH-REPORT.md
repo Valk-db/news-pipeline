@@ -92,3 +92,31 @@ semantics moved, and `Story.gate_reason` is still written exactly as before (scr
    bump to `gate/v2` (or keep and note pre-collapse rows) depending on the answer.
 2. Whether the 76 live `gate_decisions` rows should stay in dev (they are the evidence above) or be cleared so dev starts clean.
 3. Whether wire sources should be re-enabled / backfilled now, which is the only way collapsing affects production-shaped data.
+
+---
+
+# Follow-up: score coherence (gate/v2)
+
+Resolves **Decisions needed #1** (coordinator: the score must agree with the boolean gate on independence) — the same wire-collapse counting change, applied to the admission score.
+
+## What changed
+- `src/verification/tiers.py` — `compute_admission_score` drops the `tier1_unit_count` parameter: factor 1 = `40 if distinct_owners >= TIER1_MIN_OWNERS else 0`, factor 2 = `min(distinct_owners*10, 30)`, both post-collapse; factors 3/4/5 and the harm-raised 70 threshold unchanged; `breakdown["independent_owners"]` records the basis; the raw count survives as the volume on the decision row; both `apply_dynamic_gate` call sites updated.
+  Factor 1 restates the boolean gate's admission condition and the arithmetic closes both ways (≥2 owners scores ≥70, ≤1 cannot reach 50), so the score can never admit what `evaluate_tier1_gate` blocks.
+- `src/shared/analyzer_versions.py` — `GATE_VERSION` `"gate/v1"` → `"gate/v2"`. Append-only ledger: dev's v1 rows stay readable under their own version, and a re-gate appends a v2 row beside them. `src/verification/corroboration.py` — docstring no longer claims the score "keeps the arithmetic it had"; thresholds are the stated non-change.
+- Tests: `tests/test_gate_decisions.py` +3 (the collapse fixture is now shared by both gate tests), `tests/test_dynamic_gate.py` 3 call sites to the 3-arg signature +1.
+
+## Scores: scratch collapse fixture vs a healthy story
+- Collapse (1 AP + 3 same-hash republications): 4 tier-1 articles, **1** owner post-collapse → **15** < 50 → blocked, and the boolean gate blocks too. It was **75 / passed** before: the old score read 4 articles and called them four corroborating voices. A collapse can now only lower a score, never raise one.
+- Healthy (bbc + theguardian + npr): 3 articles, **3** owners → **85** ≥ 50 → queued, both gates agree.
+
+## Tests
+- `test_gate_decisions` + `test_dynamic_gate`: **24 passed** (13 + 3 new; 11 + 1 new). New tests pin the collapse fixture scoring 15 < 50 and blocked in both paths with `independent_owners=1` while the raw count is still reported as 4, a 3-owner story scoring 85 and passing, a 4-case table pinning score-vs-boolean agreement across owner counts, and 1/2/4 owners → 15/70/90.
+- Gate/tiers/stories/units regression set (11 files, `NO_PROXY`/`no_proxy` unset): **132 passed, 7 skipped, 7 failed** — all 7 the pre-existing `RuntimeError: Database not configured` baseline (5 `test_content_hash`, 2 `test_gdelt_toggle`), none in files touched here. `ruff check` clean on all 5 changed files.
+
+## Live evidence (dev Supabase, 127.0.0.1:15433 — my tunnel only; 15432 left running; killed at end)
+- Dynamic gate ENABLED; `GATE_VERSION` from this checkout: `gate/v2`.
+- Collapse: both gates `{'queued': 0, 'blocked': 1}`; raw SQL on `gate_decisions` → `('tier1','gate/v2',False,None,None)`, `('dynamic','gate/v2',False,15,50)`: score < 50, `passed=false`, `gate_version=gate/v2`, `owner_groups={"AP": 4}`, `wire_origin=apnews.com` on exactly the 3 copies, `gate_reason` = `Dynamic gate blocked (score=15, threshold=50): independent_owners=1, tier_baseline=0, corroboration=10, … final_score=15 (3 wire copies collapsed to AP)`.
+- Healthy: both gates `{'queued': 1, 'blocked': 0}`, `('dynamic','gate/v2',True,85,50)`, `owner_groups={"BBC":1,"NPR":1,"Guardian":1}`, `independent_owners=3`. `gate_decisions` 80 → 84 → **80** after marker-matched cleanup of both scratch stories (dev is shared; the v1 rows already there are other agents'). No production contact.
+
+## Deferred / still open
+- Re-gating dev's existing v1 rows to v2 stays an operator decision (one appended row per story). Wire-collapse limitation unchanged: apnews.com/reuters.com are still `enabled=False`, so live dev data has 0 wire origins. Decisions needed #2 and #3 above stand.

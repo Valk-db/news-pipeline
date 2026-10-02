@@ -26,9 +26,14 @@ and both are fixed here, once, in this module:
    counter printed beside it. `load_corroboration()` is the single resolution both paths call,
    and the `Corroboration` object it returns is the only thing either of them counts from.
 
-What is deliberately *not* here: any change to the thresholds or the scoring factors. Collapsing
-wire copies is the only behavior change; `tier1_unit_count` still counts tier-1 articles, and
-`evaluate_tier1_gate` and `compute_admission_score` keep the arithmetic they had.
+What is deliberately *not* here: any change to the thresholds. Collapsing wire copies is the only
+behavior change, and it reaches both gates' arithmetic through the one number this module owns:
+`evaluate_tier1_gate` decides on the post-collapse pairs, and `compute_admission_score`'s
+independence factors read the post-collapse `distinct_owners` — because with the dynamic gate
+enabled the score *is* the admission decision, so a score counting collapsed copies as
+corroboration would admit what the boolean gate holds out. `tier1_unit_count` still counts tier-1
+articles and stays the story's raw reporting volume; it is not a count of independent outlets, and
+nothing that measures independence is built on it.
 
 Collapsing is also strictly a *narrowing* of what counts as independent. A story that lost
 owners loses corroboration, never gains it, so this can only block stories that were passing on

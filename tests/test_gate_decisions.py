@@ -12,12 +12,20 @@ tests pin what an auditor or a query needs to be true of that record:
   c) syndicated wire copies collapse onto the wire service that published the content -- the
      spec's fixture of 1 AP article plus 3 same-content_hash republications counts as ONE
      corroborating outlet, and says so in the reason and in `wire_origin` per article;
-  d) the table is append-only by construction: re-gating appends a second row and leaves the
+  d) the admission score counts the same independence the boolean gate does, so with the dynamic
+     gate enabled the score cannot admit a story the boolean gate blocks, and its breakdown states
+     the post-collapse owner count it was given;
+  e) the table is append-only by construction: re-gating appends a second row and leaves the
      first readable, and no code path in this repo UPDATEs or DELETEs a row.
 
 Real SQLite through the shared `db_session` fixture, not mocked sessions: the ledger's whole
 purpose is what the database stores and what a query returns, and a mock proves neither. The
 wire-collapse fixture additionally drives a real content_hash lookup, which is the mechanism.
+
+(e) is asserted two ways on purpose. `test_score_agrees_with_the_boolean_gate_on_independence`
+puts the same collapse fixture through both gates and requires the same verdict;
+`test_score_agrees_with_the_boolean_gate_across_owner_counts` then holds that relation across
+owner counts, so it is a property of the two gates rather than a coincidence of one example.
 
 (d) is asserted two ways on purpose. `test_re_gating_appends_rather_than_overwrites` reads the
 rows back. `test_no_sql_path_updates_or_deletes_a_decision` watches the actual SQL a re-gate
@@ -138,6 +146,25 @@ async def _one_unit_per_article(
     for domain in domains:
         article = await _make_article(session, domain=domain, content_hash=content_hash)
         units.append(await _make_unit(session, [article]))
+    return await _make_story(session, units)
+
+
+async def _wire_collapse_story(session) -> Story:
+    """The spec's collapse fixture: 1 AP article + 3 same-content_hash republications.
+
+    Four tier-1 articles from four pre-collapse owner groups, one independent outlet post-collapse.
+    Shared by the boolean-gate test and the score test, because the whole point is that both gates
+    are handed the same evidence and must reach the same verdict from it.
+    """
+    ap_article = await _make_article(session, domain="apnews.com", content_hash=AP_CONTENT_HASH)
+    units = [await _make_unit(session, [ap_article])]
+    units += [
+        await _make_unit(
+            session,
+            [await _make_article(session, domain=domain, content_hash=AP_CONTENT_HASH)],
+        )
+        for domain in REPUBLISHERS
+    ]
     return await _make_story(session, units)
 
 
@@ -318,23 +345,12 @@ async def test_wire_copies_collapse_to_one_owner(db_session):
     """
     assert "apnews.com" in WIRE_SERVICE_DOMAINS, "the fixture depends on the registry"
 
-    ap_article = await _make_article(
-        db_session, domain="apnews.com", content_hash=AP_CONTENT_HASH
-    )
-    units = [await _make_unit(db_session, [ap_article])]
-    units += [
-        await _make_unit(
-            db_session,
-            [await _make_article(db_session, domain=domain, content_hash=AP_CONTENT_HASH)],
-        )
-        for domain in REPUBLISHERS
-    ]
-    story = await _make_story(db_session, units)
-    await db_session.commit()
-
     # The pre-collapse world: four outlets, four distinct owners, the gate passes.
     pre_collapse = {get_owner_group(domain) for domain in ["apnews.com", *REPUBLISHERS]}
     assert len(pre_collapse) == 4, f"fixture must be 4 owners pre-collapse, got {pre_collapse}"
+
+    story = await _wire_collapse_story(db_session)
+    await db_session.commit()
 
     result = await apply_tier1_gate(db_session, story_ids=[story.id])
     assert result == {"queued": 0, "blocked": 1}, "four outlets carrying one story is one outlet"
@@ -408,6 +424,124 @@ async def test_identical_content_without_a_wire_origin_does_not_collapse(db_sess
     assert all(a["wire_origin"] is None for a in row.contributing_articles)
     stored = await _reload(db_session, story.id)
     assert "wire cop" not in stored.gate_reason
+
+
+# =====================================================================================
+# (e) the score and the boolean gate measure the same independence
+# =====================================================================================
+
+
+@pytest.mark.asyncio
+async def test_score_agrees_with_the_boolean_gate_on_independence(db_session):
+    """The collapse fixture scores below threshold, so the dynamic gate blocks it too.
+
+    Before this, the same story scored 75 and passed while the boolean gate blocked it: the score's
+    factors read the raw tier-1 article count, so four copies of one wire story counted as four
+    corroborating voices. With the dynamic gate enabled the score *is* the admission decision, so
+    that split admitted exactly what the boolean gate holds out. Both gates now count the
+    post-collapse owner histogram, and the breakdown records which count they were given.
+    """
+    settings = get_settings()
+    original = settings.dynamic_gate_enabled
+    settings.dynamic_gate_enabled = True
+    try:
+        story = await _wire_collapse_story(db_session)
+        await db_session.commit()
+
+        # The boolean gate, on the same evidence: one independent outlet, blocked.
+        assert await apply_tier1_gate(db_session, story_ids=[story.id]) == {
+            "queued": 0,
+            "blocked": 1,
+        }
+
+        result = await apply_dynamic_gate(db_session, [story.id])
+        assert result == {"queued": 0, "blocked": 1}, "the score must not admit what the gate held"
+
+        (score_row,) = [
+            row for row in await _decisions(db_session, story.id) if row.gate_name == "dynamic"
+        ]
+        breakdown = score_row.breakdown
+        # One owner, four articles: 0 baseline + 10 corroboration + 5 owners, nothing else on this
+        # fixture (no tier3/4 units to be viral, no ALLEGATION claim).
+        assert breakdown["independent_owners"] == 1
+        assert breakdown["tier_baseline"] == 0
+        assert breakdown["corroboration"] == 10
+        assert breakdown["base_score"] == score_row.score == 15
+        assert score_row.score < score_row.pass_threshold == 50
+        assert score_row.passed is False
+        assert breakdown["passes"] is False
+
+        # The row reports four tier-1 articles but counted one owner, and the breakdown says so:
+        # the raw count is reporting, the owner count is the decision.
+        assert score_row.tier1_unit_count == 4
+        assert score_row.distinct_owners == 1
+        assert "independent_owners=1" in (await _reload(db_session, story.id)).gate_reason
+    finally:
+        settings.dynamic_gate_enabled = original
+
+
+@pytest.mark.asyncio
+async def test_independently_corroborated_story_still_scores_above_threshold(db_session):
+    """The change is a narrowing of the collapse case only: a real 2-owner story still passes."""
+    settings = get_settings()
+    original = settings.dynamic_gate_enabled
+    settings.dynamic_gate_enabled = True
+    try:
+        story = await _one_unit_per_article(db_session, ["bbc.com", "theguardian.com", "npr.org"])
+        await db_session.commit()
+
+        result = await apply_dynamic_gate(db_session, [story.id])
+        assert result == {"queued": 1, "blocked": 0}
+
+        (row,) = await _decisions(db_session, story.id)
+        assert row.gate_name == "dynamic"
+        assert row.passed is True
+        assert row.distinct_owners == 3
+        assert row.breakdown["independent_owners"] == 3
+        # 40 baseline + 30 corroboration (capped) + 15 owners.
+        assert row.breakdown["base_score"] == row.score == 85
+        assert row.score >= row.pass_threshold
+    finally:
+        settings.dynamic_gate_enabled = original
+
+
+@pytest.mark.asyncio
+async def test_score_agrees_with_the_boolean_gate_across_owner_counts(db_session):
+    """One table of the two gates over the same evidence, for every owner count the gate sees.
+
+    Pinned as a relation rather than as scattered examples: the score must be `>= threshold` exactly
+    when the boolean gate passes, so neither gate can admit a story the other holds out. The one
+    documented exception is harm_level == 'high', which raises the score's bar to 70 by design
+    (GRAND_PLAN §3) and is not exercised by these fixtures.
+    """
+    settings = get_settings()
+    original = settings.dynamic_gate_enabled
+    settings.dynamic_gate_enabled = True
+    try:
+        for domains, expect_queued in (
+            (["apnews.com"], False),                                  # 1 owner, 1 unit
+            (["bbc.com", "bbc.com", "bbc.com"], False),              # 1 owner, 3 units
+            (["bbc.com", "theguardian.com"], True),                  # 2 owners, 2 units
+            (["bbc.com", "theguardian.com", "npr.org"], True),        # 3 owners, 3 units
+        ):
+            story = await _one_unit_per_article(db_session, domains)
+            await db_session.commit()
+
+            boolean = await apply_tier1_gate(db_session, story_ids=[story.id])
+            dynamic = await apply_dynamic_gate(db_session, [story.id])
+
+            (row,) = [
+                r for r in await _decisions(db_session, story.id) if r.gate_name == "dynamic"
+            ]
+            owners = row.distinct_owners
+            assert owners == len(set(get_owner_group(d) for d in domains))
+            assert boolean == dynamic == (
+                {"queued": 1, "blocked": 0} if expect_queued else {"queued": 0, "blocked": 1}
+            ), f"{len(domains)} unit(s), {owners} owner(s)"
+            assert row.passed is (row.score >= row.pass_threshold)
+            assert row.passed is expect_queued
+    finally:
+        settings.dynamic_gate_enabled = original
 
 
 # =====================================================================================
