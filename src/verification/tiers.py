@@ -152,6 +152,19 @@ TIER2_DOMAINS = {
     "csis.org",
     "who.int",
     "chicagotribune.com",
+    # Regional blind-spot sources added 2026-10-02 (batch-coverage). Each was
+    # enabled in source_registry.py the same day with a live-verified working
+    # feed (measured item counts in the registry comments), which is the
+    # membership rule for this set.
+    "allafrica.com",
+    "un.org",
+    "scmp.com",
+    "rte.ie",
+    "philstar.com",
+    "middleeasteye.net",
+    "trend.az",
+    "premiumtimesng.com",
+    "nation.africa",
     # Disabled (2026-09-28): 0 ok articles across 2-3 runs; circuit breaker trips every run
     # "nytimes.com",
     # "washingtonpost.com",

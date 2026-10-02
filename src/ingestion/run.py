@@ -262,27 +262,34 @@ def build_adapters(
     candidates = candidates + opt_in
 
     selected = []
+    matched_entries = set()
     for adapter in candidates:
         if adapter.name.lower() in wanted:
             selected.append(adapter)
+            matched_entries.add(adapter.name.lower())
             continue
         # SensorAdapter reports per feed, so accept the sensor domain names too.
         if adapter.name == "sensors" and (
             {d for d in get_enabled_sensor_feeds()} & wanted
         ):
             selected.append(adapter)
+            matched_entries |= {d for d in get_enabled_sensor_feeds()} & wanted
             continue
         if isinstance(adapter, RssAdapter):
             from src.ingestion.source_registry import get_enabled_sources_by_tier
             domains = set(get_enabled_sources_by_tier(adapter.tier))
-            if domains & wanted:
-                selected.append(adapter)
+            hit = domains & wanted
+            if hit:
+                # Narrow the adapter to just the requested domains. Selecting
+                # the whole tier adapter for one named domain made
+                # `--sources allafrica.com` poll every tier-2 feed, which reads
+                # as a filtered run in the log but is not one.
+                selected.append(adapter if hit == domains else RssAdapter(adapter.tier, domains=hit))
+                matched_entries |= hit
                 continue
 
-    matched = {a.name.lower() for a in selected}
-    for entry in sorted(wanted):
-        if entry not in matched and entry not in get_enabled_sensor_feeds():
-            print(f"WARNING: --sources entry {entry!r} matched no adapter")
+    for entry in sorted(wanted - matched_entries):
+        print(f"WARNING: --sources entry {entry!r} matched no adapter")
 
     return selected
 
