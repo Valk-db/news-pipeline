@@ -20,11 +20,16 @@ from src.schema.models import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-def make_scalar_mock(obj):
-    """Create a mock result where scalar_one_or_none returns obj (sync method)."""
+def make_first_mock(obj):
+    """Create a mock result where scalars().first() returns obj (sync method).
+
+    compute_harm_level takes the first matching row on purpose: a story
+    routinely has several ALLEGATION claims and several PERSON entities, and
+    the old scalar_one_or_none() raised MultipleResultsFound on exactly those
+    (P0-2). This helper simulates any number of rows by returning the first.
+    """
     mock_result = MagicMock()
-    # scalar_one_or_none is a SYNCHRONOUS method in SQLAlchemy Result
-    mock_result.scalar_one_or_none = MagicMock(return_value=obj)
+    mock_result.scalars.return_value.first.return_value = obj
     return mock_result
 
 
@@ -133,7 +138,7 @@ async def test_compute_harm_level_no_allegation(mock_session, sample_story):
     story = sample_story
 
     # Claim query returns None (no ALLEGATION)
-    claim_result = make_scalar_mock(None)
+    claim_result = make_first_mock(None)
     mock_session.execute = AsyncMock(return_value=claim_result)
 
     result = await compute_harm_level(mock_session, story)
@@ -154,8 +159,8 @@ async def test_compute_harm_level_no_person_entity(mock_session, sample_story_no
     )
     # Second call: CanonicalEntity query returns None (no PERSON)
 
-    claim_result = make_scalar_mock(claim)
-    entity_result = make_scalar_mock(None)
+    claim_result = make_first_mock(claim)
+    entity_result = make_first_mock(None)
     mock_session.execute.side_effect = [claim_result, entity_result]
 
     result = await compute_harm_level(mock_session, story)
@@ -182,12 +187,68 @@ async def test_compute_harm_level_high(mock_session, sample_story_high_harm):
         entity_type="PERSON",
     )
 
-    claim_result = make_scalar_mock(claim)
-    entity_result = make_scalar_mock(person_entity)
+    claim_result = make_first_mock(claim)
+    entity_result = make_first_mock(person_entity)
     mock_session.execute.side_effect = [claim_result, entity_result]
 
     result = await compute_harm_level(mock_session, story)
     assert result == "high"
+
+
+@pytest.mark.asyncio
+async def test_compute_harm_level_multiple_allegations(mock_session, sample_story_high_harm):
+    """P0-2: 2+ ALLEGATION claims must not raise; the first row is enough."""
+    story = sample_story_high_harm
+    person_id = uuid.UUID(story.primary_entities[0])
+
+    claims = [
+        Claim(
+            id=uuid.uuid4(),
+            story_id=story.id,
+            claim_type=ClaimType.ALLEGATION,
+            text="Test allegation one",
+        ),
+        Claim(
+            id=uuid.uuid4(),
+            story_id=story.id,
+            claim_type=ClaimType.ALLEGATION,
+            text="Test allegation two",
+        ),
+    ]
+    person_entity = CanonicalEntity(
+        id=person_id,
+        canonical_name="John Doe",
+        entity_type="PERSON",
+    )
+
+    claim_result = make_first_mock(claims[0])  # first of the two matching rows
+    entity_result = make_first_mock(person_entity)
+    mock_session.execute.side_effect = [claim_result, entity_result]
+
+    assert await compute_harm_level(mock_session, story) == "high"
+
+
+@pytest.mark.asyncio
+async def test_compute_harm_level_multiple_persons(mock_session, sample_story_high_harm):
+    """P0-2: 2+ PERSON entities (Trump-and-Biden story) must not raise."""
+    story = sample_story_high_harm
+
+    claim = Claim(
+        id=uuid.uuid4(),
+        story_id=story.id,
+        claim_type=ClaimType.ALLEGATION,
+        text="Test allegation",
+    )
+    persons = [
+        CanonicalEntity(id=uuid.UUID(eid), canonical_name=f"Person {i}", entity_type="PERSON")
+        for i, eid in enumerate(story.primary_entities)
+    ]
+
+    claim_result = make_first_mock(claim)
+    entity_result = make_first_mock(persons[0])  # first of the two matching rows
+    mock_session.execute.side_effect = [claim_result, entity_result]
+
+    assert await compute_harm_level(mock_session, story) == "high"
 
 
 @pytest.mark.asyncio
@@ -229,9 +290,9 @@ async def test_compute_admission_score_basic(mock_session, sample_story):
     # 1. virality: execute returns empty list
     viral_result = make_result_mock([])
     # 2. harm_level: claim query -> scalar_one_or_none returns None
-    claim_result = make_scalar_mock(None)
+    claim_result = make_first_mock(None)
     # 3. harm_level: entity query -> scalar_one_or_none returns None (no PERSON)
-    entity_result = make_scalar_mock(None)
+    entity_result = make_first_mock(None)
 
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
@@ -272,7 +333,7 @@ async def test_compute_admission_score_harm_high(mock_session, sample_story_high
         claim_type=ClaimType.ALLEGATION,
         text="Test allegation",
     )
-    claim_result = make_scalar_mock(claim)
+    claim_result = make_first_mock(claim)
 
     # 3. harm_level: entity query -> scalar_one_or_none returns PERSON entity
     person_id = uuid.UUID(story.primary_entities[0])
@@ -281,7 +342,7 @@ async def test_compute_admission_score_harm_high(mock_session, sample_story_high
         canonical_name="John Doe",
         entity_type="PERSON",
     )
-    entity_result = make_scalar_mock(person_entity)
+    entity_result = make_first_mock(person_entity)
 
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
@@ -316,9 +377,9 @@ async def test_compute_admission_score_virality(mock_session, sample_story_viral
     )
     viral_result = make_result_mock([unit])
     # 2. harm_level: claim query -> scalar_one_or_none returns None
-    claim_result = make_scalar_mock(None)
+    claim_result = make_first_mock(None)
     # 3. harm_level: entity query -> scalar_one_or_none returns None (no PERSON)
-    entity_result = make_scalar_mock(None)
+    entity_result = make_first_mock(None)
 
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
@@ -342,8 +403,8 @@ async def test_score_counts_independent_owners_not_articles(mock_session, sample
     """
     for distinct_owners, expected_base in ((1, 15), (2, 70), (4, 90)):
         mock_session.execute.side_effect = [
-            make_result_mock([]),            # compute_virality_signal: no tier3/4 units
-            make_scalar_mock(None),          # compute_harm_level: no ALLEGATION claim
+            make_result_mock([]),  # compute_virality_signal: no tier3/4 units
+            make_first_mock(None),  # compute_harm_level: no ALLEGATION claim
         ]
         score, breakdown = await compute_admission_score(
             mock_session, sample_story, distinct_owners
@@ -400,19 +461,19 @@ async def test_apply_dynamic_gate_shadow_mode(mock_session, sample_story):
         # apply_tier1_gate: stories, the same four, with the resolution handed in.
         # compute_admission_score: virality, claim, entity.
         mock_session.execute.side_effect = [
-            *seq(story_rows),          # 1 apply_dynamic_gate: select Story
-            *seq(links),               # 2 recompute: links
-            *seq(articles),            # 3 recompute: load_corroboration articles
-            *seq(story_rows),          # 4 recompute: select Story
-            *seq(batched_rows),        # 5 apply_dynamic_gate: batch fetch units
-            *seq(articles),            # 6 apply_dynamic_gate: load_corroboration articles
-            *seq(story_rows),          # 7 apply_tier1_gate: select Story
-            *seq(links),               # 8 recompute: links
-            *seq(articles),            # 9 recompute: load_corroboration articles
-            *seq(story_rows),          # 10 recompute: select Story
-            *seq(batched_rows),        # 11 apply_tier1_gate: batch fetch units
-            *seq([]),                  # 12 compute_virality_signal
-            make_scalar_mock(None),    # 13 compute_harm_level: no ALLEGATION claim
+            *seq(story_rows),  # 1 apply_dynamic_gate: select Story
+            *seq(links),  # 2 recompute: links
+            *seq(articles),  # 3 recompute: load_corroboration articles
+            *seq(story_rows),  # 4 recompute: select Story
+            *seq(batched_rows),  # 5 apply_dynamic_gate: batch fetch units
+            *seq(articles),  # 6 apply_dynamic_gate: load_corroboration articles
+            *seq(story_rows),  # 7 apply_tier1_gate: select Story
+            *seq(links),  # 8 recompute: links
+            *seq(articles),  # 9 recompute: load_corroboration articles
+            *seq(story_rows),  # 10 recompute: select Story
+            *seq(batched_rows),  # 11 apply_tier1_gate: batch fetch units
+            *seq([]),  # 12 compute_virality_signal
+            make_first_mock(None),  # 13 compute_harm_level: no ALLEGATION claim
         ]
         mock_session.commit = AsyncMock()
 
