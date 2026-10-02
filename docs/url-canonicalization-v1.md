@@ -2,46 +2,55 @@
 
 ## What this is
 
-`url_hash` is both the identity key and the dedup key for an article. Two
-implementations of it exist in this project and they disagree, so the same
-article can produce two different hashes depending on which code path wrote it.
+`url_hash` is both the identity key and the dedup key for an article. When this
+scheme was written there were two implementations of it in the project and they
+disagreed, so the same article could get two different hashes depending on which
+code path wrote the row:
 
   1. The pipeline implementation, `canonicalize_url` in
      `src/utils/trafilatura_extract.py`. This is what `src/ingestion` calls.
-  2. The worker implementation, `canonicalize_url` in
-     `scripts/ingest_gdelt_daily.py`. This is what writes the dev database rows.
+  2. A worker implementation of its own, which lived in
+     `scripts/ingest_gdelt_daily.py` and wrote the dev database rows. That
+     implementation is gone: the script is now a thin scheduler shim that runs
+     `src.ingestion.run` as a subprocess and propagates its exit code
+     (`scripts/ingest_gdelt_daily.py`, module docstring), so it has no URL code
+     at all. Its last version is kept for reference at
+     `.batch-refs/worker-ingest_gdelt_daily.REF.py`, and the comparison table
+     below is measured against that copy.
+
+What survives is the disagreement in the data: rows written before the shim
+replacement carry the old scheme, so the two schemes still have to be told apart
+when reading the table below or backfilling.
 
 This batch added `canonicalize_url_v1`, which is the versioned form of the
-pipeline implementation and the scheme every new writer should converge on.
-`canonicalize_url` is now a thin alias that calls it, so every existing caller
-keeps working and no existing caller changes behaviour outside the rules listed
-below. `compute_url_hash` hashes the v1 form.
+pipeline implementation and the scheme every writer now uses.
+`canonicalize_url` is a thin alias that calls it, so every existing caller keeps
+working and no existing caller changes behaviour outside the rules listed below.
+`compute_url_hash` hashes the v1 form.
 
 The function is pure. A string goes in and a string comes out, with no network,
 no database, and no clock. The full specification is the numbered rule list in
 the docstring of `canonicalize_url_v1`, and `tests/test_url_canonicalization_v1.py`
 pins it with 99 vectors from real feed URLs.
 
-## Which scheme the dev database rows use today
+## Which scheme the rows in the dev database use today
 
-The dev rows use the worker scheme, which is the seed scheme. The worker states
-this in its own header comment and in the comment above its `canonicalize_url`,
-and its `url_hash_of` is a plain sha256 over the seed style canonical URL with
-no lowercasing. The rows written by the daily GDELT job and the rows written by
-the original seed are therefore the same scheme as each other and a different
-scheme from the pipeline.
+Measured against dev (`news-pipeline-dev`, 2026-10-02): 33 rows in
+`raw_articles`, all fetched 2026-10-01. Recomputing both schemes over those rows:
+**26 match the old worker scheme** (sha256 over the seed-style canonical URL, no
+lowercasing) and **9 match u1**. So the table is mixed, not uniformly legacy:
+rows the pipeline wrote already hash under u1, the older worker-written rows do
+not, and the unique index on `url_hash` does not catch a collision between them
+because the values differ.
 
-So today, an article ingested by the pipeline and the same article ingested by
-the daily worker land in `raw_articles` as two rows under two `url_hash` values,
-and the unique index on `url_hash` does not catch it because the values differ.
+No row has `canonical_url_v1` or `url_hash_v1` populated and `url_aliases` is
+empty, i.e. `scripts/backfill_url_hash_v1.py` has not been run against dev yet.
 
 ## What was deliberately not changed
 
   * `raw_articles.url` was not rewritten.
   * `raw_articles.url_hash` was not rewritten, for any row.
   * The unique index on `raw_articles.url_hash` was not dropped or relaxed.
-  * `scripts/ingest_gdelt_daily.py` was not edited. It belongs to the ingest
-    workstream.
 
 The reason is the transparency log. `src/verification/revisions.py` appends a
 payload containing `raw_articles.url`, plus the article id, the content hashes,
@@ -71,13 +80,13 @@ decision for the ingest workstream rather than a database error.
 `url_aliases` maps each legacy `url_hash` onto its u1 identity, so a lookup by
 an old hash can still be answered and a lookup by a u1 hash can be traced back.
 
-## Behavioral differences between the worker scheme and u1
+## Behavioral differences between the old worker scheme and u1
 
 Every row below was produced by running both implementations over the same input.
 The worker column is the reference copy at
-`.batch-refs/worker-ingest_gdelt_daily.REF.py`, which is byte for byte the worker
-that writes the dev rows (the worker itself lives uncommitted in the main
-worktree and is owned by the ingest workstream).
+`.batch-refs/worker-ingest_gdelt_daily.REF.py`, the last version of a worker that
+had its own canonicalizer. It is kept as a reference for reading legacy rows; no
+code in the repository calls it.
 
 | Behavior | Worker scheme today | Scheme u1 | Same article, different hash |
 | --- | --- | --- | --- |
@@ -125,37 +134,27 @@ archive. A later scheme, u2, should drop the global lowercasing. That change
 alters every hash, so it needs its own column set and its own signed log epoch,
 the same way u1 does now.
 
-## What the ingest workstream still has to change in the worker
+## What is still open
 
-None of this has been done. It is listed so the ingest batch can pick it up.
+The worker items this list used to carry (replace its canonicalizer, swap its
+hash function, teach it the u1 columns) are moot: that worker no longer exists.
+What is left:
 
-1. Apply `20261001000300_url_canonicalization_v1.sql` before anything writes a
-   u1 column, since the worker writes `raw_articles` rows.
-2. Replace the worker `canonicalize_url` body with a call into
-   `src.utils.trafilatura_extract.canonicalize_url_v1`, or port the rule list
-   into the worker and pin it against the same vectors. A call into the pipeline
-   module is preferred, because one implementation is the only way the test
-   vectors keep meaning anything for both writers. The worker already imports
-   from `src.ingestion`, so the import path is established.
-3. Replace `url_hash_of` with a sha256 over `canonicalize_url_v1(url).lower()`
-   encoded UTF8. Keeping the worker hash as it is today would leave the two
-   writers disagreeing about the one thing that matters.
-4. Make the worker write `canonical_url_v1` and `url_hash_v1` in its
-   `raw_articles` insert, alongside the existing `url` and `url_hash`. The
-   existing two columns stay exactly as they are, for the log.
-5. Make the phase 2 pre check consult both columns. `db.existing_hashes`
-   currently filters on `url_hash` only, so a second pass after the switch would
-   insert everything again as new rows unless it also filters on `url_hash_v1`.
-6. Extend the checkpoint and `processed_url_hashes` handling, or clear the
-   checkpoint on the switch. The checkpoint stores legacy hashes, so after the
-   switch every URL looks unprocessed and the run inserts duplicates.
-7. Record the alias rows for new inserts, or accept that `url_aliases` covers
-   only the backfilled rows until the next backfill pass.
-8. Decide what happens to the legacy rows that collapse under u1. The backfill
+1. Run `scripts/backfill_url_hash_v1.py` against the databases that need it. On dev
+   (2026-10-02) the migration is applied — the columns and `url_aliases` exist —
+   but 0 of 33 `raw_articles` rows have `url_hash_v1` set, so the backfill has
+   never been run there.
+2. Decide whether the live pipeline should write `canonical_url_v1`/`url_hash_v1`
+   on insert. It currently does not: `src/ingestion/rss_evidence.py` leaves both
+   deliberately unset, on the stated ground that the backfill owns those columns.
+   Until one of those two happens, new rows keep arriving with a null
+   `url_hash_v1`.
+3. Decide what happens to the legacy rows that collapse under u1. The backfill
    reports the count and prints examples, and it merges nothing. Only after that
    decision can `url_hash_v1` get its unique constraint.
-9. Leave `scripts/ingest_gdelt_daily.py` out of the verification path here.
-   It belongs to the ingest workstream and it was not edited by this batch.
+4. `url_aliases` only covers rows a backfill pass has seen, so a lookup by a
+   legacy hash for a row written after the last backfill finds nothing until the
+   next pass.
 
 ## Known limits of u1, recorded on purpose
 
@@ -164,7 +163,7 @@ None of this has been done. It is listed so the ingest batch can pick it up.
     they are, because resolving them needs a network fetch and this function does
     no network. The fetch layer already follows redirects with
     `follow_redirects=True`, so the fix is to feed the final URL back through
-    u1 in the worker, not to make this function impure.
+    u1, not to make this function impure.
   * `rel=canonical` is out of scope. It is a fetch layer concern, since it needs
     the fetched page.
   * A bare `src` query parameter is kept, while the old pipeline list dropped
@@ -174,9 +173,6 @@ None of this has been done. It is listed so the ingest batch can pick it up.
   * An `output=1` parameter is assumed to be an AMP marker. On a site where
     `output` is content, u1 drops real data. No such site is known in the feeds,
     and the parameter list in rule 26 is where to fix it.
-  * The pipeline has a Rust port, `pipeline-rs/src/utils/trafilatura_extract.rs`,
-  which still carries the old rule set. It is outside the file set this batch owns and it
-  was not changed. If it writes `url_hash`, it needs the same convergence work.
   * Duplicate slashes inside a path are preserved, so `/a//b` and `/a/b` stay
     distinct. Collapsing them would merge paths that some routers treat
     differently.

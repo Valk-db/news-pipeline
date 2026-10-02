@@ -17,16 +17,17 @@ Current pipeline (see `README.md` for the full picture):
 ```
 GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → Curation UI
                               ↓
-                        Supabase/Neon (Postgres + pgvector)
+                        Supabase/Neon (Postgres)
 ```
 
-- **Ingestion**: 8 tier-1 + 11 tier-2 RSS, GDELT (disabled), Reddit tier-3
-  (`src/ingestion/source_registry.py`)
+- **Ingestion**: 8 tier-1 + 4 enabled tier-2 RSS (12 configured), sensors, Reddit tier-3,
+  GDELT disabled in the workflow (`src/ingestion/source_registry.py`)
 - **Verification**: MinHash near-dup clustering → `ReportingUnit`
   (`src/verification/units.py`, `OWNERSHIP_GROUPS`)
 - **Grouping**: entity-Jaccard → `Story`, 48h window (`src/verification/stories.py`)
-- **Gate**: `Story` promoted only with ≥2 tier-1 reporting units from ≥2 distinct
-  owner groups — the defamation-safe threshold
+- **Gate**: `Story` promoted only with ≥2 tier-1 articles from ≥2 distinct owner groups — the
+  defamation-safe threshold (note: the count is over articles, not reporting units, so one unit
+  holding two outlets' copies of a wire story passes on its own; see `README.md` §Gate)
 - **Already there and underused**: `cluster_viewpoints()` in `stories.py` already
   does LLM stance-labeling and sub-clusters stories by viewpoint. `CorrectionRecord`,
   `SourceReliabilitySnapshot`, `EventGeometry`/`EventLayer`/`Event` all exist in
