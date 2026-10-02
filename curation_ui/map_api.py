@@ -36,6 +36,10 @@ from curation_ui.discovery import (
 from curation_ui.events import _event_conditions, _event_feature
 from src.schema.models import Event, RawArticle, ReportingUnit, Story, StoryUnitLink
 from src.shared.database import get_session
+from src.verification.event_identity import (
+    CANONICAL_EVENT_ID,
+    cluster_corroboration,
+)
 
 router = APIRouter()
 
@@ -287,10 +291,15 @@ async def _collect_top_stories(
         if not search_order:
             return []
 
+    # One count per pin: a story's rows are grouped by the canonical event they report, so
+    # two rows for one occurrence count once, exactly as the globe draws it once. The
+    # window still filters on the story's own rows, so collapsing events never removes a
+    # story from the list -- the story reported something that happened in the window, and
+    # a shared pin is not a reason to stop saying so.
     event_stmt = (
         select(
             Event.story_id,
-            func.count(Event.id).label("event_count"),
+            func.count(func.distinct(CANONICAL_EVENT_ID)).label("event_count"),
             func.max(Event.start_time).label("latest_at"),
         )
         .group_by(Event.story_id)
@@ -523,13 +532,14 @@ async def get_map_replay(
         stmt = stmt.order_by(Event.start_time.asc(), Event.id.asc()).limit(effective_limit + 1)
         result = await session.execute(stmt)
         events = list(result.scalars().all())
+        corroboration = await cluster_corroboration(session, events)
 
     truncated = len(events) > effective_limit
     events = events[:effective_limit]
 
     return {
         "type": "FeatureCollection",
-        "features": [_event_feature(e) for e in events],
+        "features": [_event_feature(e, corroboration.get(e.id)) for e in events],
         "start": start_dt.isoformat() if start_dt else None,
         "end": end_dt.isoformat() if end_dt else None,
         "count": len(events),

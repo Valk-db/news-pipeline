@@ -27,8 +27,8 @@ the only kind this design trusts.
 Two properties are load-bearing:
 
 * **analyzer_version names the stage that CREATED the row, not the last one to touch it.**
-  `canonical_entities` is created by entity canonicalization (`cluster/v1`) and then mutated in
-  place by the geocoder; the row keeps `cluster/v1`, because that is what decides whether the
+  `canonical_entities` is created by entity canonicalization (the `cluster` version) and then
+  mutated in place by the geocoder; the row keeps that version, because it is what decides whether the
   row itself is stale. The geocoder's effect on a row is recorded by recording it on the row
   the geocoder determines -- `events`, which carries `geocode/v1` because an Event's only
   computed content is a point that came out of the geocoder.
@@ -63,7 +63,15 @@ DEDUPE_VERSION = "dedupe/v1"
 
 # Entity canonicalization (src/utils/ner.py): surface forms clustered onto canonical ids,
 # plus the alias rows that make a canonical entity resolvable.
-CLUSTER_VERSION = "cluster/v1"
+#
+# v2 replaced the alias generator (which minted every bare word of a multi-word name, so
+# "house" was an alias of "White House" and "attacker" an alias of "Flydubai attacker")
+# and the substring fallback in resolve() with normalization that folds the variations the
+# corpus actually contains -- administrative tails, leading articles, titles, possessives,
+# accents -- plus a surname index that only answers where one canonical name ends with that
+# surname. Rows written by v1 carry generated aliases that v2 would never produce, so they
+# are stale by definition: recompute the cluster stage rather than trusting them.
+CLUSTER_VERSION = "cluster/v2"
 
 # Story grouping (src/verification/stories.py): which reporting units cover one event, the
 # story row and the story_unit_links edges.
@@ -78,7 +86,13 @@ VIEWPOINT_VERSION = "viewpoint/v1"
 # The geocoder (src/enrichment/geocoder.py) and the rows whose content is a geocoded point:
 # `events`. Bumping this says "every point in the database may now be wrong", which is a
 # different and much more expensive statement than bumping any other constant here.
-GEOCODE_VERSION = "geocode/v1"
+#
+# v2 is not a change of point. The geocoder is untouched; what changed is what a point
+# *means* in a set -- a point now carries a canonical identity, so several rows for one
+# occurrence read as one event with all of their corroboration, instead of as several
+# single-sourced events. Stale events therefore need the geocode stage again, which rebuilds
+# the rows and re-runs the identity pass in the same transaction.
+GEOCODE_VERSION = "geocode/v2"
 
 # Vector embeddings (src/enrichment/embedding_service.py and the writers that persist them).
 # The embedding model name is already its own column; this version covers the pipeline logic
