@@ -287,9 +287,17 @@ async def test_score_cannot_disagree_with_the_gate_on_independence(db_session):
             dynamic = await apply_dynamic_gate(db_session, [story.id])
             expected = {"queued": 1, "blocked": 0} if expect_queued else {
                 "queued": 0, "blocked": 1}
-            assert boolean == dynamic == expected, (
+            # apply_tier1_gate returns {"queued", "blocked"}; apply_dynamic_gate adds "errors"
+            # (P0 deferred (a): one bad story must not cost the run). The property under test is
+            # that the two gates agree, so compare the counters they share and check "errors"
+            # separately rather than comparing whole dicts.
+            assert boolean == expected, (
+                f"{len(domains_per_unit)} unit(s): boolean={boolean} expected={expected}"
+            )
+            assert {k: dynamic[k] for k in expected} == expected, (
                 f"{len(domains_per_unit)} unit(s): boolean={boolean} dynamic={dynamic}"
             )
+            assert dynamic["errors"] == 0
 
             (row,) = [
                 r for r in await _decisions(db_session, story.id)

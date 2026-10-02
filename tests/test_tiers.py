@@ -2,6 +2,8 @@
 
 import uuid
 
+import pytest
+
 from src.verification.tiers import TIER1_DOMAINS, TIER2_DOMAINS, classify_source_tier, evaluate_tier1_gate
 from src.verification.units import get_owner_group
 from src.schema.models import SourceTier
@@ -131,3 +133,93 @@ class TestEvaluateTier1Gate:
         ]
         should_queue, reason = evaluate_tier1_gate(units_same)
         assert should_queue is False
+
+class TestGateReasonCountsUnits:
+    # P0 deferred (b), 2026-10-02: Story.tier1_unit_count is the raw tier-1 *article* volume
+    # (summed per-unit article histograms), but the gate decides on distinct reporting units.
+    # The "Passed gate:" sentence must print the unit count the gate counted, not the
+    # article volume -- a unit carrying two tier-1 articles is one unit's worth of
+    # corroboration, and the sentence must not claim two.
+
+    async def _article(self, session, domain):
+        from datetime import datetime, timezone
+        from src.schema.models import RawArticle
+
+        article = RawArticle(
+            id=uuid.uuid4(),
+            url=f"https://{domain}/u/{uuid.uuid4().hex[:8]}",
+            url_hash=uuid.uuid4().hex,
+            title=f"Report from {domain}",
+            body_text="Body.",
+            source_domain=domain,
+            source_tier=SourceTier.TIER1,
+            published_at=datetime.now(timezone.utc),
+        )
+        session.add(article)
+        await session.flush()
+        return article
+
+    async def _unit(self, session, articles):
+        from datetime import datetime, timezone
+        from src.schema.models import ReportingUnit
+
+        source_tiers, owner_groups, tier1_owner_groups = {}, {}, {}
+        for article in articles:
+            owner = get_owner_group(article.source_domain)
+            source_tiers["tier1"] = source_tiers.get("tier1", 0) + 1
+            owner_groups[owner] = owner_groups.get(owner, 0) + 1
+            tier1_owner_groups[owner] = tier1_owner_groups.get(owner, 0) + 1
+        unit = ReportingUnit(
+            id=uuid.uuid4(),
+            day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+            representative_article_id=articles[0].id,
+            article_count=len(articles),
+            source_tiers=source_tiers,
+            owner_groups=owner_groups,
+            tier1_owner_groups=tier1_owner_groups,
+        )
+        session.add(unit)
+        await session.flush()
+        for article in articles:
+            article.reporting_unit_id = unit.id
+        return unit
+
+    async def _story(self, session, units):
+        from datetime import datetime, timezone
+        from src.schema.models import Story, StoryUnitLink
+
+        story = Story(
+            id=uuid.uuid4(),
+            day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+            primary_entities=[],
+            status=Story.Status.PENDING,
+        )
+        session.add(story)
+        await session.flush()
+        for unit in units:
+            session.add(StoryUnitLink(story_id=story.id, unit_id=unit.id))
+        await session.flush()
+        await session.commit()
+        return story
+
+    @pytest.mark.asyncio
+    async def test_passed_sentence_reports_units_not_articles(self, db_session):
+        from src.verification.tiers import apply_tier1_gate
+
+        # One unit carrying TWO tier-1 articles (two owners), plus a second unit with one:
+        # 2 units, 3 distinct owners, but 3 tier-1 articles.
+        unit1 = await self._unit(
+            db_session,
+            [await self._article(db_session, d) for d in ("bbc.com", "theguardian.com")],
+        )
+        unit2 = await self._unit(db_session, [await self._article(db_session, "npr.org")])
+        story = await self._story(db_session, [unit1, unit2])
+
+        result = await apply_tier1_gate(db_session, [story.id])
+        assert result == {"queued": 1, "blocked": 0}
+
+        await db_session.refresh(story)
+        # The stored counter is still the raw article volume...
+        assert story.tier1_unit_count == 3
+        # ...but the sentence reports the units the gate decided on.
+        assert story.gate_reason == "Passed gate: 2 tier-1 units, 3 distinct owners"

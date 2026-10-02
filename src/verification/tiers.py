@@ -39,7 +39,7 @@ async def recompute_story_counters(
     corroboration a story has, only how many independent owners it counts for.
 
     `unit_exclusions` maps a story id to unit ids that story must not count -- the gate computes
-    it for viewpoint children (see _viewpoint_child_exclusions): a child is a slice of its
+    it for viewpoint children (see viewpoint_child_exclusions): a child is a slice of its
     parent, and units the slice shares with the parent already counted toward the parent's gate.
     Callers that have no exclusions pass nothing and get the historical behavior.
     """
@@ -387,7 +387,9 @@ def record_gate_decision(
     readable, which is the whole point of a table rather than a column on `stories`.
 
     * gate_name          -- 'tier1' for the boolean rule, 'dynamic' for the admission score.
-    * tier1_unit_count   -- the story's own counter, i.e. exactly what `gate_reason` reports.
+    * tier1_unit_count   -- the story's raw tier-1 article volume (summed per-unit article
+      histograms), kept for reporting, NOT the unit count `gate_reason` prints. The sentence
+      counts distinct unit ids off the same pair list evaluate_tier1_gate decided on.
     * distinct_owners    -- len(owner_groups), counted post wire-collapse. Equal to
       `stories.distinct_owners` because both come from the same Corroboration.
     * owner_groups       -- the post-collapse owner histogram the gate counted.
@@ -462,7 +464,7 @@ def evaluate_tier1_gate(unit_owner_pairs: List[Tuple[uuid.UUID, str]]) -> Tuple[
     return True, "Gate passed"
 
 
-async def _viewpoint_child_exclusions(
+async def viewpoint_child_exclusions(
     session: AsyncSession, stories: Iterable[Story]
 ) -> dict[uuid.UUID, set[uuid.UUID]]:
     """Unit ids each viewpoint child shares with its parent, keyed by child story id.
@@ -544,7 +546,7 @@ async def apply_tier1_gate(
 
     # Viewpoint children are gated on child-exclusive units only: units a slice shares with its
     # parent already counted toward the parent's gate, so the child must not count them again.
-    unit_exclusions = await _viewpoint_child_exclusions(session, stories)
+    unit_exclusions = await viewpoint_child_exclusions(session, stories)
 
     # First, recompute all counters from current StoryUnitLinks
     story_id_list = [s.id for s in stories]
@@ -586,8 +588,14 @@ async def apply_tier1_gate(
         # Update story status and gate_reason (counters already updated by recompute_story_counters)
         if should_queue:
             # Gate passes: keep PENDING (awaiting curator approval)
+            # The sentence counts the units the gate decided on, not the raw article volume:
+            # story.tier1_unit_count sums each unit's stored tier-1 article histogram, so a
+            # unit with two tier-1 articles would otherwise print as "2 tier-1 units" after
+            # passing on one unit. The distinct unit ids off the pair list are exactly what
+            # evaluate_tier1_gate's ">= 2 tier-1 units" check counted.
+            tier1_units = len({unit_id for unit_id, _ in tier_owner_pairs})
             story.status = Story.Status.PENDING
-            story.gate_reason = f"Passed gate: {story.tier1_unit_count} tier-1 units, {story.distinct_owners} distinct owners"
+            story.gate_reason = f"Passed gate: {tier1_units} tier-1 units, {story.distinct_owners} distinct owners"
             queued += 1
         else:
             story.status = Story.Status.BLOCKED
@@ -762,6 +770,53 @@ async def compute_admission_score(
     return final_score, breakdown
 
 
+def _record_gate_error(
+    session: AsyncSession,
+    story: Story,
+    exc: Exception,
+    *,
+    decided_elsewhere: bool = False,
+) -> None:
+    """Record one story's gate failure on the story and in `status_log`, then let the loop go on.
+
+    A story that raises mid-gate (a malformed `primary_entities` entry reaches
+    `uuid.UUID()` in compute_harm_level, a bad row reaches a numeric cast) used to take the
+    whole run down with it: the exception escaped before the loop's single `session.commit()`,
+    so every other story in the batch lost its decision too. The failure is contained here
+    instead, where it is visible -- the story's own `gate_reason` and a `gate_error` row in
+    `status_log` -- and the story's status is deliberately left as it was, because a story this
+    gate never decided must not look decided.
+
+    `decided_elsewhere` is True in shadow mode, where apply_tier1_gate has already committed the
+    story's real decision. There the dynamic score is a measurement, not a verdict, so the
+    tier-1 sentence is kept and the failure is appended to it rather than replacing it.
+    """
+    detail = f"{type(exc).__name__}: {exc}"
+    if decided_elsewhere:
+        prior = story.gate_reason or "no gate decision recorded"
+        story.gate_reason = (
+            f"{prior} | Dynamic score not computed, story left as the tier-1 gate decided it "
+            f"({detail})"
+        )
+    else:
+        story.gate_reason = f"Gate error: not decided this run ({detail})"
+
+    session.add(
+        StatusLog(
+            phase="gate_error",
+            status="error",
+            details={
+                "story_id": str(story.id),
+                "gate": "dynamic",
+                "shadow_only": decided_elsewhere,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "status_left_unchanged": story.status.value,
+            },
+        )
+    )
+
+
 async def apply_dynamic_gate(
     session: AsyncSession,
     story_ids: Optional[List[uuid.UUID]] = None,
@@ -779,7 +834,13 @@ async def apply_dynamic_gate(
     breakdown["shadow"] = True. The shadow row's `passed` is therefore the dynamic gate's own
     verdict, which is the thing worth calibrating against, and the flag is what says it was not
     applied -- so "which stories would the score have flipped" is one query.
+
+    One story raising mid-gate does not end the run: the per-story body of each loop is guarded
+    (see _record_gate_error), so the failure is recorded on that story and every other story
+    still gets decided and committed. The returned dict carries `errors` for the stories skipped
+    that way; `queued` and `blocked` keep their old meaning and only count decided stories.
     """
+    errors = 0
     settings = get_settings()
 
     # Always fetch stories and recompute counters first (needed for both modes)
@@ -793,7 +854,7 @@ async def apply_dynamic_gate(
     story_id_list = [s.id for s in stories]
     # Viewpoint children are gated on child-exclusive units only: units a slice shares with its
     # parent already counted toward the parent's gate, so the child must not count them again.
-    unit_exclusions = await _viewpoint_child_exclusions(session, stories)
+    unit_exclusions = await viewpoint_child_exclusions(session, stories)
     if story_id_list:
         await recompute_story_counters(session, story_id_list, unit_exclusions=unit_exclusions)
 
@@ -827,63 +888,69 @@ async def apply_dynamic_gate(
 
         # Compute admission scores for comparison logging
         for story in stories:
-            # The score counts independent owners; the raw tier-1 article count is read only to
-            # record on the decision row, which keeps reporting the counter `gate_reason` shows.
-            tier1_unit_count = story.tier1_unit_count
-            distinct_owners = story.distinct_owners
+            try:
+                # The score counts independent owners; the raw tier-1 article count is read only
+                # to record on the decision row, which keeps reporting the counter `gate_reason`
+                # shows.
+                tier1_unit_count = story.tier1_unit_count
+                distinct_owners = story.distinct_owners
 
-            # The boolean gate and the score decide on the same pair list, so the calibration
-            # compares one evidence set, not two.
-            units = story_units.get(story.id, [])
-            pairs = corroboration.tier1_pairs(units)
-            bool_passes, bool_reason = evaluate_tier1_gate(pairs)
-            score, breakdown = await compute_admission_score(
-                session,
-                story,
-                distinct_owners,
-                tier1_units=len({unit_id for unit_id, _ in pairs}),
-            )
-            score_passes = breakdown["passes"]
+                # The boolean gate and the score decide on the same pair list, so the calibration
+                # compares one evidence set, not two.
+                units = story_units.get(story.id, [])
+                pairs = corroboration.tier1_pairs(units)
+                bool_passes, bool_reason = evaluate_tier1_gate(pairs)
+                score, breakdown = await compute_admission_score(
+                    session,
+                    story,
+                    distinct_owners,
+                    tier1_units=len({unit_id for unit_id, _ in pairs}),
+                )
+                score_passes = breakdown["passes"]
 
-            # Log comparison to StatusLog for queryable calibration data
-            comparison = {
-                "story_id": str(story.id),
-                "score": score,
-                "breakdown": breakdown,
-                "boolean_gate": {
-                    "passes": bool_passes,
-                    "reason": bool_reason,
-                },
-                "dynamic_gate": {
-                    "passes": score_passes,
-                    "threshold": breakdown["pass_threshold"],
-                },
-                "agreement": bool_passes == score_passes,
-            }
-            log = StatusLog(
-                phase="gate_shadow",
-                status="ok",
-                details=comparison,
-            )
-            session.add(log)
+                # Log comparison to StatusLog for queryable calibration data
+                comparison = {
+                    "story_id": str(story.id),
+                    "score": score,
+                    "breakdown": breakdown,
+                    "boolean_gate": {
+                        "passes": bool_passes,
+                        "reason": bool_reason,
+                    },
+                    "dynamic_gate": {
+                        "passes": score_passes,
+                        "threshold": breakdown["pass_threshold"],
+                    },
+                    "agreement": bool_passes == score_passes,
+                }
+                log = StatusLog(
+                    phase="gate_shadow",
+                    status="ok",
+                    details=comparison,
+                )
+                session.add(log)
 
-            # The score that was computed but not applied, recorded as its own decision row so the
-            # calibration comparison survives in the audit trail and not only in status_log.
-            record_gate_decision(
-                session,
-                story.id,
-                "dynamic",
-                passed=score_passes,
-                tier1_unit_count=tier1_unit_count,
-                corroboration=corroboration,
-                units=units,
-                score=score,
-                pass_threshold=breakdown["pass_threshold"],
-                breakdown={**breakdown, "shadow": True},
-            )
+                # The score that was computed but not applied, recorded as its own decision row
+                # so the calibration comparison survives in the audit trail and not only in
+                # status_log.
+                record_gate_decision(
+                    session,
+                    story.id,
+                    "dynamic",
+                    passed=score_passes,
+                    tier1_unit_count=tier1_unit_count,
+                    corroboration=corroboration,
+                    units=units,
+                    score=score,
+                    pass_threshold=breakdown["pass_threshold"],
+                    breakdown={**breakdown, "shadow": True},
+                )
+            except Exception as exc:  # noqa: BLE001 - one story must not end the run
+                _record_gate_error(session, story, exc, decided_elsewhere=True)
+                errors += 1
 
         await session.commit()
-        return gate_result
+        return {**gate_result, "errors": errors}
 
     # Build query - if story_ids is not None, get those (any status), else get PENDING
     if story_ids is not None:
@@ -898,7 +965,7 @@ async def apply_dynamic_gate(
 
     # Viewpoint children are gated on child-exclusive units only: units a slice shares with its
     # parent already counted toward the parent's gate, so the child must not count them again.
-    unit_exclusions = await _viewpoint_child_exclusions(session, stories)
+    unit_exclusions = await viewpoint_child_exclusions(session, stories)
 
     # First, recompute all counters from current StoryUnitLinks
     story_id_list = [s.id for s in stories]
@@ -925,51 +992,58 @@ async def apply_dynamic_gate(
     )
 
     for story in stories:
-        # Use already-computed counters (from recompute_story_counters). The score below counts
-        # distinct_owners only; tier1_unit_count rides along on the decision row, not the score.
-        tier1_unit_count = story.tier1_unit_count
-        distinct_owners = story.distinct_owners
-        units = story_units.get(story.id, [])
+        try:
+            # Use already-computed counters (from recompute_story_counters). The score below
+            # counts distinct_owners only; tier1_unit_count rides along on the decision row, not
+            # the score.
+            tier1_unit_count = story.tier1_unit_count
+            distinct_owners = story.distinct_owners
+            units = story_units.get(story.id, [])
 
-        # Compute admission score
-        score, breakdown = await compute_admission_score(
-            session,
-            story,
-            distinct_owners,
-            tier1_units=len({unit_id for unit_id, _ in corroboration.tier1_pairs(units)}),
-        )
+            # Compute admission score
+            score, breakdown = await compute_admission_score(
+                session,
+                story,
+                distinct_owners,
+                tier1_units=len({unit_id for unit_id, _ in corroboration.tier1_pairs(units)}),
+            )
 
-        # Determine pass/fail
-        passes = breakdown["passes"]
+            # Determine pass/fail
+            passes = breakdown["passes"]
 
-        # Update story status and gate_reason
-        if passes:
-            story.status = Story.Status.PENDING
-            parts = [f"{k}={v}" for k, v in breakdown.items() if k not in ("passes", "pass_threshold")]
-            story.gate_reason = f"Dynamic gate passed (score={score}, threshold={breakdown['pass_threshold']}): " + ", ".join(parts)
-            queued += 1
-        else:
-            story.status = Story.Status.BLOCKED
-            parts = [f"{k}={v}" for k, v in breakdown.items() if k not in ("passes", "pass_threshold")]
-            story.gate_reason = f"Dynamic gate blocked (score={score}, threshold={breakdown['pass_threshold']}): " + ", ".join(parts)
-            blocked += 1
-        story.gate_reason = corroboration.with_note(story.gate_reason, units)
+            # Update story status and gate_reason
+            if passes:
+                story.status = Story.Status.PENDING
+                parts = [f"{k}={v}" for k, v in breakdown.items() if k not in ("passes", "pass_threshold")]
+                story.gate_reason = f"Dynamic gate passed (score={score}, threshold={breakdown['pass_threshold']}): " + ", ".join(parts)
+                queued += 1
+            else:
+                story.status = Story.Status.BLOCKED
+                parts = [f"{k}={v}" for k, v in breakdown.items() if k not in ("passes", "pass_threshold")]
+                story.gate_reason = f"Dynamic gate blocked (score={score}, threshold={breakdown['pass_threshold']}): " + ", ".join(parts)
+                blocked += 1
+            story.gate_reason = corroboration.with_note(story.gate_reason, units)
 
-        # Append the decision with its evidence, including the arithmetic that produced it. The
-        # score is stored structured as well as spelled out in gate_reason, because the sentence
-        # is what an auditor reads and this is what a query filters on.
-        record_gate_decision(
-            session,
-            story.id,
-            "dynamic",
-            passed=passes,
-            tier1_unit_count=tier1_unit_count,
-            corroboration=corroboration,
-            units=units,
-            score=score,
-            pass_threshold=breakdown["pass_threshold"],
-            breakdown=breakdown,
-        )
+            # Append the decision with its evidence, including the arithmetic that produced it.
+            # The score is stored structured as well as spelled out in gate_reason, because the
+            # sentence is what an auditor reads and this is what a query filters on.
+            record_gate_decision(
+                session,
+                story.id,
+                "dynamic",
+                passed=passes,
+                tier1_unit_count=tier1_unit_count,
+                corroboration=corroboration,
+                units=units,
+                score=score,
+                pass_threshold=breakdown["pass_threshold"],
+                breakdown=breakdown,
+            )
+        except Exception as exc:  # noqa: BLE001 - one story must not cost the run the rest
+            # This story is left exactly as the run found it and the loop continues, so the
+            # stories after it are still decided and still committed below.
+            _record_gate_error(session, story, exc)
+            errors += 1
 
     await session.commit()
-    return {"queued": queued, "blocked": blocked}
+    return {"queued": queued, "blocked": blocked, "errors": errors}

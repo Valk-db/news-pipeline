@@ -6,7 +6,7 @@ from typing import List
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import Story, ReportingUnit, StoryUnitLink, StatusLog
-from src.verification.tiers import recompute_story_counters
+from src.verification.tiers import recompute_story_counters, viewpoint_child_exclusions
 
 
 @dataclass
@@ -146,9 +146,21 @@ async def cleanup_stale_story_links(session: AsyncSession) -> CleanupResult:
         result.stale_links_removed += 1
         result.details.append(f"Removed stale link {link.id} (story: {link.story_id}, unit: {link.unit_id})")
 
-    # Recompute counters for affected stories
+    # Recompute counters for affected stories. Affected stories may include viewpoint
+    # children, which the gate counts on child-exclusive units only, so the recompute must
+    # apply the same exclusions or the child's stored counters diverge from its gate
+    # decision (P0 deferred (c): this call previously recomputed over every unit).
     if affected_story_ids:
-        await recompute_story_counters(session, list(affected_story_ids))
+        affected_stories = (
+            (await session.execute(select(Story).where(Story.id.in_(affected_story_ids))))
+            .scalars()
+            .all()
+        )
+        await recompute_story_counters(
+            session,
+            list(affected_story_ids),
+            unit_exclusions=await viewpoint_child_exclusions(session, affected_stories),
+        )
 
     await session.flush()
     return result
