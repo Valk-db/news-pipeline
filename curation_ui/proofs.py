@@ -16,7 +16,11 @@ States, all rendered honestly:
 - failed: entry and checkpoint exist but the math or the article binding does
   not check out (tampered payload, wrong siblings, checkpoint mismatch,
   repointed log_index). Shown, not hidden.
-- pending_unstamped: article.log_index is NULL, never stamped.
+- pending_unstamped: article.log_index is NULL, never stamped. The page says
+  which of the two reasons applies (no stampable body archived, or archived by
+  the feed ingest that does not stamp) and reports archive-wide stamping scale,
+  so a reader can tell "normal for most of this archive" apart from "the
+  stamping pass is not running".
 - pending_no_entry: stamped index is beyond the log's current length.
 - pending_no_checkpoint: stamped, but no checkpoint covers the index yet.
 - pending_log_missing: the transparency tables are not provisioned in this
@@ -28,10 +32,10 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from src.schema.models import RawArticle
@@ -60,6 +64,22 @@ def _is_missing_table(exc: BaseException) -> bool:
         return False
     text = str(getattr(exc, "orig", None) or exc).lower()
     return any(marker in text for marker in _MISSING_TABLE_MARKERS)
+
+
+# The body length below which src/ingestion/rss_evidence.py refuses to treat a
+# page as an article (its MIN_BODY_CHARS), so a row with a shorter body could
+# not have been stamped even if the locker had seen it.
+#
+# Copied rather than imported on purpose: rss_evidence imports spacy, trafilatura
+# and the whole ingestion stack, and this module is imported by the Vercel
+# function bundle. tests/test_proof_permalinks.py pins the two values together
+# so a change to one without the other fails the suite.
+MIN_STAMPABLE_BODY_CHARS = 200
+
+# How old the newest log entry may get before the page says the stamping pass
+# looks stalled. The workflow runs daily at 04:47 UTC, so 48h is two whole
+# missed runs before this is worth telling a reader about.
+STAMP_STALE_HOURS = 48
 
 
 @dataclass
@@ -116,6 +136,123 @@ def _pending_view(article: RawArticle, state: str, headline: str, detail: str) -
             detail=detail,
         )],
     )
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Naive timestamps are read as UTC.
+
+    Same reason as src/transparency/log.py::_utc: SQLite returns a naive
+    datetime for a DateTime(timezone=True) column, and subtracting that from an
+    aware now() is a TypeError, which would 500 a public page over a cosmetic
+    age calculation.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+async def _stamping_scale(session) -> dict[str, Any] | None:
+    """Archive-wide stamping counters, or None if they cannot be read.
+
+    Three cheap aggregate/index-only queries. Used to tell a reader whether
+    "no proof for this article" is the normal state of the archive or the
+    symptom of a stamping pass that has stopped. Never raises: a public page
+    must still render its (truthful) pending state when a counter is
+    unavailable.
+    """
+    try:
+        stamped = (
+            await session.execute(
+                select(func.count()).select_from(RawArticle).where(RawArticle.log_index.is_not(None))
+            )
+        ).scalar_one()
+        total = (await session.execute(select(func.count()).select_from(RawArticle))).scalar_one()
+        newest = (
+            await session.execute(select(func.max(MerkleLogEntry.timestamp)))
+        ).scalar_one()
+    except Exception as exc:  # noqa: BLE001 - a public page degrades, never 500s
+        logger.warning("Proof page could not read stamping scale: %s", exc)
+        return None
+    return {
+        "stamped": int(stamped),
+        "total": int(total),
+        "newest_entry_at": _as_utc(newest),
+    }
+
+
+def _scale_sentence(scale: dict[str, Any]) -> str:
+    """One plain sentence of archive-wide scale, from the counters."""
+    stamped, total = scale["stamped"], scale["total"]
+    if not total:
+        return "The archive holds no articles yet."
+    pct = 100.0 * stamped / total
+    parts = [f"{stamped} of {total} archived articles carry an inclusion stamp ({pct:.2f}%)."]
+    newest = scale.get("newest_entry_at")
+    if newest is None:
+        parts.append("The log itself is empty, so nothing has ever been stamped.")
+        return " ".join(parts)
+    age_hours = (datetime.now(timezone.utc) - newest).total_seconds() / 3600
+    if age_hours < 0:
+        parts.append(f"The newest stamp is timestamped {newest.isoformat()}.")
+    else:
+        parts.append(f"The newest stamp is {age_hours:.1f} hours old ({newest.isoformat()}).")
+        if age_hours > STAMP_STALE_HOURS:
+            parts.append(
+                "That is older than the daily stamping run should allow, so the "
+                "stamping pass looks stalled rather than this article being "
+                "an exception."
+            )
+    return " ".join(parts)
+
+
+async def _unstamped_view(session, article: RawArticle) -> ProofView:
+    """pending_unstamped, with the reason spelled out instead of guessed at.
+
+    The page used to say only "this article has not been stamped yet", which
+    reads identically whether the stamping workflow is broken or the row was
+    archived by a path that never stamps. Both facts are observable, so both
+    are stated: whether a stampable body was archived at all, and how much of
+    the archive carries a stamp.
+    """
+    body_len = len(article.body_text or "")
+    has_body = body_len >= MIN_STAMPABLE_BODY_CHARS
+    if has_body:
+        detail = (
+            f"This article is archived with a {body_len}-character body, so there "
+            f"was something to hash into a log entry, but it was archived by the "
+            f"ordinary feed ingest, which does not stamp. Stamping is applied by "
+            f"the evidence locker to the articles it archives itself, and it is "
+            f"not applied retroactively to rows already in the archive. So this is "
+            f"a gap in coverage, not a broken proof: there is no log entry for "
+            f"this article and none is invented here."
+        )
+    else:
+        detail = (
+            f"This article is archived with only {body_len} characters of text, "
+            f"below the {MIN_STAMPABLE_BODY_CHARS}-character minimum the evidence "
+            f"locker requires before it treats a page as an article. A headline "
+            f"with no body is not stamped, so no log entry exists for it."
+        )
+
+    view = _pending_view(
+        article,
+        "pending_unstamped",
+        "Proof pending: this article has not been stamped into the log"
+        + ("" if has_body else " (no stampable body)"),
+        detail,
+    )
+    scale = await _stamping_scale(session)
+    if scale is not None:
+        sentence = _scale_sentence(scale)
+        view.state_detail = f"{view.state_detail} {sentence}"
+        view.checks.append(ProofCheck(
+            label="Archive-wide stamping scale",
+            passed=None,
+            detail=sentence,
+        ))
+    return view
 
 
 async def _chain_reaches_head(session, entry, checkpoint) -> bool:
@@ -274,15 +411,7 @@ async def build_proof_view(session, article: RawArticle) -> ProofView:
     identity = _article_identity(article)
 
     if article.log_index is None:
-        return _pending_view(
-            article,
-            "pending_unstamped",
-            "Proof pending: this article has not been stamped yet",
-            "This article was archived before (or without) the transparency log "
-            "stamp. There is no log entry for it, so there is no inclusion proof "
-            "to show. Nothing here is fabricated: the proof appears once the "
-            "evidence locker stamps the article.",
-        )
+        return await _unstamped_view(session, article)
 
     log = SqlAlchemyMerkleLog(session)
     try:
