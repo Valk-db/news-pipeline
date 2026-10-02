@@ -55,13 +55,18 @@ def _make_story(
     tier1_sources=2,
     location="Kyiv",
     headline=None,
+    status=Story.Status.QUEUED,
 ):
-    """Create one story with a linked unit, article and optional events."""
+    """Create one story with a linked unit, article and optional events.
+
+    QUEUED by default because the public surfaces only serve what a curator has
+    approved; tests about the queue itself pass status=Story.Status.PENDING.
+    """
     story = Story(
         id=uuid.uuid4(),
         day=day,
         primary_entities=["test-entity"],
-        status=Story.Status.PENDING,
+        status=status,
         tier1_unit_count=tier1_units,
         tier2_unit_count=0,
         tier3_unit_count=0,
@@ -211,7 +216,8 @@ class TestAuthedRouteMatrix:
     async def test_story_edit_requires_auth(self, app_with_db, db_session):
         """GET /story/{id}/edit is the curator's form, so it stays protected."""
         now = datetime.now(timezone.utc)
-        story = _make_story(db_session, day=now - timedelta(hours=2))
+        story = _make_story(db_session, day=now - timedelta(hours=2),
+                            status=Story.Status.PENDING)
         await db_session.commit()
 
         client = TestClient(app_with_db)
@@ -222,7 +228,8 @@ class TestAuthedRouteMatrix:
     async def test_story_api_detail_endpoints_require_auth(self, app_with_db, db_session):
         """The viewpoints and sources APIs stay behind auth (see main.py for why)."""
         now = datetime.now(timezone.utc)
-        story = _make_story(db_session, day=now - timedelta(hours=2))
+        story = _make_story(db_session, day=now - timedelta(hours=2),
+                            status=Story.Status.PENDING)
         await db_session.commit()
 
         client = TestClient(app_with_db)
@@ -234,7 +241,8 @@ class TestAuthedRouteMatrix:
     async def test_curation_posts_require_auth(self, app_with_db, db_session):
         """Approve, reject, save and mark posted all refuse anonymous POSTs."""
         now = datetime.now(timezone.utc)
-        story = _make_story(db_session, day=now - timedelta(hours=2))
+        story = _make_story(db_session, day=now - timedelta(hours=2),
+                            status=Story.Status.PENDING)
         await db_session.commit()
 
         from src.schema.models import CuratedPost
@@ -426,6 +434,160 @@ class TestTopStoriesList:
         payload = response.json()
         assert payload["count"] == 0
         assert payload["stories"] == []
+
+
+class TestQueueIsNotPublic:
+    """Only what a curator approved reaches the anonymous surfaces."""
+
+    # Everything the pipeline can leave a story in that is not published.
+    UNPUBLISHED = (
+        Story.Status.PENDING,
+        Story.Status.BLOCKED,
+        Story.Status.REJECTED,
+        Story.Status.EXPIRED,
+    )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", UNPUBLISHED)
+    async def test_public_story_page_404s_for_unpublished_story(
+        self, app_with_db, db_session, status
+    ):
+        """The story page treats an unapproved story like an id that does not exist."""
+        now = datetime.now(timezone.utc)
+        story = _make_story(
+            db_session, day=now - timedelta(hours=2), events=1, owners=4,
+            status=status, headline=f"Only in the {status.value} queue",
+        )
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        response = client.get(f"/stories/{story.id}")
+        assert response.status_code == 404
+        assert "Only in the" not in response.text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [Story.Status.QUEUED, Story.Status.POSTED])
+    async def test_public_story_page_serves_approved_stories(
+        self, app_with_db, db_session, status
+    ):
+        """An approved story still renders for an anonymous reader."""
+        now = datetime.now(timezone.utc)
+        story = _make_story(
+            db_session, day=now - timedelta(hours=2), events=1, owners=4,
+            status=status, headline=f"Approved: {status.value}",
+        )
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        response = client.get(f"/stories/{story.id}")
+        assert response.status_code == 200
+        assert f"Approved: {status.value}" in response.text
+
+    @pytest.mark.asyncio
+    async def test_top_stories_lists_only_approved_stories(self, app_with_db, db_session):
+        """A well corroborated queue story never reaches /api/map/stories or /map."""
+        now = datetime.now(timezone.utc)
+        approved = _make_story(
+            db_session, day=now - timedelta(hours=3), owners=5, tier1_units=6, events=3,
+            headline="Ceasefire talks advance in Geneva",
+        )
+        # Same corroboration counts, so nothing but the status keeps them out.
+        for status in TestQueueIsNotPublic.UNPUBLISHED:
+            _make_story(
+                db_session, day=now - timedelta(hours=3), owners=5, tier1_units=6,
+                events=3, status=status, headline=f"Corroborated but {status.value}",
+            )
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        payload = client.get("/api/map/stories").json()
+        assert payload["count"] == 1
+        assert payload["stories"][0]["href"] == f"/stories/{approved.id}"
+
+        listing = client.get("/api/map/stories").text
+        assert "Corroborated but" not in listing
+        # The server-rendered /map list agrees with the JSON endpoint.
+        assert str(approved.id) in client.get("/map").text
+        assert "Corroborated but" not in client.get("/map").text
+
+
+class TestEventLimitClamp:
+    """Anonymous event payloads cannot ask for more rows than the cap."""
+
+    @pytest.mark.asyncio
+    async def test_limit_is_clamped_to_the_cap(self, app_with_db, db_session):
+        """limit=100000000 with hours=0 is clamped, and the cap is reported back."""
+        from curation_ui.main import MAP_EVENTS_MAX_LIMIT
+
+        now = datetime.now(timezone.utc)
+        for index in range(3):
+            _make_story(
+                db_session, day=now - timedelta(hours=2), events=1, tier1_sources=2,
+                location=f"City{index}",
+            )
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+
+        huge = client.get("/api/globe/events?hours=0&limit=100000000").json()
+        assert huge["limit"] == MAP_EVENTS_MAX_LIMIT
+        assert huge["max_limit"] == MAP_EVENTS_MAX_LIMIT
+        assert len(huge["features"]) == 3
+
+        small = client.get("/api/globe/events?hours=0&limit=2").json()
+        assert small["limit"] == 2
+        assert len(small["features"]) == 2
+
+        # A limit below 1 is clamped up, so a request never returns nothing by accident.
+        zero = client.get("/api/globe/events?hours=0&limit=0").json()
+        assert zero["limit"] == 1
+        assert len(zero["features"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_replay_shares_the_same_cap(self, app_with_db, db_session):
+        """The replay endpoint reports the same cap the globe endpoint clamps to."""
+        from curation_ui.main import MAP_EVENTS_MAX_LIMIT
+
+        client = TestClient(app_with_db)
+        payload = client.get("/api/map/replay?limit=100000000").json()
+        assert payload["limit"] == MAP_EVENTS_MAX_LIMIT
+        assert payload["max_limit"] == MAP_EVENTS_MAX_LIMIT
+
+
+class TestContentSecurityPolicy:
+    """Every response carries a CSP, and the inline scripts carry its nonce."""
+
+    def test_header_is_present_on_pages_assets_and_apis(self, app_with_db):
+        """CSP rides on HTML, static assets, JSON and the health probe alike."""
+        client = TestClient(app_with_db)
+        for path in ("/map", "/globe", "/healthz", "/static/style.css",
+                     "/static/errors.js", "/api/map/stories"):
+            response = client.get(path)
+            csp = response.headers.get("content-security-policy")
+            assert csp, f"{path} was served without a CSP header"
+            assert "default-src 'self'" in csp
+            assert "object-src 'none'" in csp
+            assert "frame-ancestors 'none'" in csp
+            assert "form-action 'self'" in csp
+
+    def test_inline_scripts_use_the_header_nonce_not_unsafe_inline(self, app_with_db):
+        """The theme/keyboard handler is allowed by nonce, not by 'unsafe-inline'."""
+        client = TestClient(app_with_db)
+
+        response = client.get("/", auth=("testuser", "testpass"))
+        assert response.status_code == 200
+        csp = response.headers["content-security-policy"]
+        script_src = next(part for part in csp.split("; ") if part.startswith("script-src"))
+        assert "'unsafe-inline'" not in script_src
+        assert "'unsafe-eval'" not in script_src
+
+        nonce = script_src.split("'nonce-")[1].split("'")[0]
+        assert f'<script nonce="{nonce}">' in response.text
+        assert response.text.count("nonce=") == 1
+
+        # Nonces are per response, so a leaked header cannot be replayed.
+        second = client.get("/", auth=("testuser", "testpass"))
+        assert second.headers["content-security-policy"] != csp
 
 
 class TestFreshnessStamp:
