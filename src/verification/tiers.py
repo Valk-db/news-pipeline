@@ -2,13 +2,19 @@
 
 import uuid
 from collections import defaultdict
+from typing import Iterable, List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import (
-    ReportingUnit, Story, StoryUnitLink, SourceTier,
+    GateDecision, ReportingUnit, Story, StoryUnitLink, SourceTier,
     Claim, ClaimType, CanonicalEntity, StatusLog
 )
-from typing import List, Optional, Tuple
+from src.verification.corroboration import (
+    Corroboration,
+    UnitRef,
+    load_corroboration,
+)
+from src.shared.analyzer_versions import GATE_VERSION, compute_input_hash
 from src.shared.config import get_settings
 
 
@@ -19,15 +25,28 @@ async def recompute_story_counters(session: AsyncSession, story_ids: List[uuid.U
 
     This should be called whenever StoryUnitLinks change (attach/detach/merge).
 
-    Note: distinct_owners is computed from tier1_owner_groups to match
-    the tier-1 gate logic which requires >=2 distinct tier-1 owners.
+    Note: distinct_owners is counted by src/verification/corroboration.py, the same resolution
+    the tier-1 gate counts from, so the stored counter and the gate's decision cannot disagree.
+    That resolution collapses syndicated wire copies (same content_hash as an article from a
+    wire-service source) onto the wire's owner group: five papers carrying one AP story are one
+    corroborating outlet, not five. Everything else here is unchanged -- the tier counts are
+    still summed from each unit's stored histogram, so collapsing never alters how much
+    corroboration a story has, only how many independent owners it counts for.
     """
     if not story_ids:
         return
 
-    # Get all linked units for these stories with their tier and tier1_owner_groups
+    # Get all linked units for these stories with their tier and tier1_owner_groups. The unit id
+    # and representative id are selected because resolving owners means reading the articles
+    # behind those units, not just the histogram they summarized.
     stmt = (
-        select(StoryUnitLink.story_id, ReportingUnit.source_tiers, ReportingUnit.tier1_owner_groups)
+        select(
+            StoryUnitLink.story_id,
+            ReportingUnit.id,
+            ReportingUnit.representative_article_id,
+            ReportingUnit.source_tiers,
+            ReportingUnit.tier1_owner_groups,
+        )
         .join(ReportingUnit, ReportingUnit.id == StoryUnitLink.unit_id)
         .where(StoryUnitLink.story_id.in_(story_ids))
     )
@@ -36,20 +55,28 @@ async def recompute_story_counters(session: AsyncSession, story_ids: List[uuid.U
 
     # Aggregate by story_id
     story_tiers: dict[uuid.UUID, dict[str, int]] = {}
-    story_tier1_owners: dict[uuid.UUID, set[str]] = {}
+    story_refs: dict[uuid.UUID, list[UnitRef]] = defaultdict(list)
 
-    for story_id, source_tiers, tier1_owner_groups in rows:
+    for story_id, unit_id, representative_article_id, source_tiers, tier1_owner_groups in rows:
         if story_id not in story_tiers:
             story_tiers[story_id] = {}
-            story_tier1_owners[story_id] = set()
 
         # Sum up tier counts
         for tier_str, count in (source_tiers or {}).items():
             story_tiers[story_id][tier_str] = story_tiers[story_id].get(tier_str, 0) + count
 
-        # Collect tier-1 owners (owners that have tier-1 units)
-        for owner, _ in (tier1_owner_groups or {}).items():
-            story_tier1_owners[story_id].add(owner)
+        story_refs[story_id].append(
+            UnitRef(
+                unit_id=unit_id,
+                representative_article_id=representative_article_id,
+                tier1_owner_groups=dict(tier1_owner_groups or {}),
+            )
+        )
+
+    # One resolution for every unit of every story in this call, shared with the gate.
+    corroboration = await load_corroboration(
+        session, [ref for refs in story_refs.values() for ref in refs]
+    )
 
     # Now compute tier1_unit_count, tier2_unit_count, tier3_unit_count, tier4_unit_count, and distinct_owners for each story
     # Batch fetch all stories in one query
@@ -59,13 +86,12 @@ async def recompute_story_counters(session: AsyncSession, story_ids: List[uuid.U
 
     for story_id in story_ids:
         tiers = story_tiers.get(story_id, {})
-        tier1_owners = story_tier1_owners.get(story_id, set())
 
         tier1_count = tiers.get("tier1", 0)
         tier2_count = tiers.get("tier2", 0)
         tier3_count = tiers.get("tier3", 0)
         tier4_count = tiers.get("tier4", 0)
-        distinct_owners = len(tier1_owners)  # distinct tier-1 owners
+        distinct_owners = corroboration.distinct_owners(story_refs.get(story_id, []))
 
         story = stories.get(story_id)
         if story:
@@ -291,13 +317,112 @@ def classify_source_tier(domain: str) -> SourceTier:
     return SourceTier.TIER3
 
 
+# The corroboration thresholds, named so a recorded decision can state the numbers the gate
+# actually applied instead of restating a literal that could drift from the comparisons below.
+TIER1_MIN_UNITS = 2
+TIER1_MIN_OWNERS = 2
+
+# GATE_VERSION (in src/shared/analyzer_versions.py, where every version constant lives) is
+# stamped on every gate_decisions row as both gate_version and analyzer_version. Re-exported
+# here because this is the module that writes decisions.
+
+
+def _flatten_units(story_units: dict[uuid.UUID, list]) -> list:
+    """Every unit of every story in a run, de-duplicated.
+
+    A unit can be linked to more than one story (that is what the many-to-many is for), and the
+    evidence resolution is per unit, so resolving a unit once and reading it per story is both
+    cheaper and the reason two stories sharing a unit cannot see different articles for it.
+    """
+    seen: set[uuid.UUID] = set()
+    unique: list = []
+    for units in story_units.values():
+        for unit in units:
+            if unit.id not in seen:
+                seen.add(unit.id)
+                unique.append(unit)
+    return unique
+
+
+
+def record_gate_decision(
+    session: AsyncSession,
+    story_id: uuid.UUID,
+    gate_name: str,
+    *,
+    passed: bool,
+    tier1_unit_count: int,
+    corroboration: Corroboration,
+    units: Iterable,
+    score: Optional[int] = None,
+    pass_threshold: Optional[int] = None,
+    breakdown: Optional[dict] = None,
+) -> GateDecision:
+    """Append one row to `gate_decisions`: the decision, and the evidence behind it.
+
+    Every field is an input the gate already had. Nothing here is a second opinion, and nothing
+    can contradict the decision, because `passed` is the value that was just written to
+    `stories.status` and the histogram is the one the gate counted from. What the row adds is the
+    part that used to be unrecoverable: *which* owner groups counted, and *which articles* they
+    came from -- so "which owner groups corroborated this story" is a query rather than a re-run
+    of the resolution.
+
+    Rows are appended, never updated: re-gating a story writes a second row and leaves the first
+    readable, which is the whole point of a table rather than a column on `stories`.
+
+    * gate_name          -- 'tier1' for the boolean rule, 'dynamic' for the admission score.
+    * tier1_unit_count   -- the story's own counter, i.e. exactly what `gate_reason` reports.
+    * distinct_owners    -- len(owner_groups), counted post wire-collapse. Equal to
+      `stories.distinct_owners` because both come from the same Corroboration.
+    * owner_groups       -- the post-collapse owner histogram the gate counted.
+    * contributing_articles -- each counted article with the wire_origin that made any collapse,
+      so the attribution can be checked rather than trusted.
+    * score/pass_threshold/breakdown -- the dynamic gate's arithmetic; NULL for the tier1 gate,
+      which has no score. `breakdown["shadow"] = True` marks a score that was computed but did
+      not move the status.
+    """
+    units = list(units)
+    histogram = corroboration.owner_histogram(units)
+    articles = [article.as_json() for article in corroboration.articles(units)]
+
+    decision = GateDecision(
+        story_id=story_id,
+        gate_name=gate_name,
+        gate_version=GATE_VERSION,
+        passed=passed,
+        score=score,
+        pass_threshold=pass_threshold,
+        tier1_unit_count=tier1_unit_count,
+        distinct_owners=len(histogram),
+        owner_groups=histogram,
+        contributing_articles=articles,
+        breakdown=breakdown,
+        analyzer_version=GATE_VERSION,
+        # What this row was computed from, in the P2 sense: the same evidence re-decided gives
+        # the same digest, so a re-gate that changes nothing is visible as an identical hash
+        # rather than only as an unchanged score.
+        input_hash=compute_input_hash(
+            GATE_VERSION,
+            gate_name,
+            passed,
+            score,
+            pass_threshold,
+            sorted(article["article_id"] for article in articles),
+            sorted(histogram.items()),
+            breakdown,
+        ),
+    )
+    session.add(decision)
+    return decision
+
+
 def evaluate_tier1_gate(tier_owner_pairs: List[tuple[str, str]]) -> Tuple[bool, str]:
     """
     Pure function to evaluate if a story passes the tier-1 gate.
 
     Gate passes iff:
-    - At least 2 units with source_tier == TIER1
-    - Those units have ≥2 distinct ownership groups
+    - At least TIER1_MIN_UNITS units with source_tier == TIER1
+    - Those units have >= TIER1_MIN_OWNERS distinct ownership groups
 
     Args:
         tier_owner_pairs: List of (source_tier, owner_group) tuples extracted from ReportingUnit rows.
@@ -307,19 +432,20 @@ def evaluate_tier1_gate(tier_owner_pairs: List[tuple[str, str]]) -> Tuple[bool, 
     Returns (should_queue, reason).
     """
     tier1_pairs = [(tier, owner) for tier, owner in tier_owner_pairs if tier == "tier1"]
-    if len(tier1_pairs) < 2:
-        return False, f"Only {len(tier1_pairs)} tier-1 units (need ≥2)"
+    if len(tier1_pairs) < TIER1_MIN_UNITS:
+        return False, f"Only {len(tier1_pairs)} tier-1 units (need ≥{TIER1_MIN_UNITS})"
 
     owners = {owner for _, owner in tier1_pairs}
-    if len(owners) < 2:
-        return False, f"Tier-1 units from only {len(owners)} owner(s) (need ≥2 distinct)"
+    if len(owners) < TIER1_MIN_OWNERS:
+        return False, f"Tier-1 units from only {len(owners)} owner(s) (need ≥{TIER1_MIN_OWNERS} distinct)"
 
     return True, "Gate passed"
 
 
 async def apply_tier1_gate(
     session: AsyncSession,
-    story_ids: Optional[List[uuid.UUID]] = None
+    story_ids: Optional[List[uuid.UUID]] = None,
+    corroboration: Optional[Corroboration] = None,
 ) -> dict:
     """
     Apply the tier-1 gate: stories need ≥2 tier-1 reporting units
@@ -327,6 +453,15 @@ async def apply_tier1_gate(
 
     If story_ids provided (not None), only evaluate those stories (including BLOCKED).
     Otherwise evaluate all PENDING stories.
+
+    Writes stories.status and stories.gate_reason exactly as before, and appends one
+    `gate_decisions` row per evaluated story carrying the owner histogram and contributing
+    articles the decision counted. Owners are counted with syndicated wire copies collapsed to
+    the wire service that published them (src/verification/corroboration.py); when anything was
+    collapsed, `gate_reason` says so, so the sentence and the row agree.
+
+    `corroboration` is a seam for apply_dynamic_gate's shadow path, which has already resolved
+    the same units and must not pay for a second identical resolution. Callers pass nothing.
     """
     # Build query - if story_ids is not None, get those (any status), else get PENDING
     if story_ids is not None:
@@ -357,24 +492,19 @@ async def apply_tier1_gate(
         for story, unit in result.all():
             story_units[story.id].append(unit)
 
+    # The evidence the decisions below are counted from, resolved once for the whole run.
+    if corroboration is None:
+        corroboration = await load_corroboration(
+            session, [UnitRef.of(unit) for unit in _flatten_units(story_units)]
+        )
+
     for story in stories:
         # Get linked reporting units for gate evaluation (from batched query)
         units = story_units.get(story.id, [])
 
-        # Convert real ReportingUnit rows to (tier, owner_group) tuples for pure function
-        # tier1_owner_groups is already a JSON dict like {"AP": 1, "BBC": 2} computed in units.py
-        tier_owner_pairs = []
-
-        for u in units:
-            # source_tiers is JSON like {"tier1": 2, "tier2": 1}
-            source_tiers = u.source_tiers or {}
-            for tier, count in source_tiers.items():
-                if tier == "tier1":
-                    tier1_owner_groups = u.tier1_owner_groups or {}
-                    for owner, owner_count in tier1_owner_groups.items():
-                        for _ in range(owner_count):
-                            tier_owner_pairs.append((tier, owner))
-                # tier2 doesn't matter for the gate
+        # One (tier, owner) pair per tier-1 article, with wire copies attributed to the wire
+        # service that published the content instead of to the outlet that reprinted it.
+        tier_owner_pairs = corroboration.tier1_pairs(units)
 
         # Use pure function for gate decision
         should_queue, reason = evaluate_tier1_gate(tier_owner_pairs)
@@ -389,6 +519,18 @@ async def apply_tier1_gate(
             story.status = Story.Status.BLOCKED
             story.gate_reason = f"Blocked: {reason}"
             blocked += 1
+        story.gate_reason = corroboration.with_note(story.gate_reason, units)
+
+        # Append the decision with its evidence. Re-gating appends again; nothing is overwritten.
+        record_gate_decision(
+            session,
+            story.id,
+            "tier1",
+            passed=should_queue,
+            tier1_unit_count=story.tier1_unit_count,
+            corroboration=corroboration,
+            units=units,
+        )
 
     await session.commit()
     return {"queued": queued, "blocked": blocked}
@@ -456,27 +598,41 @@ async def compute_virality_signal(session: AsyncSession, story: "Story") -> int:
 async def compute_admission_score(
     session: AsyncSession,
     story: "Story",
-    tier1_unit_count: int,
     distinct_owners: int,
 ) -> tuple[int, dict]:
     """Returns (score 0-100, breakdown dict for gate_reason logging).
 
+    Every owner-based factor counts the POST-COLLAPSE `distinct_owners`: the number of ownership
+    groups the tier-1 articles attribute to once syndicated wire copies have been folded onto the
+    wire service that reported them (`src/verification/corroboration.py`). The raw tier-1 article
+    count is deliberately not an input here. It counts one piece of reporting as many, so a score
+    built on it would pass a story the boolean gate blocks -- and with the dynamic gate enabled the
+    score *is* the admission decision, so that disagreement would admit exactly the stories
+    corroboration exists to hold out. The factors that do not measure independence (virality, harm)
+    are unchanged, and neither is the harm-raised threshold.
+
     Factors:
-    1. source_tier_baseline: 40 if tier1_unit_count >= 2 else 0
-    2. corroboration: min(tier1_unit_count * 10, 30)
+    1. source_tier_baseline: 40 if distinct_owners >= TIER1_MIN_OWNERS else 0
+    2. corroboration: min(distinct_owners * 10, 30) -- independent corroborating voices
     3. distinct_owners: min(distinct_owners * 5, 20)
     4. virality_signal: min(virality_signal * 2, 10) -- tier3/4 article count
     5. harm_level penalty: -20 if 'high', else 0 -- raises the bar
 
-    If harm_level == 'high', the required score to pass is increased by 20
-    (i.e., need 70 instead of 50). This implements 'scales the bar' not
-    'gates alone' per GRAND_PLAN §3.
-    """
-    # 1. Source tier baseline (matches old boolean gate)
-    tier_baseline = 40 if tier1_unit_count >= 2 else 0
+    Factor 1 is the boolean gate's admission condition restated in the score's own arithmetic:
+    >= 2 tier-1 units from >= 2 distinct owners. A story that clears it scores at least 70
+    (40 + 20 + 10) and a story that fails it cannot reach the 50 threshold, so on independence the
+    score and `evaluate_tier1_gate` cannot disagree. `harm_level == 'high'` raising the bar to 70
+    remains the one place they can part company, by design per GRAND_PLAN §3 ('scales the bar' not
+    'gates alone').
 
-    # 2. Corroboration (more tier-1 units = more corroboration)
-    corroboration = min(tier1_unit_count * 10, 30)
+    `distinct_owners` is recorded in the breakdown as `independent_owners` so a recorded decision
+    states the basis it was counted on, not just the points it awarded.
+    """
+    # 1. Independence baseline (mirrors the boolean gate's admission condition)
+    tier_baseline = 40 if distinct_owners >= TIER1_MIN_OWNERS else 0
+
+    # 2. Corroboration (more independent owners = more corroboration; a wire copy is not a voice)
+    corroboration = min(distinct_owners * 10, 30)
 
     # 3. Distinct owners
     owners_score = min(distinct_owners * 5, 20)
@@ -498,6 +654,7 @@ async def compute_admission_score(
     passes = final_score >= pass_threshold
 
     breakdown = {
+        "independent_owners": distinct_owners,
         "tier_baseline": tier_baseline,
         "corroboration": corroboration,
         "distinct_owners": owners_score,
@@ -522,6 +679,14 @@ async def apply_dynamic_gate(
     If dynamic_gate_enabled is False, delegates to apply_tier1_gate
     but still computes and logs admission scores for shadow-mode comparison.
     If enabled, runs compute_admission_score and uses score threshold.
+
+    Every evaluation is appended to `gate_decisions`, once per gate. With the flag on, the
+    dynamic row is the decision that moved the story. In shadow mode the story is decided by the
+    boolean tier1 gate, so that run appends *two* rows: a 'tier1' row from apply_tier1_gate, and
+    a 'dynamic' row carrying the score the dynamic gate would have used, marked
+    breakdown["shadow"] = True. The shadow row's `passed` is therefore the dynamic gate's own
+    verdict, which is the thing worth calibrating against, and the flag is what says it was not
+    applied -- so "which stories would the score have flipped" is one query.
     """
     settings = get_settings()
 
@@ -552,30 +717,29 @@ async def apply_dynamic_gate(
 
     if not settings.dynamic_gate_enabled:
         # Shadow mode: run apply_tier1_gate for actual decision, but also compute
-        # admission scores and log comparison for calibration
-        gate_result = await apply_tier1_gate(session, story_ids)
+        # admission scores and log comparison for calibration.
+        #
+        # The evidence is resolved here and handed to the boolean gate, so the two rows this run
+        # appends about a story are counted from the identical resolution -- a calibration
+        # comparison whose two sides saw different owners would be worthless.
+        corroboration = await load_corroboration(
+            session, [UnitRef.of(unit) for unit in _flatten_units(story_units)]
+        )
+        gate_result = await apply_tier1_gate(
+            session, story_ids, corroboration=corroboration
+        )
 
         # Compute admission scores for comparison logging
         for story in stories:
+            # The score counts independent owners; the raw tier-1 article count is read only to
+            # record on the decision row, which keeps reporting the counter `gate_reason` shows.
             tier1_unit_count = story.tier1_unit_count
             distinct_owners = story.distinct_owners
-            score, breakdown = await compute_admission_score(
-                session, story, tier1_unit_count, distinct_owners
-            )
+            score, breakdown = await compute_admission_score(session, story, distinct_owners)
 
-            # Determine boolean gate decision for this story
+            # Determine boolean gate decision for this story, from the same resolution.
             units = story_units.get(story.id, [])
-            tier_owner_pairs = []
-            for u in units:
-                source_tiers = u.source_tiers or {}
-                for tier, count in source_tiers.items():
-                    if tier == "tier1":
-                        tier1_owner_groups = u.tier1_owner_groups or {}
-                        for owner, owner_count in tier1_owner_groups.items():
-                            for _ in range(owner_count):
-                                tier_owner_pairs.append((tier, owner))
-
-            bool_passes, bool_reason = evaluate_tier1_gate(tier_owner_pairs)
+            bool_passes, bool_reason = evaluate_tier1_gate(corroboration.tier1_pairs(units))
             score_passes = breakdown["passes"]
 
             # Log comparison to StatusLog for queryable calibration data
@@ -599,6 +763,21 @@ async def apply_dynamic_gate(
                 details=comparison,
             )
             session.add(log)
+
+            # The score that was computed but not applied, recorded as its own decision row so the
+            # calibration comparison survives in the audit trail and not only in status_log.
+            record_gate_decision(
+                session,
+                story.id,
+                "dynamic",
+                passed=score_passes,
+                tier1_unit_count=tier1_unit_count,
+                corroboration=corroboration,
+                units=units,
+                score=score,
+                pass_threshold=breakdown["pass_threshold"],
+                breakdown={**breakdown, "shadow": True},
+            )
 
         await session.commit()
         return gate_result
@@ -632,15 +811,20 @@ async def apply_dynamic_gate(
         for story, unit in result.all():
             story_units[story.id].append(unit)
 
+    # The evidence the decisions below are counted from, resolved once for the whole run.
+    corroboration = await load_corroboration(
+        session, [UnitRef.of(unit) for unit in _flatten_units(story_units)]
+    )
+
     for story in stories:
-        # Use already-computed counters (from recompute_story_counters)
+        # Use already-computed counters (from recompute_story_counters). The score below counts
+        # distinct_owners only; tier1_unit_count rides along on the decision row, not the score.
         tier1_unit_count = story.tier1_unit_count
         distinct_owners = story.distinct_owners
+        units = story_units.get(story.id, [])
 
         # Compute admission score
-        score, breakdown = await compute_admission_score(
-            session, story, tier1_unit_count, distinct_owners
-        )
+        score, breakdown = await compute_admission_score(session, story, distinct_owners)
 
         # Determine pass/fail
         passes = breakdown["passes"]
@@ -656,6 +840,23 @@ async def apply_dynamic_gate(
             parts = [f"{k}={v}" for k, v in breakdown.items() if k not in ("passes", "pass_threshold")]
             story.gate_reason = f"Dynamic gate blocked (score={score}, threshold={breakdown['pass_threshold']}): " + ", ".join(parts)
             blocked += 1
+        story.gate_reason = corroboration.with_note(story.gate_reason, units)
+
+        # Append the decision with its evidence, including the arithmetic that produced it. The
+        # score is stored structured as well as spelled out in gate_reason, because the sentence
+        # is what an auditor reads and this is what a query filters on.
+        record_gate_decision(
+            session,
+            story.id,
+            "dynamic",
+            passed=passes,
+            tier1_unit_count=tier1_unit_count,
+            corroboration=corroboration,
+            units=units,
+            score=score,
+            pass_threshold=breakdown["pass_threshold"],
+            breakdown=breakdown,
+        )
 
     await session.commit()
     return {"queued": queued, "blocked": blocked}

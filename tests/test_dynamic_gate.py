@@ -12,6 +12,7 @@ from src.verification.tiers import (
     apply_dynamic_gate,
     evaluate_tier1_gate,
 )
+from src.shared.analyzer_versions import GATE_VERSION
 from src.shared.config import get_settings
 from src.schema.models import (
     Story, ReportingUnit, Claim, ClaimType, CanonicalEntity
@@ -235,9 +236,11 @@ async def test_compute_admission_score_basic(mock_session, sample_story):
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
-    score, breakdown = await compute_admission_score(mock_session, story, 2, 2)
+    score, breakdown = await compute_admission_score(mock_session, story, 2)
 
-    # tier_baseline=40 (tier1>=2) + corroboration=20 (2*10) + owners=10 (2*5) + virality=0 + harm=0 = 70
+    # 2 independent owners: baseline=40 (owners>=2) + corroboration=20 (2*10) + owners=10 (2*5)
+    # + virality=0 + harm=0 = 70
+    assert breakdown["independent_owners"] == 2
     assert breakdown["tier_baseline"] == 40
     assert breakdown["corroboration"] == 20
     assert breakdown["distinct_owners"] == 10
@@ -283,7 +286,7 @@ async def test_compute_admission_score_harm_high(mock_session, sample_story_high
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
-    score, breakdown = await compute_admission_score(mock_session, story, 2, 2)
+    score, breakdown = await compute_admission_score(mock_session, story, 2)
 
     # base_score=70, harm_penalty=-20, final=50
     assert breakdown["harm_level"] == "high"
@@ -320,7 +323,7 @@ async def test_compute_admission_score_virality(mock_session, sample_story_viral
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
-    score, breakdown = await compute_admission_score(mock_session, story, 2, 2)
+    score, breakdown = await compute_admission_score(mock_session, story, 2)
 
     # base=70, virality=10 (5*2), final=80
     assert breakdown["virality"] == 10
@@ -329,26 +332,42 @@ async def test_compute_admission_score_virality(mock_session, sample_story_viral
 
 
 @pytest.mark.asyncio
+async def test_score_counts_independent_owners_not_articles(mock_session, sample_story):
+    """Four tier-1 articles from one owner score below the threshold; four owners do not.
+
+    The collapse fixture's shape -- one outlet's reporting carried by several papers -- reached the
+    old score as a high article count and passed, while the boolean gate blocked it. With the score
+    counting independent owners, the two agree on independence: a single owner cannot reach 50, and
+    the breakdown says which count it was given.
+    """
+    for distinct_owners, expected_base in ((1, 15), (2, 70), (4, 90)):
+        mock_session.execute.side_effect = [
+            make_result_mock([]),            # compute_virality_signal: no tier3/4 units
+            make_scalar_mock(None),          # compute_harm_level: no ALLEGATION claim
+        ]
+        score, breakdown = await compute_admission_score(
+            mock_session, sample_story, distinct_owners
+        )
+        assert breakdown["independent_owners"] == distinct_owners
+        assert breakdown["base_score"] == expected_base
+        assert score == expected_base
+        assert breakdown["passes"] is (expected_base >= 50)
+
+
+@pytest.mark.asyncio
 async def test_apply_dynamic_gate_shadow_mode(mock_session, sample_story):
-    """Test that apply_dynamic_gate delegates to apply_tier1_gate when disabled,
-    and logs shadow-mode comparison to StatusLog."""
+    """Shadow mode decides with the boolean gate but still records the score it computed.
+
+    Two rows are appended per story in this mode -- the applied 'tier1' decision and the
+    'dynamic' score marked breakdown["shadow"] = True -- so the calibration comparison is in
+    the audit trail and not only in status_log.
+    """
     settings = get_settings()
     original = settings.dynamic_gate_enabled
     settings.dynamic_gate_enabled = False
 
     try:
-        # apply_dynamic_gate calls (shadow mode):
-        # 1. select Story -> scalars().all()
-        story_result = make_result_mock([sample_story])
-        # 2. recompute_story_counters: select StoryUnitLink, ReportingUnit -> .all() tuples
-        counter_query1_result = make_result_mock([
-            (sample_story.id, {"tier1": 1}, {"BBC": 1}),
-            (sample_story.id, {"tier1": 1}, {"Guardian": 1}),
-        ])
-        # 3. recompute_story_counters: select Story -> scalars().all() Story objects
-        counter_query2_result = make_result_mock([sample_story])
-        # 4. batch fetch units: select Story, ReportingUnit -> .all() tuples
-        # Need 2 tier-1 units from different owners (BBC and Guardian)
+        # 2 tier-1 units from different owners, so the boolean gate passes.
         unit1 = ReportingUnit(
             id=uuid.uuid4(),
             source_tiers={"tier1": 1},
@@ -359,59 +378,77 @@ async def test_apply_dynamic_gate_shadow_mode(mock_session, sample_story):
             source_tiers={"tier1": 1},
             tier1_owner_groups={"Guardian": 1},
         )
-        batched_result = make_result_mock([(sample_story, unit1), (sample_story, unit2)])
+        links = [
+            (sample_story.id, unit1.id, None, {"tier1": 1}, {"BBC": 1}),
+            (sample_story.id, unit2.id, None, {"tier1": 1}, {"Guardian": 1}),
+        ]
+        # The articles behind those units. No content_hash, so resolve_wire_origins short-circuits
+        # on an empty hash set and issues no second query -- nothing here is a wire copy.
+        articles = [
+            (uuid.uuid4(), unit1.id, "https://bbc.com/a", "bbc.com", "tier1", None),
+            (uuid.uuid4(), unit2.id, "https://theguardian.com/b", "theguardian.com", "tier1", None),
+        ]
 
-        # apply_tier1_gate calls (inside shadow mode):
-        # 5. select Story -> scalars().all()
-        tier1_story_result = make_result_mock([sample_story])
-        # 6. recompute_story_counters: select StoryUnitLink, ReportingUnit -> .all() tuples
-        tier1_counter1_result = make_result_mock([
-            (sample_story.id, {"tier1": 1}, {"BBC": 1}),
-            (sample_story.id, {"tier1": 1}, {"Guardian": 1}),
-        ])
-        # 7. recompute_story_counters: select Story -> scalars().all() Story objects
-        tier1_counter2_result = make_result_mock([sample_story])
-        # 8. batch fetch units: select Story, ReportingUnit -> .all() tuples
-        tier1_batched_result = make_result_mock([(sample_story, unit1), (sample_story, unit2)])
+        def seq(*results):
+            return [make_result_mock(r) for r in results]
 
-        # compute_admission_score calls (inside shadow mode, for logging):
-        # 9. compute_virality_signal: select ReportingUnit -> scalars().all() []
-        viral_result = make_result_mock([])
-        # 10. compute_harm_level claim: scalar_one_or_none -> None
-        claim_result = make_scalar_mock(None)
-        # 11. compute_harm_level entity: scalar_one_or_none -> None
-        entity_result = make_scalar_mock(None)
+        story_rows = [sample_story]
+        batched_rows = [(sample_story, unit1), (sample_story, unit2)]
 
+        # apply_dynamic_gate (shadow): stories, recompute (links, articles, stories, units),
+        # then its own resolution before delegating.
+        # apply_tier1_gate: stories, the same four, with the resolution handed in.
+        # compute_admission_score: virality, claim, entity.
         mock_session.execute.side_effect = [
-            story_result,           # 1
-            counter_query1_result,  # 2
-            counter_query2_result,  # 3
-            batched_result,         # 4
-            tier1_story_result,     # 5
-            tier1_counter1_result,  # 6
-            tier1_counter2_result,  # 7
-            tier1_batched_result,   # 8
-            viral_result,           # 9
-            claim_result,           # 10
-            entity_result,          # 11
+            *seq(story_rows),          # 1 apply_dynamic_gate: select Story
+            *seq(links),               # 2 recompute: links
+            *seq(articles),            # 3 recompute: load_corroboration articles
+            *seq(story_rows),          # 4 recompute: select Story
+            *seq(batched_rows),        # 5 apply_dynamic_gate: batch fetch units
+            *seq(articles),            # 6 apply_dynamic_gate: load_corroboration articles
+            *seq(story_rows),          # 7 apply_tier1_gate: select Story
+            *seq(links),               # 8 recompute: links
+            *seq(articles),            # 9 recompute: load_corroboration articles
+            *seq(story_rows),          # 10 recompute: select Story
+            *seq(batched_rows),        # 11 apply_tier1_gate: batch fetch units
+            *seq([]),                  # 12 compute_virality_signal
+            make_scalar_mock(None),    # 13 compute_harm_level: no ALLEGATION claim
         ]
         mock_session.commit = AsyncMock()
 
         result = await apply_dynamic_gate(mock_session, [sample_story.id])
 
-        # Should return same queued/blocked as apply_tier1_gate
-        assert "queued" in result
-        assert "blocked" in result
-        # Story should have passed (2 tier-1 units from BBC and Guardian)
         assert result["queued"] == 1
         assert result["blocked"] == 0
 
-        # Should have logged to StatusLog (at least one add call for shadow comparison)
-        assert mock_session.add.called
-        # Check that a StatusLog was added with phase="gate_shadow"
-        status_log_calls = [call for call in mock_session.add.call_args_list
-                           if hasattr(call[0][0], '__tablename__') and call[0][0].__tablename__ == 'status_log']
-        assert len(status_log_calls) >= 1
+        added = [call[0][0] for call in mock_session.add.call_args_list]
+        status_logs = [o for o in added if o.__tablename__ == "status_log"]
+        assert [log.phase for log in status_logs] == ["gate_shadow"]
+        assert status_logs[0].details["agreement"] is True
+
+        decisions = [o for o in added if o.__tablename__ == "gate_decisions"]
+        assert [d.gate_name for d in decisions] == ["tier1", "dynamic"]
+
+        boolean, shadow = decisions
+        for decision in decisions:
+            assert decision.gate_version == GATE_VERSION
+            assert decision.story_id == sample_story.id
+            assert decision.passed is True
+            assert decision.tier1_unit_count == 2
+            assert decision.distinct_owners == 2
+            assert decision.owner_groups == {"BBC": 1, "Guardian": 1}
+            assert [a["source_domain"] for a in decision.contributing_articles] == [
+                "bbc.com",
+                "theguardian.com",
+            ]
+
+        # The boolean gate has no score; the shadow row carries the score it would have used.
+        assert (boolean.score, boolean.pass_threshold, boolean.breakdown) == (None, None, None)
+        assert shadow.score == 70
+        assert shadow.pass_threshold == 50
+        assert shadow.breakdown["shadow"] is True
+        assert shadow.breakdown["final_score"] == 70
+        assert shadow.breakdown["passes"] is True
     finally:
         settings.dynamic_gate_enabled = original
 

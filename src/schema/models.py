@@ -3,7 +3,7 @@ from enum import Enum as PyEnum
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, JSON, Boolean, Float
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship, backref
 import uuid
 
@@ -177,6 +177,60 @@ class StoryUnitLink(DerivedStateMixin, Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
     unit_id = Column(UUID(as_uuid=True), ForeignKey("reporting_units.id", ondelete="CASCADE"), nullable=False)
+
+
+class GateDecision(DerivedStateMixin, Base):
+    """One corroboration-gate decision, and the evidence it was made from. Append-only.
+
+    A separate table rather than a column on `stories` because a re-gate *replaces* what a column
+    can hold: `stories.gate_reason` and the story's status record only the latest answer, so
+    "why was this blocked yesterday and passed today" is unanswerable once the second run
+    commits. Decisions are the thing you audit over time, so each evaluation inserts a row and
+    nothing ever rewrites one.
+
+    INSERT-only by convention, and there is no UPDATE or DELETE path for this table in the
+    codebase: correcting a decision is done by re-running the gate, which appends the corrected
+    decision and leaves the wrong one visible as history. `decided_at` is the clock the gate
+    actually decided at (not a later migration default), and `story_id` cascades so deleting a
+    story takes its decisions with it rather than orphaning evidence about it.
+
+    The JSON columns are jsonb on Postgres and plain JSON on SQLite (the test database) via
+    `with_variant`, because the point of storing them is querying them: `owner_groups ? 'AP'`
+    answers "which decisions counted an AP-owned article" and `contributing_articles @> ...`
+    answers "which decisions rest on this article", and containment is not an operator on `json`.
+    """
+
+    __tablename__ = "gate_decisions"
+    __table_args__ = (
+        # The one query this table exists for: a story's decision history, newest first.
+        Index("ix_gate_decisions_story_decided_at", "story_id", "decided_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
+    # 'tier1' (the boolean 2-units/2-owners rule) or 'dynamic' (the admission score). A run in
+    # shadow mode writes both for a story: what decided, and what the score would have decided.
+    gate_name = Column(Text, nullable=False)
+    # GATE_VERSION from src/shared/analyzer_versions.py: the shape of this payload.
+    gate_version = Column(String(64), nullable=False)
+    decided_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    passed = Column(Boolean, nullable=False)
+    # The admission score and the threshold it was compared against. NULL for the tier1 gate,
+    # which has no score -- a boolean rule has nothing to record there.
+    score = Column(Integer, nullable=True)
+    pass_threshold = Column(Integer, nullable=True)
+    # The counters the decision used, as counted WITH wire copies collapsed to their origin.
+    tier1_unit_count = Column(Integer, nullable=False)
+    distinct_owners = Column(Integer, nullable=False)
+    # Owner group -> tier-1 articles attributed to it, post-collapse. len() == distinct_owners.
+    owner_groups = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
+    # [{article_id, url, source_domain, tier, wire_origin, content_hash}], deterministic order.
+    # `wire_origin` is what makes the collapse auditable: a non-null value says which wire this
+    # copy came from, so a reader can check the attribution instead of trusting it.
+    contributing_articles = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
+    # The dynamic gate's score breakdown, plus shadow:true when the row was recorded in shadow
+    # mode (the score was computed but did not move the status). NULL for the tier1 gate.
+    breakdown = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
 
 
 class CuratedPost(Base):

@@ -97,6 +97,15 @@ NARRATIVE_VERSION = "narrative/v1"
 # Daily source reliability scoring (src/reliability/consensus_analyzer.py).
 RELIABILITY_VERSION = "reliability/v1"
 
+# The corroboration gate (src/verification/tiers.py): every decision it makes, appended to
+# gate_decisions. Bumping this says "a decision row written before this bump was made under
+# different counting rules". v2 is the wire-collapse counting change, and it counts in both gates:
+# the boolean gate and the admission score both now measure independence post wire-collapse, so
+# v1 rows were counted with the syndicated-copies bug in one of the two and are not comparable
+# with v2 rows. The ledger is append-only, so a v1 row stays exactly as it was written and reads
+# under its own version -- re-gating a v1 story appends a v2 row beside it instead of rewriting it.
+GATE_VERSION = "gate/v2"
+
 
 # =============================================================================
 # Table and stage registry.
@@ -127,6 +136,7 @@ DERIVED_TABLES: tuple[str, ...] = (
     "entity_edges",
     "story_topic_groups",
     "source_reliability_snapshots",
+    "gate_decisions",
 )
 
 TABLES_WITHOUT_PRODUCER: tuple[str, ...] = (
@@ -138,6 +148,19 @@ TABLES_WITHOUT_PRODUCER: tuple[str, ...] = (
     # need, but no caller persists it: the only embedding writer is
     # enrichment/pipeline._persist_story_embedding. Same situation, same answer.
     "article_embeddings",
+)
+
+# The third way a derived table can be unaccounted for, and the reason it is listed rather than
+# left implicit: these tables carry the columns and have a writer, but
+# scripts/recompute_derived.py must never delete from them.
+#
+#   gate_decisions -- append-only ledger. "Recomputing" a decision is re-running the gate, which
+#     appends the corrected decision and keeps the superseded one readable; deleting the rows
+#     first would destroy exactly the history the table exists to hold, and rewriting them in
+#     place would be the UPDATE path the INSERT-only convention forbids. So it carries
+#     analyzer_version for provenance and is absent from STAGE_TABLES by design.
+NOT_RECOMPUTED_TABLES: tuple[str, ...] = (
+    "gate_decisions",
 )
 
 # Every analyzer_version value legitimately found on each derived table, in preference order.
@@ -168,6 +191,7 @@ TABLE_VERSIONS: dict[str, tuple[str, ...]] = {
     "entity_edges": (NARRATIVE_VERSION, DEDUPE_VERSION),
     "story_topic_groups": (TOPIC_VERSION,),
     "source_reliability_snapshots": (RELIABILITY_VERSION,),
+    "gate_decisions": (GATE_VERSION,),
 }
 
 # The primary (first-listed) version per table. Use this when you need a single label, e.g. to
@@ -269,14 +293,14 @@ def downstream_tables(stage: str) -> tuple[str, ...]:
 
 
 def assert_all_covered() -> None:
-    """Every derived table must have a version or be declared producer-less. Test guard."""
-    declared = set(TABLE_VERSION) | set(TABLES_WITHOUT_PRODUCER)
+    """Every derived table must have a version or be declared producer-less or not-recomputed."""
+    declared = set(TABLE_VERSION) | set(TABLES_WITHOUT_PRODUCER) | set(NOT_RECOMPUTED_TABLES)
     missing = sorted(set(DERIVED_TABLES) - declared)
     extra = sorted(declared - set(DERIVED_TABLES))
     if missing or extra:
         raise AssertionError(
-            f"DERIVED_TABLES disagrees with TABLE_VERSION/TABLES_WITHOUT_PRODUCER: "
-            f"undeclared={missing} unlisted={extra}"
+            f"DERIVED_TABLES disagrees with TABLE_VERSION/TABLES_WITHOUT_PRODUCER/"
+            f"NOT_RECOMPUTED_TABLES: undeclared={missing} unlisted={extra}"
         )
     for stage, tables in STAGE_TABLES.items():
         if stage not in STAGE_ORDER:
