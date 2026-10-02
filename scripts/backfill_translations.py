@@ -8,9 +8,11 @@ Requires the translation migration to be applied first:
 Usage:
     python scripts/backfill_translations.py [--limit N] [--dry-run]
 
-Reads SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY from
+Reads SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / DATABASE_URL from
 ~/.config/procmon/supabase-dev.env. Polite by construction (MyMemory backend:
-1s between calls, daily char budget).
+1s between calls, and a daily character budget counted in budget_counters -- which
+is why DATABASE_URL matters here: without a reachable counter the backend refuses
+to spend, so this script would translate nothing at all).
 """
 
 from __future__ import annotations
@@ -25,11 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.enrichment.translation import (
-    detect_language,
-    select_backend,
-    translate_articles,
-)
+from src.enrichment.translation import select_backend, translate_articles
 
 
 def load_env() -> dict:
@@ -100,6 +98,10 @@ def main() -> int:
 
     env = load_env()
     rest = Rest(env["SUPABASE_URL"], env["SUPABASE_SERVICE_ROLE_KEY"])
+    # The translation budget is counted in the database, so hand the URL to the settings
+    # before anything reads them.
+    if env.get("DATABASE_URL"):
+        os.environ.setdefault("DATABASE_URL", env["DATABASE_URL"])
 
     # Check the migration is applied before touching anything.
     probe = rest.get("raw_articles?select=id&limit=1")

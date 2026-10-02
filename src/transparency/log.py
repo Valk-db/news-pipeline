@@ -62,10 +62,10 @@ HASH_SCHEME = "n1:sha256"
 GENESIS_TAG = b"news-pipeline/merkle-log/v1"
 GENESIS_CHAIN_HASH: bytes = hashlib.sha256(GENESIS_TAG).digest()
 
-# The transparency log owns its own metadata. It is deliberately NOT registered
-# on src.schema.models.Base: putting it there would make init_db() create the
-# table before its migration exists. Add the migration first, then move the
-# class onto the app Base.
+# The transparency log owns its own metadata. It is deliberately NOT registered on
+# src.schema.models.Base: Base.metadata no longer creates anything, so a model class is
+# no longer a schema change, and keeping the log's tables out of Base keeps them out of
+# scripts/check_schema.py's drift comparison too.
 TransparencyBase = declarative_base()
 
 

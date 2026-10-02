@@ -20,8 +20,10 @@ Deliberately NOT used, with evidence:
     connection through our proxy; libretranslate.com returns 403. Unreliable.
 
 MyMemory politeness: 1s between requests, 4500-char chunks (under the 5000
-per-request cap), daily char budget tracked in var/translation_budget.json
-(default 45000, under the 50000 anonymous limit). Translation never breaks
+per-request cap), and a daily char budget of 45000 (under the 50000 anonymous
+limit) counted in budget_counters. That counter was a JSON file under var/, a
+gitignored directory on an ephemeral runner, so the cap was really per run and
+two runs a day could send twice the anonymous limit. Translation never breaks
 ingest: failures are caught, reported, and the article persists untranslated.
 """
 
@@ -33,9 +35,9 @@ import os
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Protocol
+
+from src.shared.budget import MYMEMORY_CHARS, spend_sync as spend
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +48,6 @@ MYMEMORY_POLITENESS_SECONDS = 1.0
 # Bodies are front-loaded in news copy; translating the whole archive would
 # blow the free daily budget on one long article. The cap is reported, not hidden.
 BODY_TRANSLATE_CHAR_CAP = 4000
-
-VAR_DIR = Path("var")
-BUDGET_PATH = VAR_DIR / "translation_budget.json"
-
 
 class TranslationUnavailable(Exception):
     """Raised when no translation backend can serve a request right now."""
@@ -80,37 +78,12 @@ def detect_language(text: str | None) -> str | None:
         return None
 
 
-def _today_key() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-def _read_budget() -> dict:
-    try:
-        data = json.loads(BUDGET_PATH.read_text())
-        if data.get("day") == _today_key():
-            return data
-    except Exception:
-        pass
-    return {"day": _today_key(), "chars_used": 0}
-
-
-def _write_budget(chars_used: int) -> None:
-    try:
-        VAR_DIR.mkdir(parents=True, exist_ok=True)
-        BUDGET_PATH.write_text(json.dumps({"day": _today_key(), "chars_used": chars_used}))
-    except Exception as exc:
-        logger.warning("could not persist translation budget: %s", exc)
-
-
-def budget_remaining() -> int:
-    return max(0, MYMEMORY_DAILY_CHAR_BUDGET - _read_budget().get("chars_used", 0))
-
-
 class MyMemoryBackend:
     """Keyless MyMemory translation. Free, no account, no opt-ins.
 
-    Polite by construction: per-request chunking, a sleep between calls, and
-    a hard daily character budget so one ingest can never burn the quota.
+    Polite by construction: per-request chunking, a sleep between calls, and a
+    hard daily character budget in budget_counters, reserved chunk by chunk, so
+    no number of runs can burn the quota.
     """
 
     name = "mymemory"
@@ -158,13 +131,15 @@ class MyMemoryBackend:
         ]
         out: list[str] = []
         for chunk in chunks:
-            if len(chunk) > budget_remaining():
+            # Reserved before the call, so two runners cannot both find room for the
+            # same chunk. A refused reservation means the daily cap is spent or the
+            # counter is unreachable, and the safe reading of both is: stop.
+            if spend(MYMEMORY_CHARS, len(chunk), self.daily_budget) is None:
                 raise TranslationUnavailable(
                     f"daily translation budget exhausted ({self.daily_budget} chars)"
                 )
             self._polite_wait()
             out.append(self._translate_chunk(chunk, source_lang, target_lang))
-            _write_budget(_read_budget().get("chars_used", 0) + len(chunk))
         return "".join(out)
 
 

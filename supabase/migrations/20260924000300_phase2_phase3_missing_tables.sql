@@ -4,10 +4,11 @@
 -- init_db() (Base.metadata.create_all) -- including the deployed curation UI -- was
 -- missing them entirely. Idempotent: safe to re-run.
 
--- Enum labels match the Python enum members' NAMES (uppercase), not their lowercase
--- .value strings: none of these Enum() columns declare values_callable, so SQLAlchemy
--- binds/queries using the member name by default -- same convention as the existing
--- sourcetier ('TIER4') and status ('EXPIRED') enums.
+-- Enum type names and labels match the Python enum members' NAMES (uppercase), not their
+-- lowercase .value strings: none of these Enum() columns declare values_callable, so
+-- SQLAlchemy binds and queries the member name by default -- the same convention as the
+-- existing sourcetier ('TIER4') and status ('EXPIRED') enums. Payload columns are JSON,
+-- not JSONB, because that is what src/schema/models.py declares for them.
 
 DO $$
 BEGIN
@@ -57,7 +58,7 @@ CREATE TABLE IF NOT EXISTS media_assets (
     duration_seconds INTEGER,
     source VARCHAR(100),
     source_id VARCHAR(100),
-    meta_data JSONB,
+    meta_data JSON,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS ix_media_assets_article_id ON media_assets(article_id);
@@ -71,8 +72,8 @@ CREATE TABLE IF NOT EXISTS snippets (
     snippet_type snippettype NOT NULL DEFAULT 'QUOTE',
     text TEXT NOT NULL,
     position INTEGER,
-    entities JSONB,
-    minhash_signature JSONB,
+    entities JSON,
+    minhash_signature JSON,
     confidence INTEGER NOT NULL DEFAULT 100,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -140,7 +141,7 @@ CREATE TABLE IF NOT EXISTS article_embeddings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     article_id UUID NOT NULL REFERENCES raw_articles(id) ON DELETE CASCADE,
     model VARCHAR(100) NOT NULL,
-    embedding JSONB NOT NULL,
+    embedding JSON NOT NULL,
     dimensions INTEGER NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -151,7 +152,7 @@ CREATE TABLE IF NOT EXISTS story_embeddings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
     model VARCHAR(100) NOT NULL,
-    embedding JSONB NOT NULL,
+    embedding JSON NOT NULL,
     dimensions INTEGER NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

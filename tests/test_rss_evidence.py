@@ -1366,8 +1366,8 @@ async def test_run_evidence_refresh_merkle_missing_table_continues(db_session, t
     """A missing merkle_log_entries disables stamping but keeps the rows.
 
     db_session's schema comes from Base.metadata, and MerkleLogEntry lives on
-    TransparencyBase precisely so init_db() will not create it -- so the table
-    genuinely does not exist here. This is the real dev path, not a mock.
+    TransparencyBase, which scripts/check_schema.py and the migrations keep separate --
+    so the table genuinely does not exist here. This is the real dev path, not a mock.
     """
     result = await _run_refresh(db_session, tmp_path, merkle_log=None)
 
@@ -1390,8 +1390,8 @@ async def test_stamp_against_real_sqlalchemy_merkle_log(tmp_path):
 
     The missing-table tests prove the defensive branch. This proves the live
     one: a real append chain, written through SQLAlchemy, whose leaf hashes
-    verify afterwards. MerkleLogEntry lives on TransparencyBase, so it has to be
-    created explicitly -- which is exactly why init_db() does not create it.
+    verify afterwards. MerkleLogEntry lives on TransparencyBase, so the test has to
+    create its table explicitly.
     """
     from src.transparency.log import MerkleLogEntry, SqlAlchemyMerkleLog
 

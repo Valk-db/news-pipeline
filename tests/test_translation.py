@@ -4,8 +4,11 @@ No network: all backend calls go through a stub. Live MyMemory quality was
 verified manually on 2026-10-01 (FR/ES/DE/ZH/FA/UK/SQ news headlines).
 """
 
+import asyncio
+
 import pytest
 
+from src.shared.budget import MYMEMORY_CHARS, spend, used
 from src.enrichment.translation import (
     MyMemoryBackend,
     TranslationUnavailable,
@@ -145,23 +148,59 @@ class TestTranslateArticle:
         monkeypatch.setattr(
             backend, "_translate_chunk", lambda text, s, t: f"EN:{text}"
         )
-        monkeypatch.setattr(
-            "src.enrichment.translation.budget_remaining", lambda: 10**9
-        )
-        monkeypatch.setattr(
-            "src.enrichment.translation._write_budget", lambda chars: None
-        )
         assert backend.translate("Bonjour le monde", "fr") == "EN:Bonjour le monde"
 
     def test_mymemory_same_language_passthrough(self):
         backend = MyMemoryBackend()
         assert backend.translate("Hello", "en", "en") == "Hello"
 
-    def test_mymemory_budget_exhaustion_raises(self, monkeypatch):
+    def test_mymemory_spends_the_daily_character_budget(self, monkeypatch):
+        """Every chunk sent to MyMemory is reserved against the day's character budget.
+
+        The counter is the budget_counters row from conftest's budget_counter fixture,
+        not the JSON file under var/ that this used to keep on an ephemeral runner.
+        """
         backend = MyMemoryBackend(politeness_seconds=0)
-        monkeypatch.setattr("src.enrichment.translation.budget_remaining", lambda: 0)
+        monkeypatch.setattr(backend, "_translate_chunk", lambda text, s, t: f"EN:{text}")
+
+        backend.translate("x" * 100, "fr")
+
+        assert asyncio.run(used(MYMEMORY_CHARS)) == 100
+
+    def test_mymemory_stops_at_the_cap_including_other_runs(self):
+        """A cap of 10 chars with 8 already spent: a 2-char chunk fits, the next is refused.
+
+        Those 8 were spent by another run, which is the whole reason the counter is a table
+        and not a file on a runner that no longer exists.
+        """
+        asyncio.run(spend(MYMEMORY_CHARS, 8, 10))
+        backend = MyMemoryBackend(politeness_seconds=0, daily_budget=10)
+        sent = []
+
+        def fake_chunk(text, source, target):
+            sent.append(text)
+            return f"EN:{text}"
+
+        backend._translate_chunk = fake_chunk
+
+        assert backend.translate("ab", "fr") == "EN:ab"
+        assert asyncio.run(used(MYMEMORY_CHARS)) == 10
+
+        # Nothing left, so nothing is sent at all.
         with pytest.raises(TranslationUnavailable):
-            backend.translate("Bonjour le monde entier", "fr")
+            backend.translate("c", "fr")
+        assert sent == ["ab"]
+
+    def test_mymemory_refuses_to_translate_without_a_counter(self, monkeypatch):
+        """No reachable counter means no translation: the anonymous quota is the scarce thing."""
+        from src.shared import budget as budget_module
+
+        monkeypatch.setattr(budget_module, "_get_engine", lambda: None)
+        backend = MyMemoryBackend(politeness_seconds=0)
+        backend._translate_chunk = lambda text, s, t: pytest.fail("must not call MyMemory")
+
+        with pytest.raises(TranslationUnavailable):
+            backend.translate("Bonjour le monde", "fr")
 
 
 class TestTranslateArticles:

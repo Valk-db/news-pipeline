@@ -89,7 +89,7 @@ async def healthz_details(user: str = Depends(require_auth)):
         report["stories_by_status"] = {str(status): count for status, count in rows}
     except Exception as exc:
         report["stories_table"] = f"FAILED: {type(exc).__name__}: {_scrub(str(exc), s.database_url)}"
-        report["verdict"] = "Connected, but the tables are missing (run scripts/init_db.py against this database)"
+        report["verdict"] = "Connected, but the tables are missing (run scripts/migrate.py against this database)"
         return report
 
     # The home page and /posts filter curated_posts on 'APPROVED'; this fails if the column

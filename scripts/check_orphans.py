@@ -10,10 +10,11 @@ Five buckets, one printed line each, in this order:
     dead_letters last 24h                 items the pipeline gave up on, by design
 
 None of these are failures on their own. A fresh ingest legitimately has articles that have
-not been clustered yet, so the numbers are a trend to watch, not a gate. The script therefore
-always exits 0, prints plain lines for a human or a cron mail to read, and never raises. A
-bucket whose table is missing reports an error on its own line and the rest still print, which
-is what makes this safe to run before the ledger migrations are applied.
+not been clustered yet, so the numbers are a trend to watch, not a gate. A bucket whose table
+is missing, or a database that cannot be reached, *is* a failure: the report is incomplete,
+and an incomplete report in a scheduled job is indistinguishable from a healthy one. So the
+script exits 0 when all five buckets printed real numbers and 1 otherwise, which makes it
+usable as the final step of a workflow without inventing a threshold for the counts.
 
 Usage:
     python scripts/check_orphans.py [--hours 24]
@@ -98,41 +99,46 @@ BUCKETS: List[Tuple[Callable[[int], str], Callable[[datetime], Any]]] = [
 ]
 
 
-async def gather(session: AsyncSession, hours: int = WINDOW_HOURS) -> List[str]:
-    """Return one report line per bucket, in report order.
+async def gather(session: AsyncSession, hours: int = WINDOW_HOURS) -> Tuple[List[str], int]:
+    """Return one report line per bucket, in report order, and how many could not be counted.
 
     A bucket that fails prints its own error line and does not stop the others, so one
-    missing table cannot hide the rest of the report.
+    missing table cannot hide the rest of the report. The count is what the caller
+    turns into an exit code.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     lines: List[str] = []
+    failed = 0
     for label, build in BUCKETS:
         try:
             count = await session.execute(build(cutoff))
             lines.append(f"{label(hours)}: {int(count.scalar_one())}")
         except Exception as exc:
+            failed += 1
             lines.append(f"{label(hours)}: error {type(exc).__name__}")
             print(f"  (query failed for {label(hours)}: {type(exc).__name__})", file=sys.stderr)
-    return lines
+    return lines, failed
 
 
 async def report(hours: int = WINDOW_HOURS) -> int:
-    """Print the report. Always returns 0, because this is a report and not a gate."""
+    """Print the report. Returns 1 if any bucket could not be counted, else 0."""
     if not get_settings().has_database:
         print("no DATABASE_URL configured, nothing to report")
-        return 0
+        return 1
     try:
         async with get_session() as session:
-            for line in await gather(session, hours):
+            lines, failed = await gather(session, hours)
+            for line in lines:
                 print(line)
     except Exception as exc:
         # Never print the connection string, so only the exception type is reported.
         print(f"could not read the database: {type(exc).__name__}")
-    return 0
+        return 1
+    return 1 if failed else 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Report pipeline orphans, always exits 0")
+    parser = argparse.ArgumentParser(description="Report pipeline orphans")
     parser.add_argument(
         "--hours",
         type=int,

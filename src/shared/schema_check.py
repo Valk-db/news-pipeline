@@ -24,11 +24,12 @@ def find_drift(
         actual_enums: dict of enum_type_name -> set of enum labels from pg_enum
 
     Returns:
-        dict with keys: missing_tables, missing_columns, missing_enum_labels
+        dict with keys: missing_tables, missing_columns, missing_enum_types, missing_enum_labels
         Each value is a sorted list.
     """
     missing_tables: list[str] = []
     missing_columns: list[tuple[str, str]] = []
+    missing_enum_types: list[str] = []
     missing_enum_labels: list[tuple[str, str]] = []
 
     # First pass: collect all expected enum labels per type name (union across columns)
@@ -62,24 +63,49 @@ def find_drift(
         for col_name in sorted(expected_cols - actual_cols):
             missing_columns.append((table_name, col_name))
 
-    # Check enum columns for missing labels (using union of expected labels per type name)
-    for enum_name, expected_labels in expected_enum_labels.items():
-        actual_labels = actual_enums.get(enum_name, set())
-        if actual_labels:
-            for label in sorted(expected_labels - actual_labels):
-                missing_enum_labels.append((enum_name, label))
-        # If enum type not in actual_enums, we report nothing (per spec)
+    # Check enum types and their labels. A type the model names but the database does
+    # not have is drift in its own right: reporting only its labels would hide a
+    # renamed type completely, because expected - empty is every label. An enum that
+    # exists under a name the model does not use is the same bug seen from the other
+    # side -- SQLAlchemy wrote 'eventtype' where a migration wanted 'event_type' --
+    # so it is reported as such rather than ignored.
+    for enum_name, expected_labels in sorted(expected_enum_labels.items()):
+        if enum_name not in actual_enums:
+            missing_enum_types.append(enum_name)
+            continue
+        for label in sorted(expected_labels - actual_enums[enum_name]):
+            missing_enum_labels.append((enum_name, label))
 
     return {
         "missing_tables": missing_tables,
         "missing_columns": missing_columns,
+        "missing_enum_types": missing_enum_types,
         "missing_enum_labels": missing_enum_labels,
     }
 
 
+def unused_enum_types(actual_enums: dict[str, set[str]], metadata: Any) -> list[str]:
+    """Enum types the database has and no model column declares.
+
+    The other half of the type-name race: a migration that created 'event_type' while
+    the model (and therefore the database column) uses 'eventtype' leaves a type nobody
+    writes to, which is how the two owners of the schema drifted apart in the first
+    place. Compared against the enum-typed columns' own type names, so a type that
+    exists purely as an extension's is not flagged.
+    """
+    expected = set()
+    for table in metadata.tables.values():
+        for column in table.columns:
+            col_type = column.type
+            enum_type = col_type if isinstance(col_type, Enum) else getattr(col_type, "impl", None)
+            if isinstance(enum_type, Enum) and enum_type.name is not None:
+                expected.add(enum_type.name)
+    return sorted(name for name in actual_enums if name not in expected)
+
+
 def has_drift(report: dict[str, list[Any]]) -> bool:
-    """True iff any of missing_tables, missing_columns, or missing_enum_labels is non-empty."""
-    return bool(report["missing_tables"]) or bool(report["missing_columns"]) or bool(report["missing_enum_labels"])
+    """True iff any drift list in the report is non-empty."""
+    return any(report.values())
 
 
 async def fetch_actual(engine: Engine) -> tuple[dict[str, set[str]], dict[str, set[str]]]:

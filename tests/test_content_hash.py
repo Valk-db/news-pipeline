@@ -104,7 +104,6 @@ class TestRunIngestionDedup:
         with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[]), \
              patch("src.ingestion.gdelt.ingest_gdelt", return_value=([article2], {"succeeded": ["apnews.com"], "failed": [], "skipped": []})), \
              patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
-             patch("src.ingestion.run.init_db"), \
              patch("src.ingestion.run.get_session", return_value=mock_session), \
              patch("src.ingestion.run.log_status"), \
              patch("src.ingestion.run.build_reporting_units", return_value=0), \
@@ -149,7 +148,6 @@ class TestRunIngestionDedup:
         with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[]), \
              patch("src.ingestion.gdelt.ingest_gdelt", return_value=([article], {"succeeded": ["apnews.com"], "failed": [], "skipped": []})), \
              patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
-             patch("src.ingestion.run.init_db"), \
              patch("src.ingestion.run.get_session", return_value=mock_session), \
              patch("src.ingestion.run.log_status"), \
              patch("src.ingestion.run.build_reporting_units", return_value=0), \
@@ -192,7 +190,6 @@ class TestRunIngestionDedup:
         with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[]), \
              patch("src.ingestion.gdelt.ingest_gdelt", return_value=([article], {"succeeded": ["reuters.com"], "failed": [], "skipped": []})), \
              patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
-             patch("src.ingestion.run.init_db"), \
              patch("src.ingestion.run.get_session", return_value=mock_session), \
              patch("src.ingestion.run.log_status"), \
              patch("src.ingestion.run.build_reporting_units", return_value=0), \
@@ -236,7 +233,6 @@ class TestRunIngestionDedup:
         with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[article]), \
              patch("src.ingestion.gdelt.ingest_gdelt", return_value=([], {"succeeded": [], "failed": [], "skipped": []})), \
              patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
-             patch("src.ingestion.run.init_db"), \
              patch("src.ingestion.run.get_session", return_value=mock_session), \
              patch("src.ingestion.run.log_status"), \
              patch("src.ingestion.run.build_reporting_units", return_value=0), \
@@ -295,7 +291,6 @@ class TestRunIngestionDedup:
         with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[]), \
              patch("src.ingestion.gdelt.ingest_gdelt", return_value=([article1, article2], {"succeeded": ["apnews.com", "reuters.com"], "failed": [], "skipped": []})), \
              patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
-             patch("src.ingestion.run.init_db"), \
              patch("src.ingestion.run.get_session", return_value=mock_session), \
              patch("src.ingestion.run.log_status"), \
              patch("src.ingestion.run.build_reporting_units", return_value=0), \

@@ -45,7 +45,7 @@ def _as_utc(value: datetime) -> datetime:
 
 
 class TestTablesExist:
-    """Both new tables are in the metadata, so init_db and create_all make them."""
+    """Both new tables are in the metadata, and 20261001000000/200 create them."""
 
     def test_pipeline_runs_table_exists(self):
         assert "pipeline_runs" in Base.metadata.tables

@@ -27,7 +27,7 @@ from src.ingestion.adapters.rss_evidence_adapter import RssEvidenceAdapter
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_dynamic_gate
-from src.shared.database import get_session, init_db
+from src.shared.database import get_session
 from src.schema.models import RawArticle, StatusLog
 from src.shared.config import get_settings
 from src.utils.ingest_stats import STATS
@@ -378,7 +378,13 @@ async def run_ingestion(
             try:
                 from src.enrichment.translation import translate_articles
 
-                translation_summary = translate_articles(new_articles)
+                # In a worker thread: the backend blocks on urllib and a one-second
+                # politeness sleep per chunk, and its budget reservation is a sync
+                # database call. Running it on the event loop would stall the pipeline
+                # for the length of a whole translation batch.
+                translation_summary = await asyncio.to_thread(
+                    translate_articles, new_articles
+                )
                 print(
                     f"  Translated: {translation_summary['translated']}, "
                     f"English: {translation_summary['english']}, "
@@ -533,9 +539,6 @@ async def main(argv: list[str] | None = None):
     dry_run = args.dry_run
 
     apply_env(args.env)
-
-    # Initialize DB
-    await init_db()
 
     try:
         results = await run_ingestion(
