@@ -172,28 +172,47 @@ class Corroboration:
         """Articles whose corroboration was attributed to a wire service."""
         return [a for a in self.articles(units) if a.is_wire_copy]
 
+    def _tier1_owners(self, units: Iterable) -> list[str]:
+        """One owner group per tier-1 article, post-collapse.
+
+        The single count both the histogram and the gate's pair list are built from, so
+        `distinct_owners` and the rule `evaluate_tier1_gate` applies cannot disagree.
+
+        A unit whose member rows resolve to no tier-1 article falls back to the histogram
+        `build_reporting_units()` stored for it: subtracting corroboration we cannot see would
+        drop owners that are really there. Those stored owners are already collapsed (units.py
+        resolves them through `get_owner_group()`), so the fallback is conservative in the safe
+        direction -- it can never invent independence, only decline to subtract it.
+        """
+        units = list(units)
+        owners: list[str] = []
+        unresolved: set[uuid.UUID] = set()
+        for unit in units:
+            unit_id = unit_id_of(unit)
+            resolved = [
+                article.owner
+                for article in self.by_unit.get(unit_id, ())
+                if article.is_tier1
+            ]
+            if resolved:
+                owners.extend(resolved)
+            else:
+                unresolved.add(unit_id)
+
+        for ref in self.refs:
+            if ref.unit_id not in unresolved or not ref.tier1_owner_groups:
+                continue
+            for owner, count in ref.tier1_owner_groups.items():
+                owners.extend([owner] * int(count))
+        return owners
+
     def owner_histogram(self, units: Iterable) -> dict[str, int]:
         """Owner group -> number of tier-1 articles attributed to it, post-collapse.
 
         The histogram the gate counted: `len(...)` is what `distinct_owners` means everywhere in
         this codebase, including the column stored on the story row.
         """
-        histogram: Counter[str] = Counter()
-        units = list(units)
-        resolved: set[uuid.UUID] = set()
-        for unit in units:
-            unit_id = unit_id_of(unit)
-            resolved.add(unit_id)
-            for article in self.by_unit.get(unit_id, ()):
-                if article.is_tier1:
-                    histogram[article.owner] += 1
-        # Units with no resolvable member rows keep their stored owners: subtracting an owner we
-        # cannot see would silently drop corroboration that is really there.
-        for ref in self.refs:
-            if ref.unit_id not in resolved or not ref.tier1_owner_groups:
-                continue
-            for owner, count in ref.tier1_owner_groups.items():
-                histogram[owner] += int(count)
+        histogram = Counter(self._tier1_owners(units))
         return {owner: histogram[owner] for owner in sorted(histogram)}
 
     def distinct_owners(self, units: Iterable) -> int:
@@ -202,19 +221,15 @@ class Corroboration:
     def tier1_pairs(self, units: Iterable) -> list[tuple[str, str]]:
         """The `(tier, owner)` pairs `evaluate_tier1_gate()` counts, one per tier-1 article.
 
-        Same shape the gate always consumed -- a pair per tier-1 article, so the unit half of the
-        rule is unchanged -- with the owner half post-collapse.
+        Same shape the gate always consumed -- a pair per tier-1 article, so the unit half of
+        the rule is unchanged -- with the owner half post-collapse.
         """
         return [
-            (article.tier, article.owner)
-            for article in self.articles(units)
-            if article.is_tier1
+            (SourceTier.TIER1.value, owner) for owner in self._tier1_owners(units)
         ]
 
     def tier1_article_count(self, units: Iterable) -> int:
-        return sum(
-            1 for u in units for a in self.by_unit.get(unit_id_of(u), ()) if a.is_tier1
-        )
+        return len(self._tier1_owners(units))
 
     # -- the sentence ----------------------------------------------------------------
 

@@ -52,6 +52,7 @@ from src.shared.analyzer_versions import (
     DERIVED_TABLES,
     GEOCODE_VERSION,
     NARRATIVE_VERSION,
+    NOT_RECOMPUTED_TABLES,
     RELIABILITY_VERSION,
     STAGE_ORDER,
     STAGE_TABLES,
@@ -100,8 +101,10 @@ def test_raw_articles_is_the_immutable_layer_and_has_neither_column():
 def test_the_registry_and_the_stage_tables_agree():
     assert set(STAGE_ORDER) == set(STAGE_TABLES)
     covered = {t for tables in STAGE_TABLES.values() for t in tables}
-    # event_geometries and article_embeddings have no writer, so they are deliberately absent.
-    assert covered | {"event_geometries", "article_embeddings"} == set(DERIVED_TABLES)
+    # event_geometries and article_embeddings have no writer, and gate_decisions is written by a
+    # gate run rather than by a recompute stage -- it is an append-only ledger, never recomputed.
+    absent = {"event_geometries", "article_embeddings", *NOT_RECOMPUTED_TABLES}
+    assert covered | absent == set(DERIVED_TABLES)
     for stage, tables in STAGE_TABLES.items():
         for table in tables:
             assert stage_version(stage) in expected_versions(table), f"{stage} -> {table}"
@@ -604,6 +607,12 @@ def test_only_nothing_that_cascades_counts_as_a_blocker():
 MIGRATION = "20261002050000_recomputable_derived_state.sql"
 SCHEMA = "recomputable_scratch"
 
+# gate_decisions is a ledger appended by gate runs, never a recompute stage's output, so it is not
+# in STAGE_TABLES -- but it does carry both columns, declared by its own CREATE TABLE migration
+# (20261002110000_gate_decisions.sql). These tests cover the ALTER-style migration, which is why
+# they enumerate the tables that migration has to touch.
+ALTERED_TABLES = tuple(t for t in DERIVED_TABLES if t not in NOT_RECOMPUTED_TABLES)
+
 
 def _migration_sql(schema: str) -> str:
     from pathlib import Path
@@ -641,13 +650,13 @@ def test_the_migration_names_every_derived_table():
     sql = (
         Path(__file__).resolve().parent.parent / "supabase" / "migrations" / MIGRATION
     ).read_text()
-    missing = [t for t in DERIVED_TABLES if f"'{t}'" not in sql]
+    missing = [t for t in ALTERED_TABLES if f"'{t}'" not in sql]
     assert not missing, f"migration never mentions {missing}"
     assert "raw_articles" not in sql.split("FOREACH", 1)[1].split("LOOP", 1)[0]
 
 
 async def test_migration_adds_both_columns_and_is_idempotent(scratch):
-    for table in DERIVED_TABLES:
+    for table in ALTERED_TABLES:
         await scratch.execute(f"CREATE TABLE {SCHEMA}.{table} (id serial PRIMARY KEY)")
     await scratch.execute(_migration_sql(SCHEMA))
 
@@ -662,7 +671,7 @@ async def test_migration_adds_both_columns_and_is_idempotent(scratch):
             )
         }
 
-    for table in DERIVED_TABLES:
+    for table in ALTERED_TABLES:
         cols = await columns(table)
         assert "analyzer_version" in cols, table
         assert "input_hash" in cols, table

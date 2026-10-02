@@ -98,11 +98,16 @@ async def test_cluster_viewpoints_basic(mock_session, sample_story, sample_units
     # The function queries: StoryUnitLink.story_id, ReportingUnit.source_tiers, ReportingUnit.tier1_owner_groups
     # We need to return rows that match the sample story's tier counts (tier1=2, tier2=1, etc.)
     recompute_result = MagicMock()
-    # Return 4 rows (one per unit), each with the source_tiers and tier1_owner_groups
+    # Return 4 rows (one per unit): story id, unit id, representative id and the stored
+    # histograms. No member rows are mocked for load_corroboration's article query, so owner
+    # resolution falls back to each unit's stored tier1_owner_groups -- the count the gate read
+    # before the wire collapse, which is what these tests are pinning.
     recompute_rows = []
     for i, unit in enumerate(sample_units):
         recompute_rows.append((
             sample_story.id,
+            unit.id,
+            unit.representative_article_id,
             unit.source_tiers,
             unit.tier1_owner_groups,
         ))
@@ -144,21 +149,25 @@ async def test_cluster_viewpoints_basic(mock_session, sample_story, sample_units
 
     # The call sequence in cluster_viewpoints:
     # 1. Initial story query (line 179-184)
-    # 2. recompute_story_counters first query (StoryUnitLink join, line 29-35 in tiers.py)
-    # 3. recompute_story_counters second query (select Story, line 56-58 in tiers.py)
-    # 4. session.refresh(story) - no execute call
-    # 5. P2.3 guard: existing children count (line 204-206)
-    # 6. _gather_unit_texts_for_story:
+    # 2. recompute_story_counters first query (StoryUnitLink join, tiers.py)
+    # 3. recompute_story_counters corroboration article query (src/verification/corroboration.py)
+    # 4. recompute_story_counters second query (select Story, tiers.py)
+    # 5. session.refresh(story) - no execute call
+    # 6. P2.3 guard: existing children count (line 204-206)
+    # 7. _gather_unit_texts_for_story:
     #    a. Story with units selectinload (line 165-171 in stories.py)
     #    b. Article queries for each unit (line 177-179 in stories.py)
-    # 7. Unit queries for viewpoint story day lookup (line 258-260, one per viewpoint cluster)
+    # 8. Unit queries for viewpoint story day lookup (line 258-260, one per viewpoint cluster)
+    corroboration_articles = MagicMock()  # no member rows -> stored-histogram fallback
+    corroboration_articles.all.return_value = []
     mock_session.execute.side_effect = [
         story_result,                      # 1. Initial story query
         recompute_result,                  # 2. recompute_story_counters join query
-        story_result,                      # 3. recompute_story_counters select Story query
-        existing_children_result,          # 4. P2.3 guard - no existing children
-        story_with_units_result,           # 5. _gather_unit_texts_for_story: story with units
-    ] + article_results + unit_query_results  # 6. article queries + 7. unit queries
+        corroboration_articles,            # 3. recompute_story_counters corroboration query
+        story_result,                      # 4. recompute_story_counters select Story query
+        existing_children_result,          # 5. P2.3 guard - no existing children
+        story_with_units_result,           # 6. _gather_unit_texts_for_story: story with units
+    ] + article_results + unit_query_results  # 7. article queries + 8. unit queries
 
     mock_session.commit = AsyncMock()
     mock_session.flush = AsyncMock()
@@ -285,6 +294,8 @@ async def test_viewpoint_substories_blocked_by_tier1_gate(mock_session, sample_u
     for unit in tier3_units:
         recompute_rows.append((
             story.id,
+            unit.id,
+            unit.representative_article_id,
             unit.source_tiers,
             unit.tier1_owner_groups,
         ))
@@ -320,21 +331,25 @@ async def test_viewpoint_substories_blocked_by_tier1_gate(mock_session, sample_u
 
     # The call sequence in cluster_viewpoints:
     # 1. Initial story query (line 179-184)
-    # 2. recompute_story_counters first query (StoryUnitLink join, line 29-35 in tiers.py)
-    # 3. recompute_story_counters second query (select Story, line 56-58 in tiers.py)
-    # 4. session.refresh(story) - no execute call
-    # 5. P2.3 guard: existing children count (line 204-206)
-    # 6. _gather_unit_texts_for_story:
+    # 2. recompute_story_counters first query (StoryUnitLink join, tiers.py)
+    # 3. recompute_story_counters corroboration article query (src/verification/corroboration.py)
+    # 4. recompute_story_counters second query (select Story, tiers.py)
+    # 5. session.refresh(story) - no execute call
+    # 6. P2.3 guard: existing children count (line 204-206)
+    # 7. _gather_unit_texts_for_story:
     #    a. Story with units selectinload (line 165-171 in stories.py)
     #    b. Article queries for each unit (line 177-179 in stories.py)
-    # 7. Unit queries for viewpoint story day lookup (line 258-260, one per viewpoint cluster)
+    # 8. Unit queries for viewpoint story day lookup (line 258-260, one per viewpoint cluster)
+    corroboration_articles = MagicMock()  # no member rows -> stored-histogram fallback
+    corroboration_articles.all.return_value = []
     mock_session.execute.side_effect = [
         story_result,                      # 1. Initial story query
         recompute_result,                  # 2. recompute_story_counters join query
-        story_result,                      # 3. recompute_story_counters select Story query
-        existing_children_result,          # 4. P2.3 guard - no existing children
-        story_with_units_result,           # 5. _gather_unit_texts_for_story: story with units
-    ] + article_results + unit_query_results  # 6. article queries + 7. unit queries
+        corroboration_articles,            # 3. recompute_story_counters corroboration query
+        story_result,                      # 4. recompute_story_counters select Story query
+        existing_children_result,          # 5. P2.3 guard - no existing children
+        story_with_units_result,           # 6. _gather_unit_texts_for_story: story with units
+    ] + article_results + unit_query_results  # 7. article queries + 8. unit queries
 
     mock_session.commit = AsyncMock()
     mock_session.flush = AsyncMock()
