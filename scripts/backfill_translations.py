@@ -8,6 +8,14 @@ Requires the translation migration to be applied first:
 Usage:
     python scripts/backfill_translations.py [--limit N] [--dry-run]
 
+Selects the rows that still have work left (see NEEDS_TRANSLATION), not the rows
+that were never touched: a row whose translation failed after it was detected --
+daily budget spent, transient network, a title that translated and a body that did
+not -- keeps its detected_language and was invisible to the old
+detected_language IS NULL filter, so it was never retried. English rows are
+complete by design and are never selected: title_en/body_text_en stay NULL for
+them and every reader coalesces (title_en or title).
+
 Reads SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / DATABASE_URL from
 ~/.config/procmon/supabase-dev.env. Polite by construction (MyMemory backend:
 1s between calls, and a daily character budget counted in budget_counters -- which
@@ -28,6 +36,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.enrichment.translation import select_backend, translate_articles
+
+# The rows this script exists to fix, as one postgREST boolean expression:
+#
+#   detected_language IS NULL                    never detected at all
+#   OR (detected_language <> 'en' AND (          detected as another language, and
+#        title_en IS NULL                        the headline has no translation,
+#     OR (body_text IS NOT NULL                  or the body exists and has no
+#          AND body_text_en IS NULL)))            translation of itself
+#
+# The <> 'en' arm is what keeps English rows out: they are finished, not pending,
+# and translating them would spend quota to produce a copy of what is already
+# there. The body arm is the one that matters after a partial failure: MyMemory
+# reserves budget per chunk, so a headline can succeed and the body be refused,
+# and the row is then neither undetected nor untranslated.
+NEEDS_TRANSLATION = (
+    "or=(detected_language.is.null,and(detected_language.neq.en,"
+    "or(title_en.is.null,and(body_text.not.is.null,body_text_en.is.null))))"
+)
 
 
 def load_env() -> dict:
@@ -90,11 +116,11 @@ class ArticleProxy:
         self.body_text_en = None
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=500)
     ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     env = load_env()
     rest = Rest(env["SUPABASE_URL"], env["SUPABASE_SERVICE_ROLE_KEY"])
@@ -115,10 +141,10 @@ def main() -> int:
 
     rows = rest.get(
         "raw_articles?select=id,url,title,body_text"
-        "&detected_language=is.null"
+        f"&{NEEDS_TRANSLATION}"
         f"&order=id&limit={args.limit}"
     )
-    print(f"untranslated articles: {len(rows)}")
+    print(f"articles needing detection or translation: {len(rows)}")
     if not rows:
         return 0
 

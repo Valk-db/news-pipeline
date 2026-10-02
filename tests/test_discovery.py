@@ -66,13 +66,18 @@ def _make_rich_story(
     lang=None,
     headline_en=None,
 ):
-    """Story with explicit tier mix and translatable headline."""
+    """Story with explicit tier mix and translatable headline.
+
+    QUEUED, not PENDING: the public map and the public story page serve
+    PUBLIC_STORY_STATUSES only, so a pending fixture is invisible to every
+    endpoint below and every assertion here silently degrades to "no results".
+    """
     t1, t2, t3, t4 = tier_counts
     story = Story(
         id=uuid.uuid4(),
         day=day,
         primary_entities=["test-entity"],
-        status=Story.Status.PENDING,
+        status=Story.Status.QUEUED,
         tier1_unit_count=t1,
         tier2_unit_count=t2,
         tier3_unit_count=t3,
@@ -254,6 +259,50 @@ class TestTopicSearch:
         client = TestClient(app_with_db)
         payload = client.get("/api/map/stories?min_owners=0&q=xyznonexistent").json()
         assert payload["count"] == 0
+
+
+class TestEnglishHeadlineCoalescing:
+    """Null title_en is the design for English rows, so every reader must fall back.
+
+    A foreign article carries title_en; an English one never does, because
+    duplicating the original into title_en would store the same text twice. Every
+    path that shows a headline therefore has to read title_en or title, and a
+    regression here is invisible on the translated stories alone: these fixtures
+    are the English rows the coalescing exists for.
+    """
+
+    @pytest.mark.asyncio
+    async def test_story_list_falls_back_to_the_original_headline(self, app_with_db, db_session):
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Parliament debates the new budget",
+                         lang="en", headline_en=None,
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        story = client.get("/api/map/stories?min_owners=0").json()["stories"][0]
+        assert story["headline"] == "Parliament debates the new budget"
+        assert story["headline_original"] == "Parliament debates the new budget"
+        assert story["translated"] is False
+        assert story["lang"] == "en"
+
+    @pytest.mark.asyncio
+    async def test_story_page_falls_back_to_the_original_headline(self, app_with_db, db_session):
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Parliament debates the new budget",
+                         lang="en", headline_en=None,
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        story_id = client.get("/api/map/stories?min_owners=0").json()["stories"][0]["story_id"]
+        page = client.get(f"/stories/{story_id}")
+        assert page.status_code == 200
+        assert "Parliament debates the new budget" in page.text
+        # The FR->EN tag is driven by `translated`, so an English row never shows it.
+        assert "→EN" not in page.text
 
 
 class TestMapPageDiscovery:

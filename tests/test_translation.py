@@ -8,6 +8,8 @@ import asyncio
 
 import pytest
 
+from scripts import backfill_translations
+from scripts.backfill_translations import NEEDS_TRANSLATION
 from src.shared.budget import MYMEMORY_CHARS, spend, used
 from src.enrichment.translation import (
     MyMemoryBackend,
@@ -232,3 +234,69 @@ class TestSelectBackend:
     def test_groq_preferred_when_keyed(self, monkeypatch):
         monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
         assert select_backend().name == "groq"
+
+
+class TestBackfillSelection:
+    """The backfill must select rows with work left, not rows nobody has touched.
+
+    The filter it used to carry was detected_language IS NULL, which reached only
+    the never-detected rows. A row that was detected as foreign and then failed to
+    translate -- budget spent, transient network, headline translated and body not --
+    keeps its detected_language and was therefore invisible to it and never
+    retried. Live dev census of the two filters: 1 row reached, 8 needed it.
+    """
+
+    def test_filter_reaches_never_detected_and_half_translated_rows(self):
+        assert "detected_language.is.null" in NEEDS_TRANSLATION
+        assert "detected_language.neq.en" in NEEDS_TRANSLATION
+        assert "title_en.is.null" in NEEDS_TRANSLATION
+        assert "body_text.not.is.null" in NEEDS_TRANSLATION
+        assert "body_text_en.is.null" in NEEDS_TRANSLATION
+
+    def test_filter_never_selects_finished_rows(self):
+        """English rows are finished, not pending: translating them spends quota to
+        duplicate text every reader already coalesces from `title`. And the old
+        null-only selection must not come back: it is what left the
+        half-translated rows unreachable in the first place.
+        """
+        assert "detected_language.eq.en" not in NEEDS_TRANSLATION
+        assert "detected_language=is.null" not in NEEDS_TRANSLATION
+
+    def test_main_requests_only_rows_needing_work(self, monkeypatch):
+        """The filter is wired into the request, not just defined."""
+        paths: list[str] = []
+
+        class FakeRest:
+            def __init__(self, url, key):
+                pass
+
+            def get(self, path):
+                paths.append(path)
+                if "detected_language&limit" in path:  # the column probe
+                    return []
+                if f"&{NEEDS_TRANSLATION}" in path:
+                    return [
+                        {
+                            "id": "row-1",
+                            "url": "https://example.com/a",
+                            "title": "Le président a annoncé de nouvelles mesures ce matin",
+                            "body_text": "Le gouvernement a publié un communiqué officiel.",
+                        }
+                    ]
+                return []
+
+            def patch(self, path, body):
+                raise AssertionError("dry run must not write")
+
+        monkeypatch.setattr(backfill_translations, "Rest", FakeRest)
+        monkeypatch.setattr(
+            backfill_translations,
+            "load_env",
+            lambda: {"SUPABASE_URL": "http://x", "SUPABASE_SERVICE_ROLE_KEY": "k"},
+        )
+        monkeypatch.setattr(
+            backfill_translations, "select_backend", lambda: StubBackend()
+        )
+
+        assert backfill_translations.main(["--dry-run"]) == 0
+        assert any(f"&{NEEDS_TRANSLATION}" in path for path in paths)
