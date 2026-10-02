@@ -15,3 +15,5 @@ CREATE TABLE IF NOT EXISTS source_topic_reliability (
 
 CREATE INDEX IF NOT EXISTS ix_str_lookup ON source_topic_reliability(source_domain, topic_group_id);
 CREATE INDEX IF NOT EXISTS ix_str_date ON source_topic_reliability(snapshot_date);
+
+ALTER TABLE source_topic_reliability ENABLE ROW LEVEL SECURITY;
