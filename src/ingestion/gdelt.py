@@ -15,6 +15,7 @@ import httpx
 import asyncio
 import json
 import logging
+import time
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -50,6 +51,33 @@ GKG_FALLBACK_QUERIES = [
 ]
 
 
+# GDELT signals throttling with a short plain-text apology rather than a status
+# code alone: "Please limit requests to one every 5 seconds...". Verified live
+# 2026-10-02 against api.gdeltproject.org, which serves it with a 429 and no
+# content-type; it has also arrived with a 200, where the old status check passed
+# it straight to the JSON parse and the run reported a generic error instead of
+# backing off. Match the text so both shapes are caught.
+THROTTLE_BODY_MARKERS = (
+    "please limit requests",
+    "please do not hammer",
+    "too many requests",
+)
+# The apology is a sentence or two. Scanning only the head of the body keeps
+# article text in a real payload out of the match.
+THROTTLE_BODY_SCAN_CHARS = 512
+# Backoff base for a body-detected throttle. Deliberately much longer than the
+# 429 base (settings.gdelt_base_delay): a body throttle is an active block, and
+# hammering during one extends it, so a queued-request backoff is the wrong size.
+THROTTLE_BODY_BASE_DELAY = 60.0
+# Consecutive throttle signals (body or 429) that open the DOC circuit. Three
+# means the block is not decaying on its own and only time clears it.
+THROTTLE_CIRCUIT_THRESHOLD = 3
+THROTTLE_CIRCUIT_COOLDOWN_SECONDS = 15 * 60
+# GDELT republishes every 15 minutes, so a DOC response cannot go stale inside
+# that window. Re-fetching earlier is pure rate limit pressure for zero new data.
+DOC_CACHE_TTL_SECONDS = 15 * 60
+
+
 @dataclass
 class DomainResult:
     domain: str
@@ -58,43 +86,299 @@ class DomainResult:
     error: Optional[str] = None
 
 
+def is_throttle_response(response: httpx.Response) -> bool:
+    """True when a response body is GDELT's rate-limit apology.
+
+    Runs before any JSON parse, because that is the whole point: the apology is
+    not JSON. Payloads that do start with "{" are real DOC results and are never
+    scanned, so an article headline about rate limits cannot trip the breaker.
+    """
+    body = response.text[:THROTTLE_BODY_SCAN_CHARS].strip()
+    if not body or body.startswith("{"):
+        return False
+    lowered = body.lower()
+    return any(marker in lowered for marker in THROTTLE_BODY_MARKERS)
+
+
+class ThrottleCircuitBreaker:
+    """Stop calling the DOC API once GDELT has told us to stop several times.
+
+    A throttle block only expires with time, and the static file path is the
+    primary feed, so going cold for a quarter hour costs us nothing. Counted in
+    consecutive signals: one success clears the streak, so an isolated throttle
+    inside a long run never opens the circuit.
+    """
+
+    def __init__(
+        self,
+        threshold: int = THROTTLE_CIRCUIT_THRESHOLD,
+        cooldown_seconds: float = THROTTLE_CIRCUIT_COOLDOWN_SECONDS,
+    ) -> None:
+        self.threshold = threshold
+        self.cooldown_seconds = cooldown_seconds
+        self.consecutive_throttles = 0
+        self.opened_at: Optional[float] = None
+
+    def record_throttle(self) -> None:
+        self.consecutive_throttles += 1
+        if self.consecutive_throttles >= self.threshold:
+            self.opened_at = time.monotonic()
+            logger.warning(
+                "GDELT DOC circuit opened: %d consecutive throttles, cooling down %.0f minutes",
+                self.consecutive_throttles, self.cooldown_seconds / 60,
+            )
+
+    def record_success(self) -> None:
+        self.consecutive_throttles = 0
+        self.opened_at = None
+
+    def cooldown_remaining(self) -> float:
+        if self.opened_at is None:
+            return 0.0
+        remaining = self.cooldown_seconds - (time.monotonic() - self.opened_at)
+        return max(remaining, 0.0)
+
+    def is_open(self) -> bool:
+        if self.opened_at is None:
+            return False
+        if self.cooldown_remaining() <= 0:
+            self.opened_at = None
+            self.consecutive_throttles = 0
+            return False
+        return True
+
+    def state(self) -> str:
+        if self.is_open():
+            return f"open ({self.cooldown_remaining() / 60:.0f} min left)"
+        return f"closed ({self.consecutive_throttles}/{self.threshold} throttles)"
+
+
+class DocResponseCache:
+    """In-process TTL cache for DOC API responses.
+
+    Keyed on the normalized query so two callers asking for the same domain and
+    window share one request. Single process by design: this runs inside one
+    scheduled job, so there is no second process to share with.
+    """
+
+    def __init__(self, ttl_seconds: float = DOC_CACHE_TTL_SECONDS) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._entries: Dict[tuple, tuple] = {}
+
+    @staticmethod
+    def make_key(domain: str, hours_back: int, max_records: int) -> tuple:
+        return (domain.strip().lower().removeprefix("www."), int(hours_back), int(max_records))
+
+    def get(self, key: tuple) -> Optional[List[RawArticle]]:
+        entry = self._entries.get(key)
+        if entry is None:
+            return None
+        stored_at, articles = entry
+        if time.monotonic() - stored_at >= self.ttl_seconds:
+            del self._entries[key]
+            return None
+        return articles
+
+    def put(self, key: tuple, articles: List[RawArticle]) -> None:
+        self._entries[key] = (time.monotonic(), list(articles))
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+class GlobalRateLimiter:
+    """One shared minimum spacing for every DOC API request.
+
+    GDELT's limit is per IP, not per domain, so a throttle that resets per domain
+    - or that only sleeps after a successful call - does not throttle us at all:
+    three domains in a row still land as three requests back to back. The lock
+    holds across the sleep so concurrent callers space out in turn.
+    """
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._last_request: Optional[float] = None
+
+    async def acquire(self, override: Optional[float] = None) -> None:
+        interval = get_settings().gdelt_throttle_seconds if override is None else override
+        if interval <= 0:
+            return
+        async with self._lock:
+            now = time.monotonic()
+            if self._last_request is not None:
+                wait = self._last_request + interval - now
+                if wait > 0:
+                    await asyncio.sleep(wait)
+            self._last_request = time.monotonic()
+
+
+DOC_THROTTLE_CIRCUIT = ThrottleCircuitBreaker()
+DOC_RESPONSE_CACHE = DocResponseCache()
+DOC_RATE_LIMITER = GlobalRateLimiter()
+
+
 async def fetch_with_retry(
     client: httpx.AsyncClient,
     url: str,
     params: dict,
     max_retries: int = 7,
     base_delay: float = 10.0,
+    throttle_seconds: Optional[float] = None,
 ) -> httpx.Response:
-    """Fetch with exponential backoff retry for rate limits."""
-    for attempt in range(max_retries):
+    """Fetch with exponential backoff retry for rate limits.
+
+    A throttle is whichever GDELT sends, the 429 status or the apology text in
+    the body, and both retry here. A body throttle gets the long base delay
+    because retrying fast inside an active block is what extends it. Every
+    attempt, retries included, goes through the shared rate limiter.
+    """
+    for attempt in range(max_retries + 1):
+        await DOC_RATE_LIMITER.acquire(throttle_seconds)
         response = await client.get(url, params=params)
-        if response.status_code != 429:
+
+        body_throttled = is_throttle_response(response)
+        if response.status_code != 429 and not body_throttled:
+            DOC_THROTTLE_CIRCUIT.record_success()
             return response
 
-        # Rate limited - exponential backoff with jitter
-        delay = base_delay * (2 ** attempt) + random.uniform(0, 2)
-        logger.warning("GDELT rate limited (429), attempt %d/%d, waiting %.1fs...", attempt + 1, max_retries, delay)
-        await asyncio.sleep(delay)
+        if body_throttled:
+            DOC_THROTTLE_CIRCUIT.record_throttle()
+            delay = THROTTLE_BODY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 2)
+            logger.warning(
+                "GDELT throttling in the response body (HTTP %d), attempt %d/%d, "
+                "waiting %.1fs, circuit %s",
+                response.status_code, attempt + 1, max_retries + 1, delay,
+                DOC_THROTTLE_CIRCUIT.state(),
+            )
+        else:
+            delay = base_delay * (2 ** attempt) + random.uniform(0, 2)
+            logger.warning(
+                "GDELT rate limited (429), attempt %d/%d, waiting %.1fs...",
+                attempt + 1, max_retries + 1, delay,
+            )
 
-    # Final attempt without catching 429
-    return await client.get(url, params=params)
+        # No sleep after the final attempt: there is no further attempt to wait for.
+        if attempt < max_retries:
+            if DOC_THROTTLE_CIRCUIT.is_open():
+                # The breaker just opened on this response. Sleeping out the rest of
+                # the backoff only to be ignored on arrival is the worst of both.
+                logger.warning("GDELT DOC circuit opened mid-fetch, not retrying %s", url)
+                return response
+            await asyncio.sleep(delay)
+
+    return response
+
+
+async def _articles_from_doc_response(
+    response: httpx.Response, domain: str, top_n: int
+) -> DomainResult:
+    """Classify one DOC API response and build RawArticles from it."""
+    if is_throttle_response(response):
+        return DomainResult(
+            domain=domain,
+            ok=False,
+            error="throttled: GDELT asked us to limit requests in the response body",
+        )
+
+    response.raise_for_status()
+
+    # Check for empty response
+    if not response.text.strip():
+        return DomainResult(domain=domain, ok=False, error="empty response")
+
+    # Validate JSON response (GDELT sometimes returns error text instead of JSON)
+    content_type = response.headers.get("content-type", "")
+    if "application/json" not in content_type:
+        return DomainResult(domain=domain, ok=False, error=f"non-json response: {content_type}")
+
+    data = response.json()
+
+    # Check if articles key exists - valid JSON with empty/missing articles = genuine "nothing new"
+    if not data.get("articles"):
+        return DomainResult(domain=domain, articles=[], ok=True)
+
+    articles: List[RawArticle] = []
+    for article in data.get("articles", []):
+        url = article.get("url", "")
+        if not url:
+            continue
+
+        url_hash = compute_url_hash(url)
+
+        # Extract body
+        body_text, extracted_title = await extract_article(url)
+        if not body_text or len(body_text) < 200:
+            continue
+
+        title = extracted_title or article.get("title", "").strip()
+        if not title:
+            continue
+
+        # Parse date
+        published_at = None
+        seendate = article.get("seendate", "")
+        if seendate:
+            try:
+                # GDELT format: YYYYMMDDHHMMSS
+                published_at = datetime.strptime(seendate, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        # Entities (cap driven by settings.top_n_entities)
+        entities = extract_entities_top_n(body_text, top_n=top_n)
+
+        # Content hash
+        content_hash = compute_content_hash(body_text)
+
+        # Determine tier by domain
+        tier = SourceTier.TIER1 if domain in TIER1_DOMAINS else SourceTier.TIER2
+
+        articles.append(RawArticle(
+            url=url,
+            url_hash=url_hash,
+            title=title,
+            body_text=body_text,
+            summary=article.get("excerpt", "")[:500] if article.get("excerpt") else None,
+            source_domain=domain,
+            source_tier=tier,
+            published_at=published_at,
+            entities=entities,
+            content_hash=content_hash,
+        ))
+
+    return DomainResult(domain=domain, articles=articles, ok=True)
 
 
 async def fetch_gdelt_articles(
     domain: str,
     hours_back: int = 24,
     max_records: int = 100,
-    throttle_seconds: float = 5.0,
+    throttle_seconds: Optional[float] = None,
 ) -> DomainResult:
     """
     Fetch articles from GDELT DOC API for a specific domain.
-    Rate limited to 1 request per throttle_seconds.
+    Rate limited to 1 request per throttle_seconds (settings.gdelt_throttle_seconds
+    unless overridden); the limit is per-IP, so the spacing is shared globally.
     Returns DomainResult with ok/error classification.
     """
     settings = get_settings()
-    throttle = settings.gdelt_throttle_seconds
     max_retries = settings.gdelt_max_retries
     base_delay = settings.gdelt_base_delay
+
+    if DOC_THROTTLE_CIRCUIT.is_open():
+        logger.warning(
+            "GDELT DOC circuit open, skipping %s (%.0f min left; static files are the primary path)",
+            domain, DOC_THROTTLE_CIRCUIT.cooldown_remaining() / 60,
+        )
+        return DomainResult(domain=domain, ok=False, error="circuit_open")
+
+    # GDELT only republishes every 15 minutes, so a response still inside that
+    # window cannot be stale. Serving it from cache saves the request entirely.
+    cache_key = DOC_RESPONSE_CACHE.make_key(domain, hours_back, max_records)
+    cached = DOC_RESPONSE_CACHE.get(cache_key)
+    if cached is not None:
+        logger.info("GDELT DOC cache hit for %s (%d articles)", domain, len(cached))
+        return DomainResult(domain=domain, articles=list(cached), ok=True)
 
     # Build query: domain + last 24h + English
     query = f"domain:{domain} language:english"
@@ -106,84 +390,25 @@ async def fetch_gdelt_articles(
         "sort": "datedesc",
     }
 
-    articles: List[RawArticle] = []
-
     async with httpx.AsyncClient(timeout=60) as client:
         try:
-            response = await fetch_with_retry(client, GDELT_API, params, max_retries=max_retries, base_delay=base_delay)
-            response.raise_for_status()
-
-            # Check for empty response
-            if not response.text.strip():
-                return DomainResult(domain=domain, ok=False, error="empty response")
-
-            # Validate JSON response (GDELT sometimes returns error text instead of JSON)
-            content_type = response.headers.get("content-type", "")
-            if "application/json" not in content_type:
-                return DomainResult(domain=domain, ok=False, error=f"non-json response: {content_type}")
-
-            data = response.json()
-
-            # Check if articles key exists - valid JSON with empty/missing articles = genuine "nothing new"
-            if not data.get("articles"):
-                return DomainResult(domain=domain, articles=[], ok=True)
-
-            for article in data.get("articles", []):
-                url = article.get("url", "")
-                if not url:
-                    continue
-
-                url_hash = compute_url_hash(url)
-
-                # Extract body
-                body_text, extracted_title = await extract_article(url)
-                if not body_text or len(body_text) < 200:
-                    continue
-
-                title = extracted_title or article.get("title", "").strip()
-                if not title:
-                    continue
-
-                # Parse date
-                published_at = None
-                seendate = article.get("seendate", "")
-                if seendate:
-                    try:
-                        # GDELT format: YYYYMMDDHHMMSS
-                        published_at = datetime.strptime(seendate, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-                    except ValueError:
-                        pass
-
-                # Entities (cap driven by settings.top_n_entities)
-                entities = extract_entities_top_n(body_text, top_n=settings.top_n_entities)
-
-                # Content hash
-                content_hash = compute_content_hash(body_text)
-
-                # Determine tier by domain
-                tier = SourceTier.TIER1 if domain in TIER1_DOMAINS else SourceTier.TIER2
-
-                art = RawArticle(
-                    url=url,
-                    url_hash=url_hash,
-                    title=title,
-                    body_text=body_text,
-                    summary=article.get("excerpt", "")[:500] if article.get("excerpt") else None,
-                    source_domain=domain,
-                    source_tier=tier,
-                    published_at=published_at,
-                    entities=entities,
-                    content_hash=content_hash,
-                )
-                articles.append(art)
-
+            response = await fetch_with_retry(
+                client, GDELT_API, params,
+                max_retries=max_retries,
+                base_delay=base_delay,
+                throttle_seconds=throttle_seconds,
+            )
+            result = await _articles_from_doc_response(
+                response, domain, settings.top_n_entities
+            )
         except Exception as e:
             logger.error("GDELT fetch failed for %s: %s", domain, e)
             return DomainResult(domain=domain, ok=False, error=str(e))
 
-        await asyncio.sleep(throttle)
-
-    return DomainResult(domain=domain, articles=articles, ok=True)
+    # Only successes are cached: a throttle or a parse error must not be replayed.
+    if result.ok:
+        DOC_RESPONSE_CACHE.put(cache_key, result.articles)
+    return result
 
 
 async def fetch_gkg_geojson_articles(

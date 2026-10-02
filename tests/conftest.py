@@ -121,6 +121,23 @@ def budget_counter(tmp_path, monkeypatch):
     asyncio.run(engine.dispose())
 
 
+@pytest.fixture(autouse=True)
+def _reset_gdelt_doc_state():
+    """Keep the process-global GDELT DOC state out of the next test.
+
+    The DOC fallback is deliberately global: one rate limiter for every call, one
+    throttle breaker, one response cache. Those are the point of it, so tests
+    reset them rather than the module rebuilding them per call.
+    """
+    from src.ingestion import gdelt
+
+    gdelt.DOC_RESPONSE_CACHE.clear()
+    gdelt.DOC_THROTTLE_CIRCUIT.record_success()
+    yield
+    gdelt.DOC_RESPONSE_CACHE.clear()
+    gdelt.DOC_THROTTLE_CIRCUIT.record_success()
+
+
 # Sample article data for tests
 @pytest.fixture
 def sample_articles() -> list[dict]:
