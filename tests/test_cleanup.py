@@ -195,11 +195,6 @@ class TestCleanupStaleStoryLinks:
         stale_link.story_id = uuid.uuid4()
         stale_link.unit_id = uuid.uuid4()
 
-        valid_link = MagicMock(spec=StoryUnitLink)
-        valid_link.id = uuid.uuid4()
-        valid_link.story_id = uuid.uuid4()
-        valid_link.unit_id = uuid.uuid4()
-
         # New implementation uses single query with LEFT JOINs
         # Return stale_link (missing story/unit) but NOT valid_link (both exist)
         mock_link_result = MagicMock()
@@ -212,10 +207,21 @@ class TestCleanupStaleStoryLinks:
         mock_session.delete = AsyncMock()
         mock_session.flush = AsyncMock()
 
-        result = await cleanup_stale_story_links(mock_session)
+        # The counter refresh is covered by the real-DB test below; here we only
+        # assert the link removal.
+        with patch(
+            "src.verification.cleanup.viewpoint_child_exclusions",
+            new=AsyncMock(return_value={}),
+        ) as mock_exclusions, patch(
+            "src.verification.cleanup.recompute_story_counters",
+            new=AsyncMock(),
+        ) as mock_recompute:
+            result = await cleanup_stale_story_links(mock_session)
 
         assert result.stale_links_removed == 1
         mock_session.delete.assert_called_once_with(stale_link)
+        mock_exclusions.assert_called_once()
+        mock_recompute.assert_called_once()
 
 
 class TestRunCleanup:
@@ -314,3 +320,104 @@ class TestIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+class TestStaleLinkRecomputeRespectsViewpointExclusions:
+    """P0 deferred (c), 2026-10-02: cleanup_stale_story_links() recomputed a story's
+    counters without the viewpoint-child unit exclusions that recompute_story_counters()
+    gained in the P0-5 fix. A stale link on a viewpoint child therefore rewrote the
+    child's counters over ALL its units (including parent-shared ones) while the gate
+    counts the child on child-exclusive units only -- the stored counters and the gate's
+    decision diverged. Real SQLite end to end."""
+
+    async def _article(self, session, domain):
+        from src.schema.models import RawArticle, SourceTier
+
+        article = RawArticle(
+            id=uuid.uuid4(),
+            url=f"https://{domain}/c/{uuid.uuid4().hex[:8]}",
+            url_hash=uuid.uuid4().hex,
+            title=f"Report from {domain}",
+            body_text="Body.",
+            source_domain=domain,
+            source_tier=SourceTier.TIER1,
+            published_at=datetime.now(timezone.utc),
+        )
+        session.add(article)
+        await session.flush()
+        return article
+
+    async def _unit(self, session, articles):
+        from src.verification.units import get_owner_group
+
+        source_tiers, owner_groups, tier1_owner_groups = {}, {}, {}
+        for article in articles:
+            owner = get_owner_group(article.source_domain)
+            source_tiers["tier1"] = source_tiers.get("tier1", 0) + 1
+            owner_groups[owner] = owner_groups.get(owner, 0) + 1
+            tier1_owner_groups[owner] = tier1_owner_groups.get(owner, 0) + 1
+        unit = ReportingUnit(
+            id=uuid.uuid4(),
+            day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+            representative_article_id=articles[0].id,
+            article_count=len(articles),
+            source_tiers=source_tiers,
+            owner_groups=owner_groups,
+            tier1_owner_groups=tier1_owner_groups,
+        )
+        session.add(unit)
+        await session.flush()
+        for article in articles:
+            article.reporting_unit_id = unit.id
+        return unit
+
+    @pytest.mark.asyncio
+    async def test_child_counters_stay_child_exclusive_after_stale_link_cleanup(self, db_session):
+        from src.verification.tiers import apply_tier1_gate
+
+        shared = await self._unit(db_session, [await self._article(db_session, "bbc.com")])
+        exclusive = await self._unit(db_session, [await self._article(db_session, "npr.org")])
+
+        parent = Story(
+            id=uuid.uuid4(),
+            day=datetime.now(timezone.utc),
+            primary_entities=[],
+            status=Story.Status.PENDING,
+        )
+        child = Story(
+            id=uuid.uuid4(),
+            day=datetime.now(timezone.utc),
+            primary_entities=[],
+            status=Story.Status.PENDING,
+            viewpoint_cluster_id=parent.id,
+        )
+        db_session.add_all([parent, child])
+        await db_session.flush()
+        db_session.add_all(
+            [
+                StoryUnitLink(story_id=parent.id, unit_id=shared.id),
+                StoryUnitLink(story_id=child.id, unit_id=shared.id),
+                StoryUnitLink(story_id=child.id, unit_id=exclusive.id),
+                # A link to a unit that does not exist: the stale row cleanup must find.
+                StoryUnitLink(story_id=child.id, unit_id=uuid.uuid4()),
+            ]
+        )
+        await db_session.commit()
+
+        # Gate the child: with exclusions it counts its exclusive unit only (1 unit, 1 owner).
+        gate_result = await apply_tier1_gate(db_session, [child.id])
+        assert gate_result == {"queued": 0, "blocked": 1}
+        await db_session.refresh(child)
+        assert child.tier1_unit_count == 1, "gate counts the child on exclusive units only"
+        assert child.distinct_owners == 1
+
+        # Cleanup finds the dangling link, deletes it, and refreshes the child's counters.
+        cleanup_result = await cleanup_stale_story_links(db_session)
+        assert cleanup_result.stale_links_removed == 1
+        await db_session.commit()
+
+        await db_session.refresh(child)
+        assert child.tier1_unit_count == 1, (
+            "stale-link cleanup must recompute on the same child-exclusive set the gate used; "
+            f"got {child.tier1_unit_count} (parent-shared unit leaked back in)"
+        )
+        assert child.distinct_owners == 1

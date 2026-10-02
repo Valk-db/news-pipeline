@@ -39,7 +39,7 @@ async def recompute_story_counters(
     corroboration a story has, only how many independent owners it counts for.
 
     `unit_exclusions` maps a story id to unit ids that story must not count -- the gate computes
-    it for viewpoint children (see _viewpoint_child_exclusions): a child is a slice of its
+    it for viewpoint children (see viewpoint_child_exclusions): a child is a slice of its
     parent, and units the slice shares with the parent already counted toward the parent's gate.
     Callers that have no exclusions pass nothing and get the historical behavior.
     """
@@ -464,7 +464,7 @@ def evaluate_tier1_gate(unit_owner_pairs: List[Tuple[uuid.UUID, str]]) -> Tuple[
     return True, "Gate passed"
 
 
-async def _viewpoint_child_exclusions(
+async def viewpoint_child_exclusions(
     session: AsyncSession, stories: Iterable[Story]
 ) -> dict[uuid.UUID, set[uuid.UUID]]:
     """Unit ids each viewpoint child shares with its parent, keyed by child story id.
@@ -546,7 +546,7 @@ async def apply_tier1_gate(
 
     # Viewpoint children are gated on child-exclusive units only: units a slice shares with its
     # parent already counted toward the parent's gate, so the child must not count them again.
-    unit_exclusions = await _viewpoint_child_exclusions(session, stories)
+    unit_exclusions = await viewpoint_child_exclusions(session, stories)
 
     # First, recompute all counters from current StoryUnitLinks
     story_id_list = [s.id for s in stories]
@@ -854,7 +854,7 @@ async def apply_dynamic_gate(
     story_id_list = [s.id for s in stories]
     # Viewpoint children are gated on child-exclusive units only: units a slice shares with its
     # parent already counted toward the parent's gate, so the child must not count them again.
-    unit_exclusions = await _viewpoint_child_exclusions(session, stories)
+    unit_exclusions = await viewpoint_child_exclusions(session, stories)
     if story_id_list:
         await recompute_story_counters(session, story_id_list, unit_exclusions=unit_exclusions)
 
@@ -965,7 +965,7 @@ async def apply_dynamic_gate(
 
     # Viewpoint children are gated on child-exclusive units only: units a slice shares with its
     # parent already counted toward the parent's gate, so the child must not count them again.
-    unit_exclusions = await _viewpoint_child_exclusions(session, stories)
+    unit_exclusions = await viewpoint_child_exclusions(session, stories)
 
     # First, recompute all counters from current StoryUnitLinks
     story_id_list = [s.id for s in stories]
