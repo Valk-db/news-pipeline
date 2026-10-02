@@ -1,7 +1,8 @@
 """Tests for discovery: tier filter, date sort, topic search, near-dupe collapsing.
 
 Search runs the ILIKE fallback here (SQLite has no pg_trgm); the trigram path
-is exercised live against dev Postgres during verification.
+is pinned by TestTrigramSearchBranch, which compiles the real Postgres SQL,
+and exercised live against dev Postgres during verification.
 """
 
 import uuid
@@ -263,6 +264,88 @@ class TestTopicSearch:
         client = TestClient(app_with_db)
         payload = client.get("/api/map/stories?min_owners=0&q=xyznonexistent").json()
         assert payload["count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_topic_word_inside_a_long_headline_matches(self, app_with_db, db_session):
+        """A topic term must find a headline that merely contains it.
+
+        This is the case the whole-string `%` comparison got wrong on Postgres:
+        "trump" against "UK tries to stop Trump's diesel export ban" scores
+        about 0.10, under the operator's 0.3 threshold, so the pg_trgm branch
+        returned nothing for nearly every real topic word. On dev before the
+        fix, 28 of the 30 most common tokens in the pending queue matched zero
+        stories.
+        """
+        now = datetime.now(timezone.utc)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="UK tries to stop Trump's diesel export ban",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        _make_rich_story(db_session, day=now - timedelta(hours=2),
+                         headline="Parliament debates the new budget",
+                         tier_counts=(2, 0, 0, 0), owners=2)
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        payload = client.get("/api/map/stories?min_owners=0&q=trump").json()
+        assert payload["count"] == 1
+        assert "Trump" in payload["stories"][0]["headline"]
+
+
+class TestTrigramSearchBranch:
+    """The pg_trgm branch is unreachable from SQLite, so pin it by compilation.
+
+    Every other search test here takes the ILIKE fallback, which means this
+    branch shipped having matched almost nothing in production while the suite
+    stayed green. These assert the compiled Postgres SQL, and the live
+    behaviour is verified against dev Postgres during the batch.
+    """
+
+    @staticmethod
+    def _compiled(stmt) -> str:
+        from sqlalchemy.dialects import postgresql
+        return str(stmt.compile(dialect=postgresql.dialect()))
+
+    @staticmethod
+    def _rep_join():
+        from sqlalchemy import select
+        return (
+            select(ReportingUnit.id, StoryUnitLink.story_id)
+            .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
+            .subquery()
+        )
+
+    def test_ranks_by_word_similarity_not_whole_string_similarity(self):
+        from curation_ui.discovery import _search_stmt_trigram
+        sql = self._compiled(_search_stmt_trigram(self._rep_join(), "trump", 50))
+        assert "word_similarity(" in sql
+        # The regression this guards: whole-string similarity against a topic
+        # word scores ~0.10 and matches nothing.
+        assert "similarity(" not in sql.replace("word_similarity(", "")
+
+    def test_matches_with_the_word_similarity_operator(self):
+        from curation_ui.discovery import _search_stmt_trigram
+        sql = self._compiled(_search_stmt_trigram(self._rep_join(), "ukraine", 50))
+        assert "<%" in sql
+
+    def test_still_matches_by_containment_like_the_fallback(self):
+        """Both branches must select the same stories, or prod diverges from tests."""
+        from curation_ui.discovery import _search_stmt_ilike, _search_stmt_trigram
+        for stmt in (
+            _search_stmt_trigram(self._rep_join(), "trump", 50),
+            _search_stmt_ilike(self._rep_join(), "trump", 50),
+        ):
+            sql = self._compiled(stmt)
+            assert "ILIKE" in sql
+            # Both the translated and the original headline, in both branches.
+            assert "title_en" in sql
+            assert "title" in sql
+
+    def test_only_the_trigram_branch_uses_trigram_functions(self):
+        from curation_ui.discovery import _search_stmt_ilike, _search_stmt_trigram
+        ilike_sql = self._compiled(_search_stmt_ilike(self._rep_join(), "trump", 50))
+        assert "word_similarity" not in ilike_sql
+        trigram_sql = self._compiled(_search_stmt_trigram(self._rep_join(), "trump", 50))
+        assert "word_similarity" in trigram_sql
 
 
 class TestEnglishHeadlineCoalescing:

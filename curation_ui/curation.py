@@ -9,14 +9,22 @@ and each mutating route's response.
 import logging
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import desc, select
+from sqlalchemy import asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from curation_ui.app_state import check_database, check_llm, render_error_page, templates
+from curation_ui.discovery import (
+    _parse_tiers,
+    _resolve_window,
+    _search_story_ids,
+    _tier_include_condition,
+    _verification_badge,
+)
 from curation_ui.security import issue_csrf_token, require_auth, require_csrf
 from src.schema.models import (
     Claim,
@@ -51,15 +59,128 @@ APPROVE_NO_LLM_NOTICE = (
 )
 APPROVE_AI_NOTICE = "Caption generated with AI assistance."
 
+# Discovery controls for the triage queue.
+#
+# The queue defaults are deliberately the ones the queue already had: newest
+# first, every tier, no window. A curator opens the workbench to see what just
+# arrived, so narrowing is opt in. The filter rules themselves live in
+# discovery.py, shared with the public map, so a tier means the same thing on
+# both surfaces.
+CURATION_QUEUE_LIMIT = 50
+CURATION_SORT_DEFAULT = "newest"
+CURATION_SORTS = ("top", "newest", "oldest")
 
-async def _render_stories_grid(session: AsyncSession) -> list:
+# How many stories the topic search ranks before the other filters trim the
+# result. Over-fetched because a search match outside the window or outside the
+# selected tiers still counts as a match the curator typed.
+CURATION_SEARCH_LIMIT = 200
+
+
+def _normalize_sort(sort: str | None) -> str:
+    """An unknown sort falls back to the queue default rather than an error.
+
+    The queue is a workbench, not an API: a mistyped sort should still show the
+    queue, not a 500 page in front of the curator mid-triage.
+    """
+    return sort if sort in CURATION_SORTS else CURATION_SORT_DEFAULT
+
+
+def _filter_query(
+    tiers: list[int] | None = None,
+    sort: str = CURATION_SORT_DEFAULT,
+    hours: int | None = None,
+    q: str | None = None,
+) -> str:
+    """The curator's active filters as a query string, for the card buttons.
+
+    Defaults are omitted, so an unfiltered queue carries no query string at all
+    and every non-default choice survives the HTMX re-render that follows an
+    approve or a reject.
+    """
+    params: list[tuple[str, str]] = []
+    if tiers and sorted(set(tiers)) != [1, 2, 3, 4]:
+        params.append(("tiers", ",".join(str(t) for t in sorted(tiers))))
+    if sort and sort != CURATION_SORT_DEFAULT:
+        params.append(("sort", sort))
+    try:
+        window_hours = int(hours or 0)
+    except (TypeError, ValueError):
+        window_hours = 0
+    if window_hours > 0:
+        params.append(("hours", str(window_hours)))
+    if q and q.strip():
+        params.append(("q", q.strip()))
+    return f"?{urlencode(params)}" if params else ""
+
+
+def _queue_filter_state(
+    tiers: list[int] | None,
+    sort: str,
+    hours: int | None,
+    q: str | None,
+) -> dict:
+    """Template state for the discovery toolbar and the grid fragment.
+
+    One place resolves the curator's selection into everything the templates
+    need: the control values for the initial render, the same selection as a
+    query string for the card buttons, and whether any filter is actually on, so
+    an empty grid can say whether the queue is empty or the filters are.
+    """
+    try:
+        window_hours = max(0, int(hours or 0))
+    except (TypeError, ValueError):
+        window_hours = 0
+    active_tiers = tiers or [1, 2, 3, 4]
+    active_sort = _normalize_sort(sort)
+    active_q = (q or "").strip()
+    return {
+        "active_tiers": active_tiers,
+        # All four tiers on is the unfiltered queue, so the hidden field carries
+        # nothing: the same meaning always has one canonical query string.
+        "active_tiers_csv": (
+            "" if len(active_tiers) == 4 else ",".join(str(t) for t in active_tiers)
+        ),
+        "active_sort": active_sort,
+        "active_hours": window_hours,
+        "active_q": active_q,
+        "filter_query": _filter_query(
+            tiers=tiers, sort=active_sort, hours=window_hours, q=active_q
+        ),
+        "filters_active": bool(
+            tiers
+            or active_sort != CURATION_SORT_DEFAULT
+            or window_hours > 0
+            or active_q
+        ),
+    }
+
+
+async def _render_stories_grid(
+    session: AsyncSession,
+    tiers: list[int] | None = None,
+    sort: str = CURATION_SORT_DEFAULT,
+    hours: int | None = None,
+    q: str | None = None,
+) -> list:
     """Render the stories grid fragment for HTMX swap.
+
+    Discovery filters (tiers, sort, date window, topic search) come from the
+    curator's controls and are applied with the same helpers the public map
+    uses, so a tier means the same thing on both surfaces.
 
     Defense-in-depth: Filter out viewpoint sub-stories that don't have
     ≥2 distinct tier-1 owners. This ensures that even if a viewpoint
     sub-story somehow bypasses apply_tier1_gate, it won't appear in
     the curation queue.
     """
+    search_ids: list | None = None
+    if q and q.strip():
+        search_ids = await _search_story_ids(session, q.strip(), limit=CURATION_SEARCH_LIMIT)
+        if not search_ids:
+            return []
+
+    window_start, _window_end = _resolve_window(hours, datetime.now(timezone.utc))
+
     stmt = (
         select(Story)
         .where(Story.status == Story.Status.PENDING)
@@ -68,17 +189,49 @@ async def _render_stories_grid(session: AsyncSession) -> list:
             (Story.viewpoint_cluster_id.is_(None)) |  # Not a viewpoint sub-story
             ((Story.tier1_unit_count >= 2) & (Story.distinct_owners >= 2))  # Passes tier-1 gate
         )
-        .order_by(desc(Story.day), desc(Story.created_at))
-        .limit(50)
+        # A story is carried by an outlet when it has a unit in that tier, so
+        # tiers=1,2 hides stories carried only by tier-3 outlets and keeps a
+        # tier-1 story that also picked up tier-3 coverage.
         .options(
             selectinload(Story.units).selectinload(ReportingUnit.representative)
         )
     )
+
+    tier_condition = _tier_include_condition(tiers)
+    if tier_condition is not None:
+        stmt = stmt.where(tier_condition)
+
+    # The queue's own clock is when the story was created: the curator is
+    # triaging what the pipeline produced, not when something happened on the
+    # map. An unbounded window (0 or absent) adds no bound at all.
+    if window_start is not None:
+        stmt = stmt.where(Story.created_at >= window_start)
+
+    if search_ids is not None:
+        stmt = stmt.where(Story.id.in_(search_ids))
+
+    order = {
+        # "top" ranks by corroboration the same way the map does, then recency
+        # to break ties between equally corroborated stories.
+        "top": (
+            desc(Story.distinct_owners),
+            desc(Story.tier1_unit_count),
+            desc(Story.day),
+            desc(Story.created_at),
+        ),
+        "oldest": (asc(Story.day), asc(Story.created_at)),
+        "newest": (desc(Story.day), desc(Story.created_at)),
+    }[_normalize_sort(sort)]
+
+    stmt = stmt.order_by(*order).limit(CURATION_QUEUE_LIMIT)
+
     result = await session.execute(stmt)
     stories = result.scalars().all()
 
     if not stories:
         return []
+
+    filter_query = _filter_query(tiers=tiers, sort=_normalize_sort(sort), hours=hours, q=q)
 
     story_data = []
     # Keep as UUID objects for the IN-clause bind params (the UUID column type
@@ -270,6 +423,10 @@ async def _render_stories_grid(session: AsyncSession) -> list:
             "claims": claims_with_evidence,
             "topic_groups": story_topics,
             "narrative_arcs": story_edges,
+            # The corroboration state a curator triages on, and the filters to
+            # carry into the approve/reject re-render.
+            "verification": _verification_badge(story),
+            "filter_query": filter_query,
         })
 
     return story_data
@@ -302,14 +459,37 @@ async def _get_story_or_404(session: AsyncSession, story_id: uuid.UUID) -> Story
 
 
 @router.get("/", response_class=HTMLResponse)
-async def index(request: Request, user: str = Depends(require_auth)):
-    """Show pending stories for triage."""
+async def index(
+    request: Request,
+    tiers: str = None,
+    sort: str = CURATION_SORT_DEFAULT,
+    hours: int = 0,
+    q: str = None,
+    user: str = Depends(require_auth),
+):
+    """Show pending stories for triage, filtered by the curator's discovery controls.
+
+    The controls (tier chips, date window, sort, topic search) are rendered
+    server side in their initial state from this query string, so first paint
+    already shows the filtered queue and the workbench is useful with no
+    JavaScript at all.
+    """
     db_ok, db_msg = check_database(request)
     if not db_ok:
         return render_error_page(request, db_msg)
 
+    active_tiers = _parse_tiers(tiers)
+    active_sort = _normalize_sort(sort)
+    filter_state = _queue_filter_state(active_tiers, active_sort, hours, q)
+
     async with get_session() as session:
-        stories = await _render_stories_grid(session)
+        stories = await _render_stories_grid(
+            session,
+            tiers=active_tiers,
+            sort=active_sort,
+            hours=hours,
+            q=q,
+        )
         # Count approved posts for the header link
         stmt = select(CuratedPost).where(CuratedPost.status == CuratedPost.Status.APPROVED)
         result = await session.execute(stmt)
@@ -321,6 +501,7 @@ async def index(request: Request, user: str = Depends(require_auth)):
         "stories": stories,
         "posts_count": posts_count,
         "csrf_token": issue_csrf_token(),
+        **filter_state,
     })
 
 
@@ -328,6 +509,10 @@ async def index(request: Request, user: str = Depends(require_auth)):
 async def approve_story(
     story_id: uuid.UUID,
     request: Request,
+    tiers: str = None,
+    sort: str = CURATION_SORT_DEFAULT,
+    hours: int = 0,
+    q: str = None,
     user: str = Depends(require_auth),
     csrf: None = Depends(require_csrf),
 ):
@@ -335,12 +520,19 @@ async def approve_story(
 
     The caption comes from the LLM when one is configured, otherwise from the
     deterministic builder, so approval works with no provider key at all.
+
+    The discovery filters are accepted on the query string the card button sends
+    so the returned grid re-renders the queue the curator is actually looking at.
     """
     db_ok, db_msg = check_database(request)
     if not db_ok:
         return render_error_page(request, db_msg)
 
     llm_ok, _ = check_llm(request)
+
+    active_tiers = _parse_tiers(tiers)
+    active_sort = _normalize_sort(sort)
+    filter_state = _queue_filter_state(active_tiers, active_sort, hours, q)
 
     async with get_session() as session:
         story = await _get_story_or_404(session, story_id)
@@ -451,7 +643,13 @@ async def approve_story(
         await session.commit()
 
         # Return updated stories grid fragment
-        stories = await _render_stories_grid(session)
+        stories = await _render_stories_grid(
+            session,
+            tiers=active_tiers,
+            sort=active_sort,
+            hours=hours,
+            q=q,
+        )
 
     return templates.TemplateResponse(request, "story_grid.html", {
         "request": request,
@@ -460,6 +658,7 @@ async def approve_story(
             APPROVE_AI_NOTICE if ai_assisted else APPROVE_NO_LLM_NOTICE
         ),
         "notice_type": "info" if ai_assisted else "warning",
+        **filter_state,
     })
 
 
@@ -467,13 +666,25 @@ async def approve_story(
 async def reject_story(
     story_id: uuid.UUID,
     request: Request,
+    tiers: str = None,
+    sort: str = CURATION_SORT_DEFAULT,
+    hours: int = 0,
+    q: str = None,
     user: str = Depends(require_auth),
     csrf: None = Depends(require_csrf),
 ):
-    """Reject a story - returns stories grid fragment for HTMX."""
+    """Reject a story - returns stories grid fragment for HTMX.
+
+    Carries the curator's discovery filters on the query string, exactly like
+    approve, so the re-rendered grid stays inside the active filters.
+    """
     db_ok, db_msg = check_database(request)
     if not db_ok:
         return render_error_page(request, db_msg)
+
+    active_tiers = _parse_tiers(tiers)
+    active_sort = _normalize_sort(sort)
+    filter_state = _queue_filter_state(active_tiers, active_sort, hours, q)
 
     async with get_session() as session:
         story = await _get_story_or_404(session, story_id)
@@ -483,11 +694,18 @@ async def reject_story(
         await session.commit()
 
         # Return updated stories grid fragment
-        stories = await _render_stories_grid(session)
+        stories = await _render_stories_grid(
+            session,
+            tiers=active_tiers,
+            sort=active_sort,
+            hours=hours,
+            q=q,
+        )
 
     return templates.TemplateResponse(request, "story_grid.html", {
         "request": request,
         "stories": stories,
+        **filter_state,
     })
 
 
