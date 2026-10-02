@@ -3,10 +3,8 @@
 import logging
 import socket
 import secrets
-import time
 import re
-from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Tuple
 
 # Force IPv4-only DNS resolution to avoid Vercel's lack of outbound IPv6 routes
 # This patches the resolver asyncio (and asyncpg through it) calls underneath
@@ -23,7 +21,6 @@ from fastapi import FastAPI, Request, Form, HTTPException, Depends, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, desc, and_, or_, func
 from sqlalchemy.types import Float
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +29,7 @@ from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, C
 from src.shared.llm import get_llm_client, validate_caption, build_deterministic_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
+from curation_ui.security import issue_csrf_token, require_auth, require_csrf
 from datetime import datetime, timedelta, timezone
 import uuid
 import os
@@ -88,9 +86,6 @@ async def content_security_policy(request: Request, call_next):
     return response
 
 
-security = HTTPBasic()
-
-
 # Curator facing copy for the two caption paths
 NO_LLM_NOTICE = (
     "AI assistance is unavailable because no LLM is configured. "
@@ -101,78 +96,6 @@ APPROVE_NO_LLM_NOTICE = (
     "This caption is a deterministic draft, please review and edit it."
 )
 APPROVE_AI_NOTICE = "Caption generated with AI assistance."
-
-
-# In-memory rate limiter for FAILED auth attempts only
-# Stores (timestamp, is_failed) tuples per client IP
-_auth_attempts: Dict[str, List[Tuple[float, bool]]] = defaultdict(list)
-_AUTH_WINDOW_SECONDS = 60  # 1 minute window
-_AUTH_MAX_FAILED = 10  # Max failed attempts per window
-
-
-def _get_client_ip(request: Request) -> str:
-    """Extract client IP, honoring X-Forwarded-For header."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        # Take the first IP in the chain (original client)
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
-def _clean_old_attempts(ip: str, now: float) -> None:
-    """Remove attempts older than the window."""
-    cutoff = now - _AUTH_WINDOW_SECONDS
-    _auth_attempts[ip] = [(ts, failed) for ts, failed in _auth_attempts[ip] if ts > cutoff]
-
-
-def _count_failed_attempts(ip: str, now: float) -> int:
-    """Count failed attempts in the current window."""
-    _clean_old_attempts(ip, now)
-    return sum(1 for ts, failed in _auth_attempts[ip] if failed)
-
-
-def _record_attempt(ip: str, success: bool) -> None:
-    """Record an auth attempt."""
-    now = time.time()
-    _auth_attempts[ip].append((now, not success))  # Store True for failed
-
-
-async def require_auth(request: Request, creds: HTTPBasicCredentials = Depends(security)) -> str:
-    """Require HTTP Basic auth for all mutating endpoints.
-
-    Rate limits only FAILED attempts (max 10 per minute per IP).
-    Successful attempts are not counted against the limit.
-    """
-    if not settings.has_curation_auth:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Curation UI not configured: CURATION_USER and CURATION_PASSWORD must be set",
-        )
-
-    client_ip = _get_client_ip(request)
-    now = time.time()
-
-    ok_user = secrets.compare_digest(creds.username, settings.curation_user)
-    ok_pass = secrets.compare_digest(creds.password, settings.curation_password)
-
-    if not (ok_user and ok_pass):
-        # Check rate limit for failed attempts BEFORE recording this one
-        failed_count = _count_failed_attempts(client_ip, now)
-        if failed_count >= _AUTH_MAX_FAILED:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Too many failed authentication attempts. Try again in {_AUTH_WINDOW_SECONDS} seconds.",
-            )
-        _record_attempt(client_ip, success=False)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-
-    # Record successful attempt (doesn't count toward limit)
-    _record_attempt(client_ip, success=True)
-    return creds.username
 
 
 def check_database_available() -> tuple[bool, str]:
@@ -457,11 +380,17 @@ async def index(request: Request, user: str = Depends(require_auth)):
         "request": request,
         "stories": stories,
         "posts_count": posts_count,
+        "csrf_token": issue_csrf_token(),
     })
 
 
 @app.post("/story/{story_id}/approve")
-async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+async def approve_story(
+    story_id: uuid.UUID,
+    request: Request,
+    user: str = Depends(require_auth),
+    csrf: None = Depends(require_csrf),
+):
     """Approve a story for posting - creates a CuratedPost and queues the story.
 
     The caption comes from the LLM when one is configured, otherwise from the
@@ -610,7 +539,12 @@ async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depen
 
 
 @app.post("/story/{story_id}/reject")
-async def reject_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+async def reject_story(
+    story_id: uuid.UUID,
+    request: Request,
+    user: str = Depends(require_auth),
+    csrf: None = Depends(require_csrf),
+):
     """Reject a story - returns stories grid fragment for HTMX."""
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -753,6 +687,7 @@ async def edit_story(story_id: uuid.UUID, request: Request, user: str = Depends(
         "media": filtered_media,
         "snippets": snippets,
         "reliability_by_domain": reliability_by_domain,
+        "csrf_token": issue_csrf_token(),
     })
 
 
@@ -764,6 +699,7 @@ async def save_story(
     platform: str = Form("twitter"),
     override_validation: bool = Form(False),  # Allow manual override
     user: str = Depends(require_auth),
+    csrf: None = Depends(require_csrf),
 ):
     """Save edited story as curated post.
 
@@ -850,11 +786,17 @@ async def list_posts(request: Request, user: str = Depends(require_auth)):
     return templates.TemplateResponse(request, "posts.html", {
         "request": request,
         "posts": posts,
+        "csrf_token": issue_csrf_token(),
     })
 
 
 @app.post("/post/{post_id}/mark-posted")
-async def mark_posted(post_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+async def mark_posted(
+    post_id: uuid.UUID,
+    request: Request,
+    user: str = Depends(require_auth),
+    csrf: None = Depends(require_csrf),
+):
     """Mark a post as published."""
     db_ok, db_msg = check_database_available()
     if not db_ok:

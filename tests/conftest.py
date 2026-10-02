@@ -60,6 +60,17 @@ async def db_session(db_engine) -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+@pytest.fixture
+def csrf_headers():
+    """Headers a mutating request needs: the token the app itself mints.
+
+    Tests ask curation_ui.security for it rather than pasting a literal, so the
+    token stays bound to whatever CURATION_PASSWORD the test configured.
+    """
+    from curation_ui.security import CSRF_HEADER, issue_csrf_token
+    return {CSRF_HEADER: issue_csrf_token()}
+
+
 # Sample article data for tests
 @pytest.fixture
 def sample_articles() -> list[dict]:

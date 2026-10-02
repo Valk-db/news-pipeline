@@ -151,7 +151,7 @@ async def story_with_media_and_snippets(db_session):
 
 
 @pytest.mark.asyncio
-async def test_approve_story_populates_media_urls(app_with_db, db_session, story_with_media_and_snippets, mock_llm_client):
+async def test_approve_story_populates_media_urls(app_with_db, db_session, story_with_media_and_snippets, mock_llm_client, csrf_headers):
     """Test that approve_story populates CuratedPost.media_urls from MediaAsset rows."""
     story, article = story_with_media_and_snippets
 
@@ -160,7 +160,9 @@ async def test_approve_story_populates_media_urls(app_with_db, db_session, story
     llm_module._llm_client = mock_llm_client
 
     client = TestClient(app_with_db)
-    response = client.post(f"/story/{story.id}/approve", auth=("testuser", "testpass"))
+    response = client.post(
+        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
+    )
 
     assert response.status_code == 200
 
@@ -188,7 +190,7 @@ async def test_approve_story_populates_media_urls(app_with_db, db_session, story
 
 
 @pytest.mark.asyncio
-async def test_approve_story_feeds_snippets_into_caption(app_with_db, db_session, story_with_media_and_snippets, mock_llm_client):
+async def test_approve_story_feeds_snippets_into_caption(app_with_db, db_session, story_with_media_and_snippets, mock_llm_client, csrf_headers):
     """Test that approve_story passes snippet texts to the LLM as key_facts."""
     story, article = story_with_media_and_snippets
 
@@ -197,7 +199,9 @@ async def test_approve_story_feeds_snippets_into_caption(app_with_db, db_session
     llm_module._llm_client = mock_llm_client
 
     client = TestClient(app_with_db)
-    response = client.post(f"/story/{story.id}/approve", auth=("testuser", "testpass"))
+    response = client.post(
+        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
+    )
 
     assert response.status_code == 200
 
@@ -214,7 +218,7 @@ async def test_approve_story_feeds_snippets_into_caption(app_with_db, db_session
 
 
 @pytest.mark.asyncio
-async def test_approve_story_no_media_when_none_exists(app_with_db, db_session, mock_llm_client):
+async def test_approve_story_no_media_when_none_exists(app_with_db, db_session, mock_llm_client, csrf_headers):
     """Test that approve_story works when no MediaAsset rows exist."""
     # Create story without media
     story = Story(
@@ -261,7 +265,9 @@ async def test_approve_story_no_media_when_none_exists(app_with_db, db_session, 
     llm_module._llm_client = mock_llm_client
 
     client = TestClient(app_with_db)
-    response = client.post(f"/story/{story.id}/approve", auth=("testuser", "testpass"))
+    response = client.post(
+        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
+    )
 
     assert response.status_code == 200
 
@@ -276,7 +282,7 @@ async def test_approve_story_no_media_when_none_exists(app_with_db, db_session, 
 
 
 @pytest.mark.asyncio
-async def test_approve_story_caps_media_urls_at_three(app_with_db, db_session, mock_llm_client):
+async def test_approve_story_caps_media_urls_at_three(app_with_db, db_session, mock_llm_client, csrf_headers):
     """Test that media_urls is capped at 3 entries."""
     story = Story(
         id=uuid.uuid4(),
@@ -334,7 +340,9 @@ async def test_approve_story_caps_media_urls_at_three(app_with_db, db_session, m
     llm_module._llm_client = mock_llm_client
 
     client = TestClient(app_with_db)
-    response = client.post(f"/story/{story.id}/approve", auth=("testuser", "testpass"))
+    response = client.post(
+        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
+    )
 
     assert response.status_code == 200
 

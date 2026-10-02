@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # Curation UI auth
     curation_user: str = ""
     curation_password: str = ""
+    # Proxies whose X-Forwarded-For the auth rate limiter may trust, as
+    # comma-separated IPs or CIDRs. Empty (the default) means trust nothing and
+    # key the limiter on the direct peer address, because a client can send any
+    # X-Forwarded-For it likes.
+    curation_trusted_proxies: str = ""
 
     # Verification settings
     containment_threshold: float = 0.9
