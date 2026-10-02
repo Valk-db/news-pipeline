@@ -126,9 +126,10 @@ async def get_session_for_url(raw_url: str) -> AsyncGenerator[AsyncSession, None
 
     Used by the transparency cron (curation_ui/cron.py), which should sign
     through TRANSPARENCY_SIGNER_DATABASE_URL -- a role with SELECT on the log
-    and INSERT-only on the checkpoints -- rather than through DATABASE_URL. The
-    app's engine is cached module-level and lazily built from DATABASE_URL, so
-    sharing it would make the least-privilege DSN decorative.
+    and on both transparency tables, and INSERT on those two, and nothing else
+    (20261002230000_transparency_signer_rbac.sql) -- rather than through
+    DATABASE_URL. The app's engine is cached module-level and lazily built from
+    DATABASE_URL, so sharing it would make the least-privilege DSN decorative.
 
     NULLP-pool and its connect_args match _get_engine(): one connection per
     invocation, no serverless pooling surprises, same statement-cache settings
