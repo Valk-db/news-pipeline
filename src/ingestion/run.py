@@ -13,10 +13,12 @@ Command line options:
 
 import argparse
 import asyncio
+import logging
 import sys
 import os
 from datetime import datetime, timezone
 from typing import List, Dict, Tuple
+from src.ingestion.adapter import SourceHealth
 from src.ingestion.gdelt import GDELT_TIER1_CRITICAL_DOMAINS
 from src.ingestion.source_registry import SourceTier, get_enabled_sensor_feeds
 from src.ingestion.adapters.rss_adapter import RssAdapter
@@ -33,6 +35,9 @@ from src.schema.models import RawArticle, StatusLog
 from src.shared.config import get_settings
 from src.utils.ingest_stats import STATS
 import json
+
+
+logger = logging.getLogger(__name__)
 
 
 def dedupe_articles(all_articles, existing_url_hashes, existing_content_hashes):
@@ -325,9 +330,33 @@ async def run_ingestion(
         adapter_health = {}
 
         for adapter in adapters:
-            articles = await adapter.fetch()
+            # I-P1-3: one adapter raising must not destroy the whole run.
+            # The adapter contract (adapter.py) explicitly permits fetch()
+            # to raise on total adapter failure; contain it, record it in
+            # adapter_health, and keep the articles already fetched.
+            try:
+                articles = await adapter.fetch()
+            except Exception as e:
+                logger.exception(
+                    "Adapter %s raised during fetch; continuing with remaining adapters",
+                    adapter.name,
+                )
+                adapter_health[adapter.name] = SourceHealth(
+                    status="down",
+                    detail=f"fetch() raised {type(e).__name__}: {e}",
+                )
+                STATS.record(f"adapter.{adapter.name}", "fetch_raised")
+                print(f"  {adapter.name}: FAILED ({type(e).__name__}: {e}); continuing with remaining adapters")
+                continue
             all_articles.extend(articles)
-            health = await adapter.health_check()
+            try:
+                health = await adapter.health_check()
+            except Exception as e:
+                logger.exception("Adapter %s health_check raised", adapter.name)
+                health = SourceHealth(
+                    status="degraded",
+                    detail=f"health_check() raised {type(e).__name__}: {e}",
+                )
             adapter_health[adapter.name] = health
 
             # Track counts per source type for backward compatibility
@@ -413,7 +442,6 @@ async def run_ingestion(
                 translation_summary = {"backend": "error", "total": len(new_articles), "error": str(exc)}
 
         # Get GDELT health from adapter for tier1_critical_down check
-        from src.ingestion.adapter import SourceHealth
         gdelt_health = adapter_health.get("gdelt", SourceHealth(
             status="down",
             detail="GDELT adapter not run",
@@ -584,24 +612,49 @@ async def main(argv: list[str] | None = None):
             from src.ingestion.source_registry import get_enabled_sources_by_tier
             tier1_sources = get_enabled_sources_by_tier(SourceTier.TIER1)
 
-            broken_sources, breakdown = classify_tier1_sources_broken(stats_snapshot, tier1_sources)
-            total_tier1 = len(tier1_sources)
-            broken_count = len(broken_sources)
+            # I-P1-1: only classify tier-1 domains that were actually polled
+            # this run. Stats keys are "<domain>.<counter>" (e.g. "bbc.com.ok");
+            # a domain with no keys never ran (e.g. a --sources gdelt filtered
+            # run never polls tier-1 RSS), and must not drag the exit guard.
+            ran_domains = {
+                s.domain
+                for s in tier1_sources.values()
+                if any(k.startswith(f"{s.domain}.") for k in stats_snapshot)
+            }
+            ran_sources = {
+                key: s for key, s in tier1_sources.items() if s.domain in ran_domains
+            }
 
             print("\n--- TIER-1 SOURCE HEALTH ---")
-            for domain, info in breakdown.items():
-                status = "BROKEN" if info["is_broken"] else "OK"
-                print(f"  {domain}: {status} (entries_seen={info['entries_seen']}, ok={info['ok']}, already_known={info['already_known']}, feed_ok={info['feed_ok']}, feed_failed={info['feed_failed']})")
-                if info["is_broken"]:
-                    print(f"    Reason: {info['reason']}")
+            if not ran_sources:
+                print("  Skipped: no tier-1 RSS domains ran this run (e.g. --sources filtered)")
+                broken_sources, breakdown = [], {}
+                total_tier1 = 0
+                broken_count = 0
+                total_tier1_ok_known = 0
+            else:
+                broken_sources, breakdown = classify_tier1_sources_broken(stats_snapshot, ran_sources)
+                total_tier1 = len(ran_sources)
+                broken_count = len(broken_sources)
 
-            # Exit 1 if >=50% of enabled tier-1 sources are BROKEN, or total tier-1 ok+already_known == 0
-            total_tier1_ok_known = sum(
-                stats_snapshot.get(f"{s.domain}.ok", 0) + stats_snapshot.get(f"{s.domain}.already_known", 0)
-                for s in tier1_sources.values()
-            )
+                for domain, info in breakdown.items():
+                    status = "BROKEN" if info["is_broken"] else "OK"
+                    print(f"  {domain}: {status} (entries_seen={info['entries_seen']}, ok={info['ok']}, already_known={info['already_known']}, feed_ok={info['feed_ok']}, feed_failed={info['feed_failed']})")
+                    if info["is_broken"]:
+                        print(f"    Reason: {info['reason']}")
 
-            if broken_count * 2 >= total_tier1 or total_tier1_ok_known == 0:
+                # Exit 1 if >=50% of ran tier-1 sources are BROKEN, or total
+                # tier-1 ok+already_known == 0 across the ran domains.
+                total_tier1_ok_known = sum(
+                    stats_snapshot.get(f"{s.domain}.ok", 0) + stats_snapshot.get(f"{s.domain}.already_known", 0)
+                    for s in ran_sources.values()
+                )
+
+            # The total==0 arm only fires when at least one ran source is
+            # classified broken; otherwise a quiet-but-healthy run exits 1
+            # with no signal (and a filtered run with broken_count == 0 skips
+            # the branch entirely).
+            if broken_count > 0 and (broken_count * 2 >= total_tier1 or total_tier1_ok_known == 0):
                 print(f"\nERROR: {broken_count}/{total_tier1} tier-1 sources BROKEN (>=50% threshold) or total tier-1 ok+already_known=0")
                 for domain in broken_sources:
                     print(f"::error title=Tier-1 source BROKEN::{domain}: {breakdown[domain]['reason']}")
@@ -611,7 +664,7 @@ async def main(argv: list[str] | None = None):
                 print(f"\nWARNING: {broken_count}/{total_tier1} tier-1 sources BROKEN (below 50% threshold)")
                 for domain in broken_sources:
                     print(f"::error title=Tier-1 source BROKEN (below threshold)::{domain}: {breakdown[domain]['reason']}")
-            else:
+            elif ran_sources:
                 print(f"\nAll {total_tier1} tier-1 sources OK")
 
             # Always write per-source stats to GITHUB_STEP_SUMMARY (including tier-2 and Reddit)
