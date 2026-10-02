@@ -5,6 +5,15 @@ on:
     # Run twice daily at 06:23 and 18:23 UTC (off-peak minute to avoid cron delay)
     - cron: '23 6,18 * * *'
   workflow_dispatch:  # Allow manual trigger
+    inputs:
+      target_db:
+        description: 'Database to run against (scheduled runs always use prod)'
+        required: false
+        default: 'prod'
+        type: choice
+        options:
+          - prod
+          - dev
 
 concurrency:
   group: daily-ingest
@@ -37,14 +46,14 @@ jobs:
 
       - name: Schema drift check (preflight, fails the run before it starts)
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ inputs.target_db == 'dev' && secrets.DEV_DATABASE_URL || secrets.DATABASE_URL }}
           PYTHONUNBUFFERED: "1"
         run: |
           uv run python -m scripts.check_schema
 
       - name: LLM preflight (fail fast on auth errors)
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ inputs.target_db == 'dev' && secrets.DEV_DATABASE_URL || secrets.DATABASE_URL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           PYTHONUNBUFFERED: "1"
@@ -58,7 +67,7 @@ jobs:
       - name: Run ingestion pipeline
         id: ingest
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ inputs.target_db == 'dev' && secrets.DEV_DATABASE_URL || secrets.DATABASE_URL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
@@ -71,19 +80,19 @@ jobs:
       - name: Check tier-1 freshness (fail if no tier-1 articles in 30h)
         if: always()
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ inputs.target_db == 'dev' && secrets.DEV_DATABASE_URL || secrets.DATABASE_URL }}
         run: |
           uv run python scripts/check_freshness.py --hours 30
 
       - name: Report pipeline orphans (fail if the report is incomplete)
         if: always()
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ inputs.target_db == 'dev' && secrets.DEV_DATABASE_URL || secrets.DATABASE_URL }}
         run: |
           uv run python scripts/check_orphans.py
 
       - name: Heartbeat commit (keeps scheduled workflow alive)
-        if: always()
+        if: always() && github.event_name == 'schedule'
         continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
