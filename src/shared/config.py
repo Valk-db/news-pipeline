@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     min_reporting_units_per_story: int = 2
     top_n_entities: int = Field(default=3, ge=1)
 
+    # Transparency: operator-published public keys the /proof/{id} page verifies
+    # checkpoint signatures against. JSON: {"<key_id>": {"algorithm": "ed25519",
+    # "public_key": "<64 hex chars>"}}. Empty (the default) means no key is
+    # published, and every proof honestly renders "signature unverified" rather
+    # than claiming a signed log. See src/transparency/keys.py.
+    transparency_trusted_keys: str = ""
+
     # Scheduling
     cron_schedule: str = "0 6,18 * * *"  # 6 AM and 6 PM UTC
 

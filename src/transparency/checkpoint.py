@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
-from src.transparency.log import GENESIS_CHAIN_HASH, MerkleLog, canonical_json
+from src.transparency.log import GENESIS_CHAIN_HASH, MerkleLog, canonical_json, verify_chain
 
 logger = logging.getLogger(__name__)
 
@@ -294,14 +294,26 @@ async def build_checkpoint(
     timestamp: datetime | None = None,
 ) -> Checkpoint:
     """Checkpoint the first `tree_size` entries. `tree_size` may be smaller than
-    the log, which is how a mid-flight checkpoint stays verifiable."""
+    the log, which is how a mid-flight checkpoint stays verifiable.
+
+    Refuses to sign a chain that does not verify: a checkpoint is the
+    operator's signed statement that this history is intact, and signing a
+    broken chain would launder the break into a "signed" history.
+    """
     if tree_size < 0:
         raise ValueError(f"tree_size must be >= 0, got {tree_size}")
     available = await log.size()
     if tree_size > available:
         raise ValueError(f"tree_size {tree_size} exceeds log size {available}")
 
-    leaves = (await log.leaf_hashes())[:tree_size]
+    covered = (await log.entries())[:tree_size]
+    if not verify_chain(covered):
+        raise ValueError(
+            f"refusing to checkpoint: the first {tree_size} log entries do not "
+            "form an intact chain (rewritten payload, gap, or reordering)"
+        )
+
+    leaves = [entry.leaf_hash for entry in covered]
     if tree_size == 0:
         chain_hash = GENESIS_CHAIN_HASH
     else:

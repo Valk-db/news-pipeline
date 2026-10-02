@@ -4,9 +4,18 @@ The route lives in curation_ui.main (/proof/{article_id}); this module builds
 the view. Read-only: nothing here writes to the session.
 
 States, all rendered honestly:
-- verified: entry found, a checkpoint covers it, the math checks out.
-- failed: entry and checkpoint exist but the math does not check out
-  (tampered payload, wrong siblings, checkpoint mismatch). Shown, not hidden.
+- verified: entry found, bound to this article, a checkpoint covers it, the
+  math checks out, AND the checkpoint's signature verifies against a
+  published operator key (TRANSPARENCY_TRUSTED_KEYS). This is the only state
+  that may claim the log is "signed".
+- unverified_signature: the math and the article binding check out, but the
+  checkpoint's signature does not verify against any published key (unknown
+  key id, bad signature, development HMAC key, no published keys configured,
+  or the cryptography package missing). The inclusion math is shown because
+  it is independently recomputable; the "signed" claim is not made.
+- failed: entry and checkpoint exist but the math or the article binding does
+  not check out (tampered payload, wrong siblings, checkpoint mismatch,
+  repointed log_index). Shown, not hidden.
 - pending_unstamped: article.log_index is NULL, never stamped.
 - pending_no_entry: stamped index is beyond the log's current length.
 - pending_no_checkpoint: stamped, but no checkpoint covers the index yet.
@@ -22,12 +31,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from src.schema.models import RawArticle
-from src.transparency.log import SqlAlchemyMerkleLog, canonical_json
+from src.shared.config import get_settings
+from src.transparency.checkpoint import SignedCheckpoint, verify_checkpoint
+from src.transparency.keys import TRUSTED_KEYS_ENV_VAR, load_trusted_keys, verifier_for
+from src.transparency.log import MerkleLogEntry, SqlAlchemyMerkleLog, canonical_json, compute_chain_hash
 from src.transparency.proofs import inclusion_proof, proof_root, proof_steps, verify_inclusion
-from src.transparency.store import latest_checkpoint_covering
+from src.transparency.store import checkpoints_covering
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +118,147 @@ def _pending_view(article: RawArticle, state: str, headline: str, detail: str) -
     )
 
 
+async def _chain_reaches_head(session, entry, checkpoint) -> bool:
+    """True iff the log's chain from `entry` reaches the checkpoint's head.
+
+    Folds entry.chain_hash forward through the stored leaf hashes of every
+    later covered entry and compares against checkpoint.chain_hash. This binds
+    the checkpoint to the log rows between the entry and the signed head: a
+    checkpoint computed from a different history fails even when its Merkle
+    root is self-consistent, because the chain hash commits to the whole
+    sequence, not just the set of leaves.
+    """
+    if checkpoint.tree_size <= entry.index:
+        return False
+    rows = await session.execute(
+        select(MerkleLogEntry.leaf_hash)
+        .where(
+            MerkleLogEntry.index > entry.index,
+            MerkleLogEntry.index < checkpoint.tree_size,
+        )
+        .order_by(MerkleLogEntry.index)
+    )
+    chain = entry.chain_hash
+    seen = 0
+    for (leaf_hex,) in rows.all():
+        try:
+            leaf = bytes.fromhex(leaf_hex)
+        except ValueError:
+            return False
+        chain = compute_chain_hash(chain, leaf)
+        seen += 1
+    if seen != checkpoint.tree_size - entry.index - 1:
+        # Gap in the covered range: the log cannot substantiate this head.
+        return False
+    return chain == checkpoint.chain_hash
+
+
+def _signature_verdict(signed: SignedCheckpoint, trusted: dict) -> tuple[bool, str]:
+    """Check the checkpoint's signature against the published operator keys.
+
+    Returns (verified, detail). A False here never means "the math failed":
+    it means the "signed" claim is unproven, and the page must say exactly
+    that instead of rendering a verified badge.
+    """
+    verifier = verifier_for(signed, trusted)
+    if verifier is None:
+        if not trusted:
+            reason = (
+                f"the operator has not published any verification keys "
+                f"({TRUSTED_KEYS_ENV_VAR} is empty)"
+            )
+        elif signed.key_id not in trusted:
+            reason = f"key {signed.key_id} is not among the operator's published keys"
+        else:
+            reason = (
+                f"key {signed.key_id} is published but its signature cannot be "
+                f"checked here (see the server log)"
+            )
+        return False, (
+            f"{signed.algorithm}, key {signed.key_id}: signature NOT verified, {reason}. "
+            f"The inclusion math below is independently recomputable, but do not "
+            f"treat this checkpoint as operator-signed."
+        )
+    if verify_checkpoint(signed, verifier):
+        return True, (
+            f"{signed.algorithm}, key {signed.key_id}: signature verifies against "
+            f"the operator's published public key."
+        )
+    return False, (
+        f"{signed.algorithm}, key {signed.key_id}: the signature does not check "
+        f"out against the published public key. The checkpoint may be forged or "
+        f"corrupted; do not treat it as operator-signed."
+    )
+
+
+def _binding_verdict(entry_payload: dict[str, Any], article: RawArticle) -> tuple[bool | None, str]:
+    """Check that the log entry was stamped for THIS article.
+
+    Returns (bound, detail) where bound is True (payload names this article),
+    False (payload names a different article, or the archived fields disagree
+    with the article row: the log_index was repointed or the row edited), or
+    None (legacy entry stamped before article_id binding existed: the
+    URL/title/body match below is the binding, and the page discloses that).
+    """
+    payload_article_id = entry_payload.get("article_id")
+    article_id = str(article.id)
+    fields = (
+        ("url", article.url),
+        ("title", article.title),
+        ("body_sha256", article.content_hash),
+    )
+    mismatched = [name for name, value in fields if entry_payload.get(name) != value]
+    if payload_article_id is not None:
+        if payload_article_id != article_id:
+            return False, (
+                f"the entry was stamped for article {payload_article_id}, not this "
+                f"article ({article_id}). The log_index link does not point at this "
+                f"article's own evidence."
+            )
+        if mismatched:
+            return False, (
+                f"the entry is stamped for this article but the archived "
+                f"{', '.join(mismatched)} no longer match the article row: the row "
+                f"was edited after stamping."
+            )
+        return True, (
+            f"the entry's payload names this article ({article_id}) and the "
+            f"archived url/title/body_sha256 match the article row."
+        )
+    # Legacy entry: stamped before article_id was bound into the leaf.
+    if mismatched:
+        return False, (
+            f"legacy entry (stamped before article binding existed): the archived "
+            f"{', '.join(mismatched)} do not match the article row."
+        )
+    return None, (
+        "legacy entry, stamped before article_id was bound into the leaf: the "
+        "binding rests on the archived url/title/body_sha256 matching the "
+        "article row, which they do. New stamps bind the article id "
+        "cryptographically."
+    )
+
+
+async def _pick_verified_checkpoint(session, index: int, trusted: dict):
+    """Newest checkpoint covering `index` whose signature verifies, if any.
+
+    Walks candidates newest-first so a forged row (newer, self-consistent,
+    signed by no known key) cannot displace the genuine checkpoint: the page
+    anchors to the newest *verifiable* checkpoint. Returns (signed, verified,
+    skipped_unverified) where skipped_unverified counts candidates whose
+    signatures did not verify.
+    """
+    candidates = await checkpoints_covering(session, index)
+    skipped = 0
+    for candidate in candidates:
+        verifier = verifier_for(candidate, trusted)
+        if verifier is not None and verify_checkpoint(candidate, verifier):
+            return candidate, True, skipped
+        skipped += 1
+    newest = candidates[0] if candidates else None
+    return newest, False, skipped
+
+
 def _describe_step(step_index: int, position: int) -> str:
     side = "left child" if position % 2 == 0 else "right child"
     order = "node || sibling" if position % 2 == 0 else "sibling || node"
@@ -156,11 +310,14 @@ async def build_proof_view(session, article: RawArticle) -> ProofView:
             f"different log, or the log was reset.",
         )
 
+    trusted = load_trusted_keys(get_settings().transparency_trusted_keys)
     try:
-        signed = await latest_checkpoint_covering(session, entry.index)
+        signed, _sig_ok, skipped_unverified = await _pick_verified_checkpoint(
+            session, entry.index, trusted
+        )
     except Exception as exc:
         if _is_missing_table(exc):
-            signed = None
+            signed, _sig_ok, skipped_unverified = None, False, 0
         else:
             raise
 
@@ -188,14 +345,49 @@ async def build_proof_view(session, article: RawArticle) -> ProofView:
         return view
 
     proof = await inclusion_proof(log, entry.index, signed.checkpoint.tree_size)
-    ok = verify_inclusion(entry, proof, signed)
+    math_ok = verify_inclusion(entry, proof, signed)
+    bound, binding_detail = _binding_verdict(entry.payload, article)
+    chain_ok = await _chain_reaches_head(session, entry, signed.checkpoint)
+    sig_ok, sig_detail = _signature_verdict(signed, trusted)
 
-    # Explanatory breakdown of the two halves verify_inclusion checks.
+    # Explanatory breakdown of the halves verify_inclusion checks.
     try:
         leaf_recomputed = hashlib.sha256(canonical_json(entry.payload)).digest() == entry.leaf_hash
     except TypeError:
         leaf_recomputed = False
     root_recomputed = proof_root(entry.leaf_hash, proof.index, proof.siblings) == signed.checkpoint.merkle_root
+
+    intact = math_ok and chain_ok and bound is not False
+    if intact and sig_ok:
+        state = "verified"
+        state_headline = "Inclusion verified: this article is in the signed log"
+        state_detail = (
+            f"Log entry #{entry.index} folds through {len(proof.siblings)} sibling "
+            f"hashes to the checkpoint root, the checkpoint's chain reaches this "
+            f"entry, and the checkpoint signature verifies against the operator's "
+            f"published key {signed.key_id}."
+        )
+    elif intact:
+        state = "unverified_signature"
+        state_headline = "Inclusion math verified, checkpoint signature unverified"
+        state_detail = (
+            f"Log entry #{entry.index} folds to the checkpoint root and is bound "
+            f"to this article, but the checkpoint's signature does not verify "
+            f"against any published operator key. The math below is independently "
+            f"recomputable; the 'signed' claim is unproven"
+            + (f" ({skipped_unverified} checkpoint(s) checked, none verified)."
+               if skipped_unverified else ".")
+        )
+    else:
+        state = "failed"
+        state_headline = "Verification failed: this proof does not check out"
+        state_detail = (
+            "The entry's payload does not match its leaf hash, the sibling fold "
+            "does not reach the checkpoint root, the checkpoint's chain does not "
+            "reach this entry, or the entry is not bound to this article. Treat "
+            "this article's archive claim as unproven until the mismatch is "
+            "explained."
+        )
 
     steps = [
         {
@@ -210,29 +402,26 @@ async def build_proof_view(session, article: RawArticle) -> ProofView:
     ]
 
     checkpoint = signed.checkpoint
+    binding_label = (
+        "Log entry is bound to this article"
+        if bound is not None else
+        "Log entry binding (legacy stamp)"
+    )
     return ProofView(
         **identity,
-        state="verified" if ok else "failed",
-        state_headline=(
-            "Inclusion verified: this article is in the signed log"
-            if ok else
-            "Verification failed: this proof does not check out"
-        ),
-        state_detail=(
-            f"Log entry #{entry.index} folds through {len(proof.siblings)} sibling "
-            f"hashes to the checkpoint root, and the checkpoint is signed by "
-            f"{signed.key_id}."
-            if ok else
-            "The recomputed root does not match the signed checkpoint root, or "
-            "the entry's payload does not match its recorded leaf hash. Treat "
-            "this article's archive claim as unproven until the mismatch is "
-            "explained."
-        ),
+        state=state,
+        state_headline=state_headline,
+        state_detail=state_detail,
         checks=[
             ProofCheck(
                 label="Article stamped into the transparency log",
                 passed=True,
                 detail=f"log entry #{entry.index}, leaf {entry.leaf_hash_hex[:16]}...",
+            ),
+            ProofCheck(
+                label=binding_label,
+                passed=bound,
+                detail=binding_detail,
             ),
             ProofCheck(
                 label="Payload hashes to the recorded leaf hash",
@@ -253,13 +442,20 @@ async def build_proof_view(session, article: RawArticle) -> ProofView:
                 ),
             ),
             ProofCheck(
-                label="Checkpoint signature on file",
-                passed=None,
+                label="Checkpoint chain reaches this entry",
+                passed=chain_ok,
                 detail=(
-                    f"{signed.algorithm}, key {signed.key_id}. Verify it against "
-                    f"the operator's published public key using the signing bytes "
-                    f"below; this page does not hold the key."
+                    f"the chain from entry #{entry.index} reaches the checkpoint "
+                    f"head (chain {checkpoint.chain_hash.hex()[:16]}...)"
+                    if chain_ok else
+                    "the checkpoint's chain hash does not follow from this entry: "
+                    "the checkpoint was computed from a different history"
                 ),
+            ),
+            ProofCheck(
+                label="Checkpoint signature verifies against a published key",
+                passed=sig_ok,
+                detail=sig_detail,
             ),
         ],
         entry={
@@ -284,6 +480,7 @@ async def build_proof_view(session, article: RawArticle) -> ProofView:
             "algorithm": signed.algorithm,
             "key_id": signed.key_id,
             "signature": signed.signature.hex(),
+            "signature_verified": sig_ok,
             "signing_bytes": signed.signing_bytes().decode("ascii", errors="replace"),
         },
     )

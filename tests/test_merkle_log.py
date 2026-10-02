@@ -222,6 +222,25 @@ class TestCheckpointContents:
         with pytest.raises(ValueError):
             await build_checkpoint(log, 4)
 
+    async def test_checkpoint_over_a_broken_chain_is_refused(self):
+        """S-P1-3: build_checkpoint verifies the chain before signing. A log
+        whose entries were rewritten behind the log's back must not be
+        laundered into a 'signed' checkpoint."""
+
+        class TamperedLog(InMemoryMerkleLog):
+            async def entries(self):
+                entries = list(await super().entries())
+                tampered = dict(entries[1].payload)
+                tampered["url"] = "https://evil.test/rewritten"
+                entries[1] = dataclasses.replace(entries[1], payload=tampered)
+                return tuple(entries)
+
+        log = TamperedLog()
+        for index in range(3):
+            await InMemoryMerkleLog.append(log, {"url": f"https://example.test/{index}"})
+        with pytest.raises(ValueError, match="refusing to checkpoint"):
+            await build_checkpoint(log, 3)
+
     async def test_anchor_digest_covers_the_signature(self):
         log = await _filled_log(4)
         signed = await _signed_checkpoint(log, 4, HmacDevSigner(SECRET))

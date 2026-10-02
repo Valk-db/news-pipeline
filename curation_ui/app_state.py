@@ -13,9 +13,18 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from src.shared.safe_url import safe_url
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+# Stored-XSS choke point: every template that puts a feed-origin URL into
+# href/src must pipe it through this filter. Jinja autoescaping does not
+# validate URL schemes, so a verbatim `javascript:` URL from a scraped feed
+# would otherwise render a working script-execution link. See
+# src/shared/safe_url.py.
+templates.env.filters["is_safe_url"] = safe_url
 
 
 def render_error_page(request: Request, message: str, status_code: int = 503) -> HTMLResponse:

@@ -60,7 +60,7 @@
                 <ul class="story-public-sources">
                     {% for article in articles %}
                     <li class="story-public-source">
-                        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">{{ article.title }}</a>
+                        <a href="{{ article.url | is_safe_url }}" target="_blank" rel="noopener noreferrer">{{ article.title }}</a>
                         <span class="story-public-source-meta">
                             {{ article.source_domain }}
                             {%- if article.published_at %} · {{ article.published_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}

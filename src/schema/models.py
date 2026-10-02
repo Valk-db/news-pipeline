@@ -96,8 +96,15 @@ class RawArticle(Base):
     # src/ingestion/rss_evidence.py stamp_observations(). Nullable because
     # stamping is opt-in and the log was empty when the column landed: NULL
     # means the article has not been stamped, and the public proof permalink
-    # says so plainly instead of inventing a proof.
-    log_index = Column(Integer, nullable=True)
+    # says so plainly instead of inventing a proof. UNIQUE (S-P1-2): one
+    # article owns each log entry, so repointing log_index at another
+    # article's entry is a constraint violation, not a silent proof swap.
+    # There is deliberately no ForeignKey() here: merkle_log_entries lives on
+    # TransparencyBase (see src/transparency/log.py), not on this Base, so a
+    # model-level FK cannot resolve. The foreign key
+    # fk_raw_articles_log_index -> merkle_log_entries(index) is enforced by
+    # migration 20261002193100_transparency_binding.sql instead.
+    log_index = Column(Integer, nullable=True, unique=True)
 
     # BEGIN translation block. Every article is language-detected; non-English
     # articles get English headline/body. Originals are never modified; the UI

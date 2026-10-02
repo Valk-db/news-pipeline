@@ -79,6 +79,7 @@ from src.schema.models import EdgePredicate, EntityEdge, RawArticle, SourceTier
 from src.shared.analyzer_versions import DEDUPE_VERSION, compute_input_hash
 from src.shared.ledger import stage_run
 from src.shared.config import get_settings
+from src.shared.safe_url import is_safe_url
 from src.transparency.log import SqlAlchemyMerkleLog
 from src.utils.ner import extract_entities_top_n
 from src.utils.trafilatura_extract import (
@@ -729,6 +730,15 @@ async def build_articles(
 
     for item in items:
         url = item["url"]
+        if not is_safe_url(url):
+            # S-P1-4: feed-origin URLs are stored verbatim and rendered into
+            # href/src. A javascript: (or data:, vbscript:, ...) URL here is a
+            # stored-XSS payload, so it is refused at ingestion, not persisted.
+            logger.warning(
+                "refusing to persist article with unsafe URL scheme: %r",
+                url[:120] if isinstance(url, str) else url,
+            )
+            continue
         url_hash = compute_url_hash(url)
         if url_hash in known or url_hash in seen:
             continue
@@ -795,7 +805,13 @@ async def stamp_observations(
 
         {"type": "rss_evidence", "url": ..., "source_domain": ...,
          "fetched_at": <isoformat>, "body_sha256": <content_hash>,
-         "title": ...}
+         "title": ..., "article_id": <str(article.id)>}
+
+    article_id binds the leaf to the article row: without it, the proof page
+    could only join the entry via the mutable raw_articles.log_index column,
+    and repointing that column would serve one article's evidence under
+    another's identity while the proof still "verified". The id is inside the
+    leaf hash, so the binding is cryptographic, not a join.
 
     fetched_at sits INSIDE the payload on purpose. The log's leaf hash covers
     the payload only; index and timestamp sit outside it by design, so a caller
@@ -835,6 +851,9 @@ async def stamp_observations(
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "body_sha256": article.content_hash,
             "title": article.title,
+            # Binds the leaf to the article row (S-P1-2). article.id is set:
+            # the caller flushes before stamping so every row has an id.
+            "article_id": str(article.id),
         }
         try:
             if use_savepoint:
