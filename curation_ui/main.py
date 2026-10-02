@@ -5,6 +5,7 @@ availability checks, and the router registrations. The routes live next door,
 one module per surface, so curation_ui/health.py can gate a route without
 importing main and each surface can be read on its own:
 
+  cron.py           /api/cron/checkpoint (+ watchdog): bearer-token checkpoint signing
   curation.py       the auth-gated triage workbench (queue, approve/reject/edit/save, posts)
   story_api.py      the auth-gated per-story JSON APIs
   globe.py          public /api/globe/* JSON
@@ -37,6 +38,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from curation_ui.app_state import BASE_DIR, templates  # noqa: F401  (re-exported: tests import main.templates)
+from curation_ui.cron import router as cron_router
 from curation_ui.curation import router as curation_router
 from curation_ui.discovery import (  # noqa: F401  (public read API, re-exported: tests import these from main)
     MAP_EVENTS_MAX_LIMIT,
@@ -88,6 +90,7 @@ def check_llm_available() -> tuple[bool, str]:
 # patterns overlap, so the order is a readability property rather than a dispatch
 # one; tests/test_route_table.py pins the whole set anyway.
 app.include_router(health_router)
+app.include_router(cron_router)
 app.include_router(curation_router)
 app.include_router(story_api_router)
 app.include_router(globe_router)

@@ -13,6 +13,21 @@ running the extraction in this file over curation_ui.main there and printing the
 result, minus /globe: the globe page was removed on Tyler's directive
 (2026-10-02) and test_globe_removed_is_not_served pins that. It is a literal,
 not a recomputation, so the assertion is independent of the code it checks.
+
+Since then the table has grown deliberately, and this file is the record of
+that:
+
+  2026-10-02  /api/cron/checkpoint, /api/cron/checkpoint/watchdog
+              added with the v2 transparency signer (curation_ui/cron.py).
+              Both are bearer-token routes, NOT require_auth and NOT CSRF:
+              Vercel Cron sends a GET with an Authorization header and no page
+              to have issued a token, so HTTP Basic and the curator session
+              model do not apply. The token check and its throttling are tested
+              in tests/test_checkpoint_cron.py, and
+              test_cron_routes_are_not_basic_authed below pins the weaker-looking
+              (False, False) pair here so a future refactor cannot quietly turn
+              a token route into an open one, or an open one into a token route,
+              without this file changing.
 """
 
 import curation_ui.main as main_module
@@ -21,6 +36,8 @@ from curation_ui.main import app
 # (path, methods-without-HEAD, require_auth, require_csrf)
 EXPECTED_ROUTE_TABLE = [
     ("/", ("GET",), True, False),
+    ("/api/cron/checkpoint", ("GET",), False, False),
+    ("/api/cron/checkpoint/watchdog", ("GET",), False, False),
     ("/api/globe/events", ("GET",), False, False),
     ("/api/globe/layers", ("GET",), False, False),
     ("/api/globe/stats", ("GET",), False, False),
@@ -134,6 +151,21 @@ class TestRouteTableMatchesPreSplitApp:
         assert by_path["/map"][2] is False
         assert by_path["/healthz"][2] is False
         assert by_path["/healthz/details"][2] is True
+
+    def test_cron_routes_are_not_basic_authed(self):
+        """The cron routes carry a bearer token, not require_auth -- pin it.
+
+        They are deliberately (False, False): Vercel Cron cannot send Basic
+        credentials or a CSRF token. What protects them is the bearer check in
+        curation_ui/cron.py, which refuses when no token is configured at all.
+        This assertion exists so that a later "let's just use require_auth here
+        too" or "let's drop the token check" shows up as a route-table change.
+        """
+        by_path = {row[0]: row for row in route_table(app)}
+        for path in ("/api/cron/checkpoint", "/api/cron/checkpoint/watchdog"):
+            assert by_path[path][2] is False, path
+            assert by_path[path][3] is False, path
+            assert by_path[path][1] == ("GET",), "Vercel Cron can only issue GET"
 
     def test_every_mutating_triage_route_needs_csrf(self):
         csfr = {row[0]: row[3] for row in route_table(app)}

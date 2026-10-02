@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from src.shared.config import get_settings
 from src.shared.database import describe_database_url, get_session
+from src.transparency.checkpoint import ed25519_available
 from curation_ui.security import require_auth
 
 router = APIRouter()
@@ -30,6 +31,51 @@ def _scrub(message: str, raw_url: str) -> str:
     except Exception:
         pass
     return message[:300]
+
+
+async def transparency_status() -> dict:
+    """Checkpoint freshness and recent signer alerts, for the details view.
+
+    Deliberately counts and ages rather than exposing content: this is the
+    operator's own view, but a signer refusal alert carries the reason codes and
+    root prefixes that a diagnosis needs, and nothing here needs a leaf payload.
+    """
+    from src.transparency import signing
+
+    settings = get_settings()
+    out: dict = {
+        "origin": settings.transparency_origin,
+        "max_interval_hours": settings.transparency_max_checkpoint_interval_hours,
+        "signing_key_configured": bool((os.environ.get("TRANSPARENCY_SIGNING_KEY") or "").strip()),
+        "cron_token_configured": bool((os.environ.get("TRANSPARENCY_CRON_TOKEN") or "").strip()),
+        "ed25519_available": ed25519_available(),
+        "least_privilege_dsn": bool(settings.transparency_signer_database_url.strip()),
+    }
+    async with get_session() as session:
+        age = await signing.checkpoint_age_hours(session)
+        out["checkpoint_age_hours"] = None if age is None else round(age, 3)
+        healthy, verdict = signing.watchdog_verdict(
+            age, max_interval_hours=settings.transparency_max_checkpoint_interval_hours
+        )
+        out["verdict"] = "ok" if healthy else "unhealthy"
+        out["reason"] = verdict
+        out["checkpoint_count"] = (
+            await session.execute(text("select count(*) from transparency_checkpoints"))
+        ).scalar()
+        try:
+            rows = await session.execute(
+                text(
+                    "select kind, created_at from transparency_alerts order by created_at desc limit 5"
+                )
+            )
+            out["recent_alerts"] = [
+                {"kind": str(kind), "created_at": str(created)} for kind, created in rows.all()
+            ]
+        except Exception:
+            # The alerts table arrived with the v2 signer migration; a database
+            # without it still gets a real freshness verdict.
+            out["recent_alerts"] = []
+    return out
 
 
 @router.get("/healthz")
@@ -94,12 +140,23 @@ async def healthz_details(user: str = Depends(require_auth)):
 
     # The home page and /posts filter curated_posts on 'APPROVED'; this fails if the column
     # was created with the wrong enum type.
+    # Transparency: how old the newest published checkpoint is, and any signer
+    # refusals. This is the surface the dead man's switch reads from -- a cron
+    # that stopped firing is invisible everywhere else.
+    try:
+        report["transparency"] = await transparency_status()
+    except Exception as exc:
+        report["transparency"] = f"FAILED: {type(exc).__name__}: {_scrub(str(exc), s.database_url)}"
+
     try:
         async with get_session() as session:
             report["approved_posts"] = (
                 await session.execute(text("select count(*) from curated_posts where status = 'APPROVED'"))
             ).scalar()
-        report["verdict"] = "ok"
+        if isinstance(report.get("transparency"), dict) and report["transparency"].get("verdict") != "ok":
+            report["verdict"] = "App and database are fine, but transparency checkpoint signing is behind"
+        else:
+            report["verdict"] = "ok"
     except Exception as exc:
         report["curated_posts"] = f"FAILED: {type(exc).__name__}: {_scrub(str(exc), s.database_url)}"
         report["verdict"] = "curated_posts.status has the wrong enum type: run the SQL migration"
