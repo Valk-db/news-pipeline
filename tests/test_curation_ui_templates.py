@@ -6,12 +6,17 @@ from types import SimpleNamespace
 
 import jinja2
 
+from src.shared.safe_url import safe_url
+
 TEMPLATES = Path(__file__).resolve().parent.parent / "curation_ui" / "templates"
 
 
 def test_story_card_hides_primary_entity_ids():
     entity_id = "c847e979-d6a7-4ac1-87f7-bd312e966733"
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(str(TEMPLATES)))
+    # The app registers this filter on its Jinja env (curation_ui/app_state.py);
+    # standalone renders must do the same.
+    env.filters["is_safe_url"] = safe_url
     story = SimpleNamespace(
         id="00000000-0000-0000-0000-000000000001",
         status=SimpleNamespace(value="pending"),

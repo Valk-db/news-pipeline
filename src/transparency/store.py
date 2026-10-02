@@ -89,11 +89,22 @@ async def latest_checkpoint_covering(session: AsyncSession, index: int) -> Signe
     anchors to the latest one that still covers the entry, so the permalink
     shows the freshest signed root available for it.
     """
+    candidates = await checkpoints_covering(session, index)
+    return candidates[0] if candidates else None
+
+
+async def checkpoints_covering(session: AsyncSession, index: int) -> list[SignedCheckpoint]:
+    """Every checkpoint whose tree covers `index`, newest first.
+
+    The proof view walks these newest-first and anchors to the first whose
+    signature verifies against a published operator key, so a forged row an
+    attacker slipped in (newer, self-consistent, but unsigned by any known
+    key) cannot displace the genuine checkpoint: it degrades that candidate
+    to the honest "unverified signature" state instead of hijacking the page.
+    """
     rows = await session.execute(
         select(TransparencyCheckpoint)
         .where(TransparencyCheckpoint.tree_size > index)
         .order_by(desc(TransparencyCheckpoint.tree_size))
-        .limit(1)
     )
-    row = rows.scalars().first()
-    return row.to_signed() if row is not None else None
+    return [row.to_signed() for row in rows.scalars().all()]

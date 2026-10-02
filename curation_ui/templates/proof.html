@@ -32,6 +32,8 @@
         .proof-verdict.verified h2 { color: #5fd68a; }
         .proof-verdict.failed { background: #221114; border-color: #7a2b33; }
         .proof-verdict.failed h2 { color: #ff8a94; }
+        .proof-verdict.unverified { background: #1d1607; border-color: #6b5518; }
+        .proof-verdict.unverified h2 { color: #e8c15a; }
         .proof-verdict.pending { background: #1d1607; border-color: #6b5518; }
         .proof-verdict.pending h2 { color: #e8c15a; }
         .proof-section { margin: 34px 0; }
@@ -78,11 +80,12 @@
             <p class="proof-eyebrow">
                 {% if view.state == 'verified' %}Inclusion proof · verified
                 {% elif view.state == 'failed' %}Inclusion proof · failed
+                {% elif view.state == 'unverified_signature' %}Inclusion proof · signature unverified
                 {% else %}Inclusion proof · pending{% endif %}
             </p>
             <h1 class="proof-headline">{{ view.title }}</h1>
             <p class="proof-meta">
-                <a href="{{ view.url }}" target="_blank" rel="noopener noreferrer">{{ view.source_domain }}</a>
+                <a href="{{ view.url | is_safe_url }}" target="_blank" rel="noopener noreferrer">{{ view.source_domain }}</a>
                 {%- if view.source_tier %} · tier {{ view.source_tier }}{% endif %}
                 {%- if view.published_at %} · published {{ view.published_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
                 {%- if view.fetched_at %} · archived {{ view.fetched_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
@@ -91,7 +94,7 @@
             <p class="proof-meta">content <span class="mono">{{ view.content_hash }}</span></p>
             {% endif %}
 
-            <div class="proof-verdict {{ 'verified' if view.state == 'verified' else ('failed' if view.state == 'failed' else 'pending') }}">
+            <div class="proof-verdict {{ 'verified' if view.state == 'verified' else ('failed' if view.state == 'failed' else ('unverified' if view.state == 'unverified_signature' else 'pending')) }}">
                 <h2>{{ view.state_headline }}</h2>
                 <p>{{ view.state_detail }}</p>
             </div>
@@ -190,12 +193,22 @@
                 </dl>
                 <h3 class="proof-heading" style="font-size:15px;margin-top:18px;">Signing bytes (what the signature covers)</h3>
                 <pre class="proof-pre">{{ view.checkpoint.signing_bytes }}</pre>
+                {% if view.checkpoint.signature_verified %}
                 <p class="proof-note">
                     The signature proves this checkpoint came from the holder of
                     <span class="mono">{{ view.checkpoint.key_id }}</span> and has not been
-                    edited since. Verify it against the operator's published public key;
-                    this page does not hold the key.
+                    edited since. It was verified against the operator's published
+                    public key when this page rendered.
                 </p>
+                {% else %}
+                <p class="proof-note">
+                    The signature above did <strong>not</strong> verify against a published
+                    operator key, so this page makes no "signed" claim for this
+                    checkpoint. The inclusion math is independently recomputable from
+                    the entry and sibling hashes; the signature becomes checkable once
+                    the operator publishes the key.
+                </p>
+                {% endif %}
             </section>
             {% endif %}
         </main>
