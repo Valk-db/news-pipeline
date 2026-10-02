@@ -14,6 +14,14 @@ not a claim that anything happened there, and nothing here infers one.
 ``confidence`` is the story's tier-1 corroboration ratio, which is the only
 evidence this path actually has.
 
+The new rows are then handed to the canonical identity pass
+(``src/verification/event_identity.py``) in the same transaction, which points
+each event at the event that represents it. That is what keeps the map honest as
+it grows: without it every new story that names Tel Aviv adds another pin for
+whatever is happening there, and the only way to stop was to re-run a script by
+hand. The pass reads the whole table, so rows written by other producers take
+part too -- the duplicates were never this script's rows alone.
+
 Usage:
     uv run python scripts/backfill_globe_events.py --dry-run    # report only
     uv run python scripts/backfill_globe_events.py               # write rows
@@ -31,6 +39,7 @@ from src.schema.models import CanonicalEntity, Event, EventLayer, Story
 from src.shared.config import get_settings
 from src.shared.database import _get_engine, _get_session_maker, get_session
 from src.shared.analyzer_versions import GEOCODE_VERSION, compute_input_hash
+from src.verification.event_identity import assign_canonical_events
 
 
 # How fine-grained a geocoded place is, finest first. Nominatim's own label is
@@ -156,7 +165,13 @@ def group_by_story(rows) -> Dict[uuid.UUID, tuple]:
 
 
 async def backfill_events(dry_run: bool = True) -> int:
-    """Write one Event per story that names a located entity. Returns the count."""
+    """Write one Event per story that names a located entity. Returns the count.
+
+    In the same transaction, point every event at the event that represents it, so
+    the rows this writes cannot land as a second pin for an event that is already on
+    the map. The pass is idempotent and reads the whole table, so re-running either
+    half of this is safe.
+    """
     settings = get_settings()
     if not settings.has_database:
         raise SystemExit("ERROR: DATABASE_URL not configured")
@@ -193,9 +208,17 @@ async def backfill_events(dry_run: bool = True) -> int:
             for story, entities in by_story.values()
         ]
         session.add_all(events)
+        # Flush so the new rows are visible to the pass, which reads them back with the
+        # rest of the table instead of trusting the objects in hand.
+        await session.flush()
+        identity = await assign_canonical_events(session)
         await session.commit()
 
     print(f"Created {len(events)} events (layer: {layer_id or 'none'})")
+    print(
+        f"Canonical identity: {identity.canonical} events from {identity.inspected} rows "
+        f"({identity.collapsed} collapsed)"
+    )
     return len(events)
 
 

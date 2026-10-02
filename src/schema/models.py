@@ -394,6 +394,7 @@ class Event(DerivedStateMixin, Base):
         Index("ix_events_event_type", "event_type"),
         Index("ix_events_location", "latitude", "longitude"),
         Index("ix_events_start_time", "start_time"),
+        Index("ix_events_canonical_event_id", "canonical_event_id"),
     )
 
     class EventType(str, PyEnum):
@@ -427,12 +428,23 @@ class Event(DerivedStateMixin, Base):
     entities = Column(JSON, nullable=True)  # Aggregated entities from articles
     geometry_id = Column(UUID(as_uuid=True), ForeignKey("event_geometries.id", ondelete="SET NULL"), nullable=True)
     layer_id = Column(UUID(as_uuid=True), ForeignKey("event_layers.id", ondelete="SET NULL"), nullable=True)
+    # Canonical identity, self-referencing. A canonical row points at itself and a collapsed
+    # duplicate points at the row that represents its cluster, so the map draws one pin per
+    # occurrence while every story's own row survives. NULL reads as "this row is its own
+    # canonical event", which is what every row written before the column existed already means.
+    # Written by src/verification/event_identity.py, never by the event producers.
+    canonical_event_id = Column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="SET NULL"), nullable=True
+    )
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     # Relationships - explicitly specify foreign_keys
     story = relationship("Story", backref="events")
     geometry = relationship("EventGeometry", back_populates="event", uselist=False, foreign_keys=[geometry_id])
     layer = relationship("EventLayer", back_populates="events", foreign_keys=[layer_id])
+    canonical_event = relationship(
+        "Event", remote_side=[id], foreign_keys=[canonical_event_id], uselist=False
+    )
 
 
 class ArticleEmbedding(DerivedStateMixin, Base):

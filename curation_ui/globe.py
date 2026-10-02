@@ -25,6 +25,7 @@ from curation_ui.discovery import (
 from curation_ui.events import _event_conditions, _event_feature
 from src.schema.models import Event, EventLayer
 from src.shared.database import get_session
+from src.verification.event_identity import IS_CANONICAL_EVENT, cluster_corroboration
 
 router = APIRouter()
 
@@ -49,12 +50,14 @@ async def get_globe_events(
 ):
     """Get events as GeoJSON FeatureCollection for globe visualization.
 
-    Public and read only. The default window is the last MAP_DEFAULT_WINDOW_HOURS
-    hours filtered to corroborated events (tier1_source_count >= 2, the same
-    threshold apply_tier1_gate uses for stories); pass hours=0 for all time and
-    min_tier1_sources=0 to turn the corroboration filter off. tiers (e.g.
-    "1,2") keeps only events whose story has a unit in an included tier. limit is
-    clamped to MAP_EVENTS_MAX_LIMIT and the effective cap is reported back.
+    Public and read only, and one pin per occurrence: rows that report the same event
+    collapse onto a canonical event, and the corroboration counts on a pin are the ones
+    every story in its cluster reported. The default window is the last
+    MAP_DEFAULT_WINDOW_HOURS hours filtered to corroborated events (tier1_source_count
+    >= 2 across the cluster, the same threshold apply_tier1_gate uses for stories); pass
+    hours=0 for all time and min_tier1_sources=0 to turn the corroboration filter off.
+    tiers (e.g. "1,2") keeps only events whose story has a unit in an included tier.
+    limit is clamped to MAP_EVENTS_MAX_LIMIT and the effective cap is reported back.
     """
     db_ok, db_msg = check_database_public(request)
     if not db_ok:
@@ -83,10 +86,11 @@ async def get_globe_events(
         stmt = stmt.order_by(desc(Event.start_time)).limit(effective_limit)
         result = await session.execute(stmt)
         events = result.scalars().all()
+        corroboration = await cluster_corroboration(session, events)
 
     return {
         "type": "FeatureCollection",
-        "features": [_event_feature(e) for e in events],
+        "features": [_event_feature(e, corroboration.get(e.id)) for e in events],
         "count": len(events),
         "limit": effective_limit,
         "max_limit": MAP_EVENTS_MAX_LIMIT,
@@ -103,13 +107,20 @@ async def get_globe_stats(
         return {"error": db_msg}
 
     async with get_session() as session:
+        # Canonical events, so these counts are the pins on the map rather than the rows
+        # behind them: a protest carried by four papers is one event four times over, and a
+        # stats panel that says 32 while the globe draws 26 is reporting two different
+        # questions with one number.
         # Total events
-        total_result = await session.execute(select(func.count(Event.id)))
+        total_result = await session.execute(
+            select(func.count(Event.id)).where(IS_CANONICAL_EVENT)
+        )
         total_events = total_result.scalar()
 
         # By event type
         type_result = await session.execute(
             select(Event.event_type, func.count(Event.id))
+            .where(IS_CANONICAL_EVENT)
             .group_by(Event.event_type)
         )
         by_type = {row[0].value if row[0] else "other": row[1] for row in type_result.all()}
@@ -117,7 +128,7 @@ async def get_globe_stats(
         # By layer
         layer_result = await session.execute(
             select(EventLayer.name, func.count(Event.id))
-            .outerjoin(Event, Event.layer_id == EventLayer.id)
+            .outerjoin(Event, and_(Event.layer_id == EventLayer.id, IS_CANONICAL_EVENT))
             .group_by(EventLayer.name)
         )
         by_layer = {row[0] or "unlayered": row[1] for row in layer_result.all()}

@@ -86,7 +86,13 @@ VIEWPOINT_VERSION = "viewpoint/v1"
 # The geocoder (src/enrichment/geocoder.py) and the rows whose content is a geocoded point:
 # `events`. Bumping this says "every point in the database may now be wrong", which is a
 # different and much more expensive statement than bumping any other constant here.
-GEOCODE_VERSION = "geocode/v1"
+#
+# v2 is not a change of point. The geocoder is untouched; what changed is what a point
+# *means* in a set -- a point now carries a canonical identity, so several rows for one
+# occurrence read as one event with all of their corroboration, instead of as several
+# single-sourced events. Stale events therefore need the geocode stage again, which rebuilds
+# the rows and re-runs the identity pass in the same transaction.
+GEOCODE_VERSION = "geocode/v2"
 
 # Vector embeddings (src/enrichment/embedding_service.py and the writers that persist them).
 # The embedding model name is already its own column; this version covers the pipeline logic
