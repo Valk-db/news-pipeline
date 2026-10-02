@@ -444,3 +444,52 @@ def translate_articles(articles: list, backend: TranslationBackend | None = None
         else:
             summary["unknown"] += 1
     return summary
+
+
+def refresh_entities_after_translation(
+    articles: list, top_n: int | None = None
+) -> dict:
+    """Re-run entity extraction on the English text a translation just produced.
+
+    Why this exists, measured rather than argued: ingestion extracts entities
+    from the ORIGINAL body (src/ingestion/rss.py, in process_feed_entry), and
+    extraction runs en_core_web_sm, which is an English model. A French,
+    Turkish or Chinese article therefore arrives with an empty entity map and
+    stays inert -- no canonical entity, no reporting-unit grouping, no
+    corroboration, no topic label -- no matter how good the translation is.
+    On the dev database, of 34 non-English articles, the 6 whose translation
+    had succeeded carried real entity labels and the 28 whose translation had
+    not carried none; every one of the 28 was inert downstream.
+
+    So translation without this step bought a translated string and nothing
+    else. This runs the same extractor over body_text_en, in the same thread-
+    offloaded way, and only for articles that actually have translated text --
+    an English article's entities were already extracted from English text and
+    are left exactly as they are.
+
+    Returns a summary, never raises: an article that fails extraction keeps the
+    entities it had.
+    """
+    from src.utils.ner import extract_entities_top_n
+
+    summary = {"eligible": 0, "refreshed": 0, "entities_found": 0, "errors": 0}
+    for article in articles:
+        lang = getattr(article, "detected_language", None)
+        body_en = getattr(article, "body_text_en", None)
+        if not lang or lang == "en" or not body_en:
+            continue
+        summary["eligible"] += 1
+        try:
+            entities = extract_entities_top_n(body_en, top_n=top_n)
+        except Exception as exc:  # never break ingest on NER
+            summary["errors"] += 1
+            logger.warning(
+                "entity refresh failed for %s: %s", getattr(article, "url", "?"), exc
+            )
+            continue
+        if not entities:
+            continue
+        article.entities = entities
+        summary["refreshed"] += 1
+        summary["entities_found"] += sum(len(v) for v in entities.values())
+    return summary

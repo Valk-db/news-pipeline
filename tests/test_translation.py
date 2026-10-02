@@ -16,6 +16,7 @@ from src.enrichment.translation import (
     TranslationUnavailable,
     detect_language,
     select_backend,
+    refresh_entities_after_translation,
     translate_article,
     translate_articles,
 )
@@ -300,3 +301,97 @@ class TestBackfillSelection:
 
         assert backfill_translations.main(["--dry-run"]) == 0
         assert any(f"&{NEEDS_TRANSLATION}" in path for path in paths)
+
+
+class TestRefreshEntitiesAfterTranslation:
+    """Non-English articles used to arrive with an empty entity map.
+
+    Ingestion extracts entities from the ORIGINAL body with en_core_web_sm,
+    an English model, so a French or Turkish article was ingested and then
+    inert: no canonical entity, no reporting-unit grouping, no corroboration.
+    These tests pin the fix -- re-extract from body_text_en -- and the two
+    things it must not do (touch English articles, or raise).
+    """
+
+    def test_translated_article_gets_entities_from_english_body(self, monkeypatch):
+        seen = {}
+
+        def fake_extract(text, top_n=None):
+            seen["text"] = text
+            seen["top_n"] = top_n
+            return {"PERSON": ["Volodymyr Zelenskyy"], "GPE": ["Kyiv"]}
+
+        monkeypatch.setattr("src.utils.ner.extract_entities_top_n", fake_extract)
+        art = _article(title="Le président à Kyiv", body="Corps en français.")
+        art.detected_language = "fr"
+        art.body_text_en = "The president arrived in Kyiv on Tuesday to meet ministers."
+
+        summary = refresh_entities_after_translation([art], top_n=3)
+
+        assert summary == {
+            "eligible": 1, "refreshed": 1, "entities_found": 2, "errors": 0,
+        }
+        assert art.entities == {"PERSON": ["Volodymyr Zelenskyy"], "GPE": ["Kyiv"]}
+        # The English translation is the input, not the French original, and
+        # the entity cap is the one the settings carry.
+        assert seen["text"] == "The president arrived in Kyiv on Tuesday to meet ministers."
+        assert seen["top_n"] == 3
+
+    def test_english_article_is_left_untouched(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.utils.ner.extract_entities_top_n",
+            lambda text, top_n=None: pytest.fail("English articles must not be re-extracted"),
+        )
+        art = _article()
+        art.detected_language = "en"
+        art.entities = {"GPE": ["London"]}
+
+        summary = refresh_entities_after_translation([art])
+
+        assert summary["eligible"] == 0
+        assert summary["refreshed"] == 0
+        assert art.entities == {"GPE": ["London"]}
+
+    def test_untranslated_article_is_skipped(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.utils.ner.extract_entities_top_n",
+            lambda text, top_n=None: pytest.fail("nothing translated to extract from"),
+        )
+        art = _article(title="Le président a annoncé des mesures")
+        art.detected_language = "fr"
+        art.body_text_en = None
+
+        summary = refresh_entities_after_translation([art])
+
+        assert summary["eligible"] == 0
+
+    def test_extraction_failure_keeps_existing_entities(self, monkeypatch):
+        def boom(text, top_n=None):
+            raise RuntimeError("spaCy model missing")
+
+        monkeypatch.setattr("src.utils.ner.extract_entities_top_n", boom)
+        art = _article()
+        art.detected_language = "tr"
+        art.body_text_en = "The minister met the delegation in Ankara."
+        art.entities = {"GPE": ["Ankara"]}
+
+        summary = refresh_entities_after_translation([art])
+
+        assert summary["eligible"] == 1
+        assert summary["refreshed"] == 0
+        assert summary["errors"] == 1
+        assert art.entities == {"GPE": ["Ankara"]}
+
+    def test_empty_extraction_is_not_written(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.utils.ner.extract_entities_top_n", lambda text, top_n=None: {}
+        )
+        art = _article()
+        art.detected_language = "es"
+        art.body_text_en = "Short translated body with nothing to extract."
+
+        summary = refresh_entities_after_translation([art])
+
+        assert summary["refreshed"] == 0
+        assert summary["eligible"] == 1
+        assert art.entities is None

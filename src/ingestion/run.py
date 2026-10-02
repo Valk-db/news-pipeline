@@ -448,6 +448,35 @@ async def run_ingestion(
                 print(f"  Translation step failed, continuing untranslated: {exc}")
                 translation_summary = {"backend": "error", "total": len(new_articles), "error": str(exc)}
 
+        # Phase 1.6: Re-extract entities from the translated English text.
+        # Ingestion extracts entities from the ORIGINAL body, and the extractor
+        # is an English model, so a non-English article arrived with no entities
+        # and stayed inert downstream no matter how well it translated. This
+        # runs the same extractor over body_text_en so a translated article is
+        # actually groupable and gateable. Same contract as translation: it
+        # never breaks ingest.
+        print("Phase 1.6: Re-extracting entities from translated text...")
+        entity_summary = {"eligible": 0, "refreshed": 0, "entities_found": 0, "errors": 0}
+        if new_articles:
+            try:
+                from src.enrichment.translation import refresh_entities_after_translation
+
+                entity_summary = await asyncio.to_thread(
+                    refresh_entities_after_translation,
+                    new_articles,
+                    settings.top_n_entities,
+                )
+                print(
+                    f"  Translated articles re-extracted: {entity_summary['refreshed']}"
+                    f"/{entity_summary['eligible']} eligible, "
+                    f"{entity_summary['entities_found']} entities, "
+                    f"{entity_summary['errors']} errors"
+                )
+            except Exception as exc:
+                print(f"  Entity refresh failed, keeping original entities: {exc}")
+                entity_summary = {"eligible": 0, "refreshed": 0, "entities_found": 0,
+                                  "errors": 0, "error": str(exc)}
+
         # Get GDELT health from adapter for tier1_critical_down check
         gdelt_health = adapter_health.get("gdelt", SourceHealth(
             status="down",
@@ -477,6 +506,7 @@ async def run_ingestion(
             "url_duplicates_skipped": url_dup,
             "content_duplicates_skipped": content_dup,
             "translation": translation_summary,
+            "entity_refresh": entity_summary,
             "gdelt_health": {
                 "succeeded": gdelt_health.succeeded,
                 "failed": gdelt_health.failed,
