@@ -96,9 +96,11 @@ class Settings(BaseSettings):
     transparency_max_checkpoint_interval_hours: float = 26.0
 
     # Optional least-privilege DSN for the signer only (see
-    # supabase/migrations/20261002200000_transparency_signer_role.sql). When set,
-    # the cron route uses this instead of DATABASE_URL, so the signing path holds
-    # a role with SELECT on the log and INSERT-only on the checkpoint table.
+    # supabase/migrations/20261002200000_transparency_signer_v2.sql for the role
+    # and 20261002230000_transparency_signer_rbac.sql for the grants and policies
+    # that make it usable). When set, the cron route uses this instead of
+    # DATABASE_URL, so the signing path holds a role with SELECT on the log and
+    # on the two transparency tables plus INSERT on those two, and nothing else.
     # Empty falls back to DATABASE_URL, which works but is over-privileged.
     transparency_signer_database_url: str = ""
 
