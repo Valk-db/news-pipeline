@@ -373,13 +373,17 @@ async def test_apply_dynamic_gate_shadow_mode(mock_session, sample_story):
         tier1_counter2_result = make_result_mock([sample_story])
         # 8. batch fetch units: select Story, ReportingUnit -> .all() tuples
         tier1_batched_result = make_result_mock([(sample_story, unit1), (sample_story, unit2)])
+        # 9. _load_contributing_articles: select RawArticle columns -> .all() rows
+        #    (id, reporting_unit_id, url, source_domain, source_tier) -- empty, so
+        #    gate_decision records no contributing articles for this story.
+        article_result = make_result_mock([])
 
         # compute_admission_score calls (inside shadow mode, for logging):
-        # 9. compute_virality_signal: select ReportingUnit -> scalars().all() []
+        # 10. compute_virality_signal: select ReportingUnit -> scalars().all() []
         viral_result = make_result_mock([])
-        # 10. compute_harm_level claim: scalar_one_or_none -> None
+        # 11. compute_harm_level claim: scalar_one_or_none -> None
         claim_result = make_scalar_mock(None)
-        # 11. compute_harm_level entity: scalar_one_or_none -> None
+        # 12. compute_harm_level entity: scalar_one_or_none -> None
         entity_result = make_scalar_mock(None)
 
         mock_session.execute.side_effect = [
@@ -391,9 +395,10 @@ async def test_apply_dynamic_gate_shadow_mode(mock_session, sample_story):
             tier1_counter1_result,  # 6
             tier1_counter2_result,  # 7
             tier1_batched_result,   # 8
-            viral_result,           # 9
-            claim_result,           # 10
-            entity_result,          # 11
+            article_result,         # 9
+            viral_result,           # 10
+            claim_result,           # 11
+            entity_result,          # 12
         ]
         mock_session.commit = AsyncMock()
 
@@ -412,6 +417,15 @@ async def test_apply_dynamic_gate_shadow_mode(mock_session, sample_story):
         status_log_calls = [call for call in mock_session.add.call_args_list
                            if hasattr(call[0][0], '__tablename__') and call[0][0].__tablename__ == 'status_log']
         assert len(status_log_calls) >= 1
+
+        # Shadow mode decides with the boolean gate, so that is what gate_decision records:
+        # the applied decision, not the admission score being calibrated against it.
+        assert sample_story.gate_decision["passed"] is True
+        assert sample_story.gate_decision["gate_mode"] == "boolean"
+        assert sample_story.gate_decision["admission"] is None
+        assert sample_story.gate_decision["reason"] == sample_story.gate_reason
+        assert sample_story.gate_decision["owner_groups"] == {"BBC": 1, "Guardian": 1}
+        assert sample_story.gate_decision["contributing_articles"] == []
     finally:
         settings.dynamic_gate_enabled = original
 
