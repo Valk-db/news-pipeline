@@ -67,3 +67,6 @@ devenv.py
 scratch_*.py
 scratch_*.json
 scratch_*.txt
+
+# blind-spot gdelt analysis scratch data (never committed)
+analysis/blindspot_gdelt/data/
