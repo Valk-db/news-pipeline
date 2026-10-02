@@ -37,7 +37,9 @@ class Settings(BaseSettings):
     gdelt_max_retries: int = 7
     gdelt_base_delay: float = 10.0
 
-    # LLM budget (sized under provider's published cap for headroom)
+    # LLM budget (sized under provider's published cap for headroom). Counted in the
+    # database (src/shared/budget.py), so this is a daily cap for the pipeline rather
+    # than for one process: two ingest runs a day share one budget.
     groq_daily_request_budget: int = 900
 
     # Tiered ingestion schedules (cron expressions)

@@ -174,6 +174,19 @@ scripts/                    # Migrate, check, seed, verify, backfill_globe_event
 
 Every schema change — **new tables**, new columns, column type changes, enum type names and labels — is an idempotent SQL file in `supabase/migrations/`, and `supabase/migrations/` is the only thing that changes the schema. `Base.metadata.create_all` is gone: it used to run from `init_db()` on every ingest and weekly job, which is how dev ended up with SQLAlchemy's enum type names while the migration files declared different ones, and why five tables the models expect had never been created. Apply with `uv run python -m scripts.migrate` (or paste the files into the Supabase SQL editor, which is the production path). Run `uv run python scripts/check_schema.py` to detect drift, and `uv run python scripts/enable_rls.py` to check that every table has RLS enabled (migrations enable it directly; the script is a no-op sanity check).
 
+## Daily Budgets
+
+Two free quotas are spent against a row in `budget_counters` (`name`, `day`, `used`), not
+against anything held in memory or on disk: Groq requests (`groq_daily_request_budget`,
+900) and MyMemory translation characters (45,000, under the anonymous 50,000 limit).
+
+One statement reserves and counts, so the cap holds across processes — two ingest runs a
+day share one budget instead of each getting a full one, which is what an in-process
+counter or a file on an ephemeral runner meant in practice. A reservation is refused
+rather than allowed when the cap is reached **or** when the counter cannot be read: an
+unverifiable budget is treated as spent, because the quota is the thing that cannot be
+replenished. See `src/shared/budget.py`.
+
 ## Extending
 
 | Need | Where to Add |

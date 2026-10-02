@@ -378,7 +378,13 @@ async def run_ingestion(
             try:
                 from src.enrichment.translation import translate_articles
 
-                translation_summary = translate_articles(new_articles)
+                # In a worker thread: the backend blocks on urllib and a one-second
+                # politeness sleep per chunk, and its budget reservation is a sync
+                # database call. Running it on the event loop would stall the pipeline
+                # for the length of a whole translation batch.
+                translation_summary = await asyncio.to_thread(
+                    translate_articles, new_articles
+                )
                 print(
                     f"  Translated: {translation_summary['translated']}, "
                     f"English: {translation_summary['english']}, "
