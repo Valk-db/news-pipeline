@@ -3,10 +3,8 @@
 import logging
 import socket
 import secrets
-import time
 import re
-from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Tuple
 
 # Force IPv4-only DNS resolution to avoid Vercel's lack of outbound IPv6 routes
 # This patches the resolver asyncio (and asyncpg through it) calls underneath
@@ -23,7 +21,6 @@ from fastapi import FastAPI, Request, Form, HTTPException, Depends, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, desc, and_, or_, func
 from sqlalchemy.types import Float
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +29,7 @@ from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, C
 from src.shared.llm import get_llm_client, validate_caption, build_deterministic_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
+from curation_ui.security import issue_csrf_token, require_auth, require_csrf
 from datetime import datetime, timedelta, timezone
 import uuid
 import os
@@ -50,7 +48,42 @@ logger = logging.getLogger(__name__)
 
 app.include_router(health_router)
 
-security = HTTPBasic()
+# Content-Security-Policy for every response.
+#
+# script-src carries a per-response nonce rather than 'unsafe-inline': the only
+# inline scripts are the theme/keyboard handlers in the templates, and they all
+# take the nonce from request.state.csp_nonce. style-src does need
+# 'unsafe-inline' because a nonce cannot cover inline style attributes, and
+# Leaflet and the templates both position elements with style="".
+#
+# img-src is https: wide on purpose: story thumbnails and map/globe imagery come
+# from arbitrary outlet and tile domains, and narrowing it would drop real
+# article images. Everything else is pinned to the origins the pages actually
+# load from, and object/frame/form/base are locked down.
+CSP_TEMPLATE = "; ".join([
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "script-src 'self' 'nonce-{nonce}' https://unpkg.com https://cesium.com",
+    "style-src 'self' 'unsafe-inline' https://unpkg.com https://cesium.com https://fonts.googleapis.com",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    "connect-src 'self'",
+    "worker-src 'self' blob: https://cesium.com",
+])
+
+
+@app.middleware("http")
+async def content_security_policy(request: Request, call_next):
+    """Attach the CSP header, and mint the nonce the templates' inline scripts use."""
+    request.state.csp_nonce = secrets.token_urlsafe(16)
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = CSP_TEMPLATE.format(
+        nonce=request.state.csp_nonce
+    )
+    return response
 
 
 # Curator facing copy for the two caption paths
@@ -63,78 +96,6 @@ APPROVE_NO_LLM_NOTICE = (
     "This caption is a deterministic draft, please review and edit it."
 )
 APPROVE_AI_NOTICE = "Caption generated with AI assistance."
-
-
-# In-memory rate limiter for FAILED auth attempts only
-# Stores (timestamp, is_failed) tuples per client IP
-_auth_attempts: Dict[str, List[Tuple[float, bool]]] = defaultdict(list)
-_AUTH_WINDOW_SECONDS = 60  # 1 minute window
-_AUTH_MAX_FAILED = 10  # Max failed attempts per window
-
-
-def _get_client_ip(request: Request) -> str:
-    """Extract client IP, honoring X-Forwarded-For header."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        # Take the first IP in the chain (original client)
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
-def _clean_old_attempts(ip: str, now: float) -> None:
-    """Remove attempts older than the window."""
-    cutoff = now - _AUTH_WINDOW_SECONDS
-    _auth_attempts[ip] = [(ts, failed) for ts, failed in _auth_attempts[ip] if ts > cutoff]
-
-
-def _count_failed_attempts(ip: str, now: float) -> int:
-    """Count failed attempts in the current window."""
-    _clean_old_attempts(ip, now)
-    return sum(1 for ts, failed in _auth_attempts[ip] if failed)
-
-
-def _record_attempt(ip: str, success: bool) -> None:
-    """Record an auth attempt."""
-    now = time.time()
-    _auth_attempts[ip].append((now, not success))  # Store True for failed
-
-
-async def require_auth(request: Request, creds: HTTPBasicCredentials = Depends(security)) -> str:
-    """Require HTTP Basic auth for all mutating endpoints.
-
-    Rate limits only FAILED attempts (max 10 per minute per IP).
-    Successful attempts are not counted against the limit.
-    """
-    if not settings.has_curation_auth:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Curation UI not configured: CURATION_USER and CURATION_PASSWORD must be set",
-        )
-
-    client_ip = _get_client_ip(request)
-    now = time.time()
-
-    ok_user = secrets.compare_digest(creds.username, settings.curation_user)
-    ok_pass = secrets.compare_digest(creds.password, settings.curation_password)
-
-    if not (ok_user and ok_pass):
-        # Check rate limit for failed attempts BEFORE recording this one
-        failed_count = _count_failed_attempts(client_ip, now)
-        if failed_count >= _AUTH_MAX_FAILED:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Too many failed authentication attempts. Try again in {_AUTH_WINDOW_SECONDS} seconds.",
-            )
-        _record_attempt(client_ip, success=False)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-
-    # Record successful attempt (doesn't count toward limit)
-    _record_attempt(client_ip, success=True)
-    return creds.username
 
 
 def check_database_available() -> tuple[bool, str]:
@@ -419,11 +380,17 @@ async def index(request: Request, user: str = Depends(require_auth)):
         "request": request,
         "stories": stories,
         "posts_count": posts_count,
+        "csrf_token": issue_csrf_token(),
     })
 
 
 @app.post("/story/{story_id}/approve")
-async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+async def approve_story(
+    story_id: uuid.UUID,
+    request: Request,
+    user: str = Depends(require_auth),
+    csrf: None = Depends(require_csrf),
+):
     """Approve a story for posting - creates a CuratedPost and queues the story.
 
     The caption comes from the LLM when one is configured, otherwise from the
@@ -572,7 +539,12 @@ async def approve_story(story_id: uuid.UUID, request: Request, user: str = Depen
 
 
 @app.post("/story/{story_id}/reject")
-async def reject_story(story_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+async def reject_story(
+    story_id: uuid.UUID,
+    request: Request,
+    user: str = Depends(require_auth),
+    csrf: None = Depends(require_csrf),
+):
     """Reject a story - returns stories grid fragment for HTMX."""
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -715,6 +687,7 @@ async def edit_story(story_id: uuid.UUID, request: Request, user: str = Depends(
         "media": filtered_media,
         "snippets": snippets,
         "reliability_by_domain": reliability_by_domain,
+        "csrf_token": issue_csrf_token(),
     })
 
 
@@ -726,6 +699,7 @@ async def save_story(
     platform: str = Form("twitter"),
     override_validation: bool = Form(False),  # Allow manual override
     user: str = Depends(require_auth),
+    csrf: None = Depends(require_csrf),
 ):
     """Save edited story as curated post.
 
@@ -812,11 +786,17 @@ async def list_posts(request: Request, user: str = Depends(require_auth)):
     return templates.TemplateResponse(request, "posts.html", {
         "request": request,
         "posts": posts,
+        "csrf_token": issue_csrf_token(),
     })
 
 
 @app.post("/post/{post_id}/mark-posted")
-async def mark_posted(post_id: uuid.UUID, request: Request, user: str = Depends(require_auth)):
+async def mark_posted(
+    post_id: uuid.UUID,
+    request: Request,
+    user: str = Depends(require_auth),
+    csrf: None = Depends(require_csrf),
+):
     """Mark a post as published."""
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -1010,6 +990,11 @@ MAP_FRESHNESS_OUTLET_STORY_CAP = 5000
 # Top stories list.
 MAP_TOP_STORIES_DEFAULT_LIMIT = 12
 MAP_TOP_STORIES_MAX_LIMIT = 50
+
+# Public event payloads (/api/globe/events and /api/map/replay) are anonymous, so
+# a requested limit is clamped rather than trusted: hours=0 is unbounded and an
+# unclamped limit would let one caller ask for the whole events table.
+MAP_EVENTS_MAX_LIMIT = 1000
 
 
 def _event_conditions(
@@ -1348,7 +1333,8 @@ async def get_globe_events(
     hours filtered to corroborated events (tier1_source_count >= 2, the same
     threshold apply_tier1_gate uses for stories); pass hours=0 for all time and
     min_tier1_sources=0 to turn the corroboration filter off. tiers (e.g.
-    "1,2") keeps only events whose story has a unit in an included tier.
+    "1,2") keeps only events whose story has a unit in an included tier. limit is
+    clamped to MAP_EVENTS_MAX_LIMIT and the effective cap is reported back.
     """
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -1359,6 +1345,7 @@ async def get_globe_events(
 
     window_start, window_end = _resolve_window(hours, datetime.now(timezone.utc))
     threshold = _corroboration_filter(min_tier1_sources)
+    effective_limit = max(1, min(limit, MAP_EVENTS_MAX_LIMIT))
 
     async with get_session() as session:
         stmt = select(Event).options(selectinload(Event.geometry), selectinload(Event.layer))
@@ -1376,11 +1363,17 @@ async def get_globe_events(
         if conditions:
             stmt = stmt.where(and_(*conditions))
 
-        stmt = stmt.order_by(desc(Event.start_time)).limit(limit)
+        stmt = stmt.order_by(desc(Event.start_time)).limit(effective_limit)
         result = await session.execute(stmt)
         events = result.scalars().all()
 
-    return {"type": "FeatureCollection", "features": [_event_feature(e) for e in events]}
+    return {
+        "type": "FeatureCollection",
+        "features": [_event_feature(e) for e in events],
+        "count": len(events),
+        "limit": effective_limit,
+        "max_limit": MAP_EVENTS_MAX_LIMIT,
+    }
 
 
 @app.get("/api/globe/stats")
@@ -1473,6 +1466,13 @@ async def get_globe_layers(
 # omits the curation queue's internal fields (Story.status, Story.gate_reason,
 # CuratedPost rows, claim evidence), so nothing here reports what a curator has
 # decided or is about to decide.
+#
+# The story queries are filtered by the same rule the authenticated routes'
+# comments give for staying behind auth: only what a curator has approved is
+# published. PENDING is the triage queue, BLOCKED failed the gate, REJECTED and
+# EXPIRED were closed out, so an anonymous reader asking for one of those story
+# ids gets the same 404 as for an id that never existed.
+PUBLIC_STORY_STATUSES = (Story.Status.QUEUED, Story.Status.POSTED)
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -1684,6 +1684,9 @@ async def _collect_top_stories(
     wire copy in two languages) collapse to one entry: the highest-ranked
     story per normalized English headline wins. The UI shows one row per
     story, never five rows for five outlets.
+
+    Stories a curator has not approved are not listed at all (see
+    PUBLIC_STORY_STATUSES): the queue is not the public map.
     """
     now = now or datetime.now(timezone.utc)
     if start is not None or end is not None:
@@ -1719,6 +1722,7 @@ async def _collect_top_stories(
     stmt = (
         select(Story, event_stmt.c.event_count, event_stmt.c.latest_at)
         .join(event_stmt, event_stmt.c.story_id == Story.id)
+        .where(Story.status.in_(PUBLIC_STORY_STATUSES))
         .options(selectinload(Story.units).selectinload(ReportingUnit.representative))
     )
 
@@ -1807,9 +1811,10 @@ async def get_map_stories(
 ):
     """Top stories for the public map list, ranked by corroboration. Read only.
 
-    Discovery params: tiers (comma list like "1,2", stories need a unit in an
-    included tier), sort (top|newest|oldest), q (ranked topic search over
-    headlines), start/end (ISO 8601 window on event time, wins over hours).
+    Lists approved stories only (see PUBLIC_STORY_STATUSES). Discovery params:
+    tiers (comma list like "1,2", stories need a unit in an included tier),
+    sort (top|newest|oldest), q (ranked topic search over headlines), start/end
+    (ISO 8601 window on event time, wins over hours).
     """
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -1857,14 +1862,19 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
     """Public read only view of one story's corroboration.
 
     Shows the source articles and the corroboration counts, and nothing about
-    the curation queue: no status, no gate reason, no curator decisions.
+    the curation queue: no status, no gate reason, no curator decisions. Only
+    stories a curator has approved are served; anything else in the queue is a
+    404 to an anonymous caller (see PUBLIC_STORY_STATUSES).
     """
     db_ok, db_msg = check_database_available()
     if not db_ok:
         return render_error_page(request, db_msg)
 
     async with get_session() as session:
-        stmt = select(Story).where(Story.id == story_id)
+        stmt = select(Story).where(
+            Story.id == story_id,
+            Story.status.in_(PUBLIC_STORY_STATUSES),
+        )
         result = await session.execute(stmt)
         story = result.scalar_one_or_none()
         if not story:
@@ -1954,12 +1964,11 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
 # Replay sends the entire time window in a single response so the browser can
 # scrub back and forth without refetching. That makes the result count the cost
 # driver (payload size plus per-marker work in the client), so every response is
-# capped at MAP_REPLAY_MAX_LIMIT events and the requested limit is clamped into
-# [1, MAP_REPLAY_MAX_LIMIT]. Over-cap windows come back with "truncated": true
+# capped at MAP_EVENTS_MAX_LIMIT events and the requested limit is clamped into
+# [1, MAP_EVENTS_MAX_LIMIT]. Over-cap windows come back with "truncated": true
 # and the oldest events dropped — narrow the window or filter by event_type
 # rather than raising the cap.
 MAP_REPLAY_DEFAULT_LIMIT = 500
-MAP_REPLAY_MAX_LIMIT = 1000
 
 
 def _parse_iso_timestamp(value: str, param: str) -> datetime | None:
@@ -2017,7 +2026,7 @@ async def get_map_replay(
     Returns a GeoJSON FeatureCollection (identical feature shape to
     /api/globe/events, so the map's marker rendering is reused verbatim) plus
     window metadata as foreign members. Result count is capped at
-    MAP_REPLAY_MAX_LIMIT; see the comment above that constant.
+    MAP_EVENTS_MAX_LIMIT; see the comment above that constant.
     """
     db_ok, db_msg = check_database_available()
     if not db_ok:
@@ -2031,7 +2040,7 @@ async def get_map_replay(
             detail="start must be earlier than or equal to end.",
         )
 
-    effective_limit = max(1, min(limit, MAP_REPLAY_MAX_LIMIT))
+    effective_limit = max(1, min(limit, MAP_EVENTS_MAX_LIMIT))
     threshold = _corroboration_filter(min_tier1_sources)
 
     from sqlalchemy import select
@@ -2066,7 +2075,7 @@ async def get_map_replay(
         "end": end_dt.isoformat() if end_dt else None,
         "count": len(events),
         "limit": effective_limit,
-        "max_limit": MAP_REPLAY_MAX_LIMIT,
+        "max_limit": MAP_EVENTS_MAX_LIMIT,
         "truncated": truncated,
     }
 

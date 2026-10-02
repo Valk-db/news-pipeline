@@ -1,13 +1,21 @@
-"""GET /healthz: shows why the deployment is (or isn't) working. Never returns secrets."""
+"""Deployment health: anonymous liveness, authenticated diagnosis.
+
+GET /healthz answers monitoring with "is this up" and nothing else: an anonymous
+caller used to get the python version, which providers were configured, the
+database topology and live row counts, which is reconnaissance for free and never
+needed by a probe. GET /healthz/details keeps that detail for a curator with
+credentials. Neither ever returns a secret.
+"""
 
 import os
 import sys
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
 
 from src.shared.config import get_settings
 from src.shared.database import describe_database_url, get_session
+from curation_ui.security import require_auth
 
 router = APIRouter()
 
@@ -26,6 +34,27 @@ def _scrub(message: str, raw_url: str) -> str:
 
 @router.get("/healthz")
 async def healthz():
+    """Liveness for uptime monitoring.
+
+    Deliberately answers 200 either way: this says whether the app process is
+    serving, and a database blip is not a reason to fail a health check. The
+    degraded state is in the body, and the detail behind it is on
+    /healthz/details.
+    """
+    s = get_settings()
+    if not s.has_database:
+        return {"status": "degraded", "database": "not_configured"}
+    try:
+        async with get_session() as session:
+            await session.execute(text("select 1"))
+    except Exception:
+        return {"status": "degraded", "database": "unreachable"}
+    return {"status": "ok", "database": "ok"}
+
+
+@router.get("/healthz/details")
+async def healthz_details(user: str = Depends(require_auth)):
+    """Why the deployment is or is not working. Requires the curator credentials."""
     s = get_settings()
     report = {
         "python": sys.version.split()[0],
