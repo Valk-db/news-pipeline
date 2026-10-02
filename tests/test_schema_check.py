@@ -3,7 +3,7 @@
 from sqlalchemy import Column, Enum, Integer, MetaData, Table
 
 from src.schema.models import Base, RawArticle
-from src.shared.schema_check import find_drift, has_drift
+from src.shared.schema_check import find_drift, has_drift, unused_enum_types
 
 
 def test_no_drift_when_metadata_matches():
@@ -149,21 +149,67 @@ def test_extra_columns_ignored():
     assert has_drift(report) is False
 
 
-def test_enum_absent_from_actual_enums_ignored():
-    """Test f: Enum type absent from actual_enums -> no missing_enum_labels entry."""
+def test_enum_type_absent_from_database_is_drift():
+    """Test f: an enum type the database does not have is drift in its own right.
+
+    The database has no enum types at all here. Reporting nothing would be the blind
+    spot this check used to have: expected labels minus an empty set is every label,
+    so a type that is absent -- or renamed to something the models do not use -- was
+    reported as fine.
+    """
     actual_columns = {
         table_name: {col.name for col in table.columns}
         for table_name, table in Base.metadata.tables.items()
     }
 
-    # Empty actual_enums (enum type not present)
     actual_enums = {}
 
     report = find_drift(Base.metadata, actual_columns, actual_enums)
 
-    # Should not report missing enum labels for sourcetier since it's not in actual_enums
-    assert ("sourcetier", "TIER4") not in report["missing_enum_labels"]
-    assert has_drift(report) is False
+    assert report["missing_enum_types"], "an absent enum type must be reported"
+    assert "sourcetier" in report["missing_enum_types"]
+    assert has_drift(report) is True
+
+
+def test_enum_type_renamed_in_database_is_drift():
+    """Test: the type exists under a name no model uses (event_type vs eventtype).
+
+    This is the type-name race that let create_all win: the migration created
+    'event_type', the model binds 'eventtype', and every label comparison against the
+    wrong name looks clean.
+    """
+    actual_columns = {
+        table_name: {col.name for col in table.columns}
+        for table_name, table in Base.metadata.tables.items()
+    }
+
+    actual_enums = {"sourcetier": {"TIER1", "TIER2", "TIER3", "TIER4"}, "event_type": {"CONFLICT"}}
+
+    report = find_drift(Base.metadata, actual_columns, actual_enums)
+
+    assert "eventtype" in report["missing_enum_types"]
+    assert unused_enum_types(actual_enums, Base.metadata) == ["event_type"]
+    assert has_drift(report) is True
+
+
+def test_unused_enum_type_is_named():
+    """A type no model column declares is named, so the losing side of the race is visible."""
+    actual_enums = {"sourcetier": {"TIER1"}, "claim_type": {"fact"}}
+
+    assert unused_enum_types(actual_enums, Base.metadata) == ["claim_type"]
+
+
+def test_live_models_have_no_unused_enum_types():
+    """Against the model's own enum types nothing is unused, so check_schema stays quiet."""
+    actual_enums = {
+        "sourcetier": {"TIER1"}, "status": {"PENDING"}, "curated_post_status": {"DRAFT"},
+        "eventtype": {"CONFLICT"}, "geometrytype": {"POINT"}, "claimtype": {"FACT"},
+        "claimstance": {"SUPPORTS"}, "edgepredicate": {"CORROBORATES"}, "mediatype": {"IMAGE"},
+        "snippettype": {"QUOTE"}, "verdict": {"TRUE"}, "factchecker": {"MANUAL"},
+        "severity": {"MINOR"}, "articlechangekind": {"STEALTH"},
+    }
+
+    assert unused_enum_types(actual_enums, Base.metadata) == []
 
 
 def test_shared_enum_type_name_union_of_labels():

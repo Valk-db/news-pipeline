@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.shared.config import get_settings
 from src.shared.database import _get_engine
 from src.schema.models import Base
-from src.shared.schema_check import fetch_actual, find_drift, has_drift
+from src.shared.schema_check import fetch_actual, find_drift, has_drift, unused_enum_types
 
 
 async def main() -> int:
@@ -43,13 +43,21 @@ async def main() -> int:
     for table, column in report["missing_columns"]:
         print(f"MISSING COLUMN {table}.{column}")
 
-    # Print missing enum labels
+    # Print missing enum types and their labels
+    for enum_type in report["missing_enum_types"]:
+        print(f"MISSING ENUM TYPE {enum_type}")
     for enum_type, label in report["missing_enum_labels"]:
         print(f"MISSING ENUM LABEL {enum_type}.{label}")
 
     # Print missing tables
     for table in report["missing_tables"]:
-        print(f"INFO table will be created by init_db: {table}")
+        print(f"MISSING TABLE {table}")
+
+    # A type no model column declares is the other half of the type-name race: the
+    # database and the models disagree about what an enum is called, and the one that
+    # loses is the one nobody writes to.
+    for enum_type in unused_enum_types(actual_enums, Base.metadata):
+        print(f"UNUSED ENUM TYPE {enum_type}")
 
     # Print existing sourcetier labels for visibility
     sourcetier_labels = actual_enums.get("sourcetier", set())
