@@ -6,6 +6,7 @@ back to Cerebras, so a dead Groq key was reported healthy whenever Cerebras answ
 (and the "cerebras" probe just re-tested Groq).
 """
 
+import os
 import re
 import sys
 from typing import Any, Awaitable, Callable
@@ -87,26 +88,62 @@ async def run_llm_preflight() -> dict:
     return results
 
 
-async def run_llm_preflight_or_fail() -> None:
-    """Run preflight and exit 1 if a configured provider is rejected, or if none works.
+# How to read each unhealthy status. 402 is its own case on purpose: the key is valid, the
+# account is just empty, so "rotate the key" would be the wrong fix.
+_UNHEALTHY_REASONS = {
+    401: "auth rejected (bad key)",
+    402: "out of credit / billing dead — treated as unavailable",
+    403: "auth rejected (bad key)",
+}
 
-    A provider with no API key is "not configured", not "failed": Cerebras is an optional
-    backup, so leaving its key unset must not take down the whole run.
+
+def _reason(result: dict) -> str:
+    """Why a provider is unusable, classified so a dead optional fallback reads correctly."""
+    if not result.get("configured", True):
+        return "not configured (optional fallback)"
+    return _UNHEALTHY_REASONS.get(result.get("status")) or result.get("error", "unknown error")
+
+
+def _detail(result: dict) -> str:
+    """One report line for an unhealthy provider: the status code and the classified reason."""
+    reason = _reason(result)
+    status = result.get("status")
+    return f"{status} {reason}" if status is not None else reason
+
+
+def _warn(provider: str, reason: str) -> None:
+    """LOUD, and a GitHub Actions annotation when in CI so it shows up in the run UI."""
+    message = f"{provider} unavailable: {reason}"
+    if os.getenv("GITHUB_ACTIONS"):
+        print(f"::warning title=LLM provider unavailable::{message}")
+    else:
+        print(f"WARNING: {message}")
+
+
+async def run_llm_preflight_or_fail() -> None:
+    """Fail the run only when NO provider is usable; degrade loudly when some are.
+
+    Mirrors ``LLMClient.chat_completion``, which tries Groq, falls through to Cerebras on
+    any failure, and only gives up when both are down. A billing-dead Cerebras fallback
+    (402) is exactly the case the run must survive: Groq is healthy, so the ingest
+    continues and the dead provider is reported rather than fatal.
     """
     results = await run_llm_preflight()
+    healthy = [p.capitalize() for p, r in results.items() if r["ok"]]
+    degraded = {p.capitalize(): _detail(r) for p, r in results.items() if not r["ok"]}
 
-    failed = [
-        f"{provider}: status={result.get('status')}, error={result.get('error')}"
-        for provider, result in results.items()
-        if not result["ok"] and result.get("configured", True)
-    ]
-    if failed:
-        print(f"LLM preflight failed: {'; '.join(failed)}")
+    print("LLM preflight status:")
+    for provider, result in results.items():
+        name = provider.capitalize()
+        detail = result["status"] if result["ok"] else degraded[name]
+        print(f"  {name:<9} {'OK' if result['ok'] else 'DEGRADED':<9} {detail}")
+
+    if not healthy:
+        print("LLM preflight failed: no usable LLM provider")
         sys.exit(1)
 
-    if not any(result["ok"] for result in results.values()):
-        print("LLM preflight failed: no LLM provider configured (set GROQ_API_KEY and/or CEREBRAS_API_KEY)")
-        sys.exit(1)
+    for name, detail in degraded.items():
+        _warn(name, detail)
 
-    working = ", ".join(p for p, r in results.items() if r["ok"])
-    print(f"LLM preflight OK: authenticated providers: {working}")
+    lost = "; ".join(f"{name} unavailable ({detail})" for name, detail in degraded.items())
+    print(f"LLM preflight OK: continuing on {', '.join(healthy)}" + (f"; {lost}" if lost else ""))
