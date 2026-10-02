@@ -17,6 +17,9 @@ import pytest
 from src.enrichment import translation
 from src.enrichment.translation import (
     GROQ_MODEL,
+    GROQ_RETRY_AFTER_CEILING_SECONDS,
+    GROQ_RETRY_AFTER_FALLBACK_SECONDS,
+    GROQ_URL,
     GroqBackend,
     TranslationUnavailable,
     translate_article,
@@ -92,6 +95,10 @@ def groq_fails(monkeypatch):
     """Make the call fail the way a provider or the proxy would."""
 
     def install(error):
+        # A 429 is retried after retry-after, and those seconds are real here: an
+        # error-contract test must not sit out a 20s wait to reach its assertion.
+        monkeypatch.setattr(translation.time, "sleep", lambda seconds: None)
+
         def fake_urlopen(req, timeout=None):
             raise error(req) if callable(error) else error
 
@@ -100,14 +107,57 @@ def groq_fails(monkeypatch):
     return install
 
 
-def _http_error(code: int, detail: bytes = b'{"error":"denied"}'):
-    return lambda req: urllib.error.HTTPError(req.full_url, code, "nope", {}, io.BytesIO(detail))
+def _http_error(code: int, detail: bytes = b'{"error":"denied"}', headers=None):
+    return lambda req: urllib.error.HTTPError(
+        req.full_url, code, "nope", headers or {}, io.BytesIO(detail)
+    )
+
+
+# The real 429 from 2026-10-02, trimmed to the parts that matter: the token window
+# that refused the call, and the header that says how long to wait for it.
+RATE_LIMITED = json.dumps(
+    {
+        "error": {
+            "message": "Rate limit reached ... on tokens per minute (TPM): Limit 8000,"
+            " Used 7600, Requested 3061. Please try again in 19.9575s.",
+            "type": "tokens",
+            "code": "rate_limit_exceeded",
+        }
+    }
+).encode()
 
 
 def _backend(**kwargs) -> GroqBackend:
     kwargs.setdefault("api_key", "gsk_test")
     kwargs.setdefault("politeness_seconds", 0)
     return GroqBackend(**kwargs)
+
+
+def _http_error_at(code: int, detail: bytes = b'{"error":"denied"}', headers=None):
+    """A ready-made HTTPError, for the sequence fixture that raises them in order."""
+    return urllib.error.HTTPError(GROQ_URL, code, "nope", headers or {}, io.BytesIO(detail))
+
+
+@pytest.fixture
+def groq_sequence(monkeypatch):
+    """Answer call N with steps[N-1]: a payload of bytes, or an error to raise."""
+
+    def install(*steps):
+        sent: list = []
+        slept: list[float] = []
+
+        def fake_urlopen(req, timeout=None):
+            sent.append(req)
+            step = steps[min(len(sent) - 1, len(steps) - 1)]
+            if isinstance(step, bytes):
+                return _Response(step)
+            raise step
+
+        monkeypatch.setattr(translation.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(translation.time, "sleep", slept.append)
+        return sent, slept
+
+    return install
 
 
 def _article(**overrides) -> RawArticle:
@@ -176,8 +226,8 @@ class TestGroqSuccess:
         assert asyncio.run(used(GROQ_TRANSLATION_REQUESTS)) == 1
 
     def test_sleeps_between_calls_and_not_before_the_first(self, monkeypatch):
-        """1s between calls: the free tier is rate limited, and a first call has
-        nothing to be polite to."""
+        """A gap between calls, none before the first: the free tier is rate
+        limited, and a first call has nothing to be polite to."""
         slept: list[float] = []
         monkeypatch.setattr(translation.time, "sleep", slept.append)
         monkeypatch.setattr(
@@ -305,6 +355,89 @@ class TestGroqBudget:
         with pytest.raises(TranslationUnavailable):
             backend.translate(HEADLINE, "fa", "en")
         assert len(sent) == 1
+
+
+class TestGroqRateLimit:
+    """A 429 is the one error worth waiting out, and Groq says how long."""
+
+    def test_waits_the_retry_after_and_translates(self, groq_sequence):
+        """The live case: 8000 tokens/minute refused a body, 20s later it did not."""
+        sent, slept = groq_sequence(
+            _http_error_at(429, RATE_LIMITED, {"retry-after": "20"}),
+            _completion(TRANSLATION),
+        )
+
+        assert _backend().translate(HEADLINE, "fa", "en") == TRANSLATION
+        assert len(sent) == 2
+        assert slept == [20.0]
+
+    def test_a_second_rate_limit_gives_up(self, groq_sequence):
+        """Still full after the wait is "not now"; the next run picks the article up."""
+        sent, slept = groq_sequence(
+            _http_error_at(429, RATE_LIMITED, {"retry-after": "1"}),
+            _http_error_at(429, RATE_LIMITED, {"retry-after": "1"}),
+        )
+
+        with pytest.raises(TranslationUnavailable, match="Groq HTTP 429"):
+            _backend().translate(HEADLINE, "fa", "en")
+        assert len(sent) == 2
+        assert slept == [1.0], "retried exactly once"
+
+    def test_falls_back_when_the_provider_says_nothing(self, groq_sequence):
+        sent, slept = groq_sequence(
+            _http_error_at(429, RATE_LIMITED), _completion(TRANSLATION)
+        )
+
+        _backend().translate(HEADLINE, "fa", "en")
+
+        assert len(sent) == 2
+        assert slept == [GROQ_RETRY_AFTER_FALLBACK_SECONDS]
+
+    @pytest.mark.parametrize(
+        "header,expected",
+        [("not-a-number", GROQ_RETRY_AFTER_FALLBACK_SECONDS), ("9999", GROQ_RETRY_AFTER_CEILING_SECONDS)],
+    )
+    def test_a_nonsense_or_absurd_header_cannot_hang_the_batch(
+        self, groq_sequence, header, expected
+    ):
+        sent, slept = groq_sequence(
+            _http_error_at(429, RATE_LIMITED, {"retry-after": header}),
+            _completion(TRANSLATION),
+        )
+
+        _backend().translate(HEADLINE, "fa", "en")
+
+        assert len(sent) == 2
+        assert slept == [expected]
+
+    def test_the_retry_is_not_the_same_request_object(self, groq_sequence):
+        """urlopen on a reused Request comes back RemoteDisconnected through this
+        egress proxy (measured 2026-10-02, twice), so the retry builds a new one."""
+        sent, _ = groq_sequence(
+            _http_error_at(429, RATE_LIMITED, {"retry-after": "0"}), _completion(TRANSLATION)
+        )
+
+        _backend().translate(HEADLINE, "fa", "en")
+
+        assert sent[0] is not sent[1]
+
+    def test_the_retry_is_charged_once(self, groq_sequence):
+        """An attempt the provider refused is not work done, so it is not re-spent."""
+        groq_sequence(
+            _http_error_at(429, RATE_LIMITED, {"retry-after": "0"}), _completion(TRANSLATION)
+        )
+
+        _backend().translate(HEADLINE, "fa", "en")
+
+        assert asyncio.run(used(GROQ_TRANSLATION_REQUESTS)) == 1
+
+    def test_other_failures_are_not_retried(self, groq_sequence):
+        sent, slept = groq_sequence(_http_error_at(500))
+
+        with pytest.raises(TranslationUnavailable, match="Groq HTTP 500"):
+            _backend().translate(HEADLINE, "fa", "en")
+        assert len(sent) == 1
+        assert slept == []
 
 
 class TestGroqPassthrough:

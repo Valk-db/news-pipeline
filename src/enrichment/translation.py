@@ -29,10 +29,11 @@ gitignored directory on an ephemeral runner, so the cap was really per run and
 two runs a day could send twice the anonymous limit. Translation never breaks
 ingest: failures are caught, reported, and the article persists untranslated.
 
-Groq politeness: 3s between requests and a daily request budget of 300 counted
-in the same table under its own name (groq_translation_requests). Sharing the
-LLM client's row would let a long translation batch spend the budget that
-caption and classification work -- which runs first -- was counted against.
+Groq politeness: 3s between requests, a daily request budget of 300 counted in the
+same table under its own name (groq_translation_requests), and one retry on a 429
+that waits exactly as long as the response's retry-after says. Sharing the LLM
+client's row would let a long translation batch spend the budget that caption and
+classification work -- which runs first -- was counted against.
 """
 
 from __future__ import annotations
@@ -73,16 +74,23 @@ GROQ_MODEL = "openai/gpt-oss-20b"
 GROQ_MAX_TOKENS = 4096
 GROQ_TIMEOUT = 30
 # The free tier is 30 requests/minute and 8000 tokens/minute (x-ratelimit headers,
-# 2026-10-02), so the gap is set by the request ceiling, not by taste: 3s is 20
-# requests a minute, under the 30/min with room for a retry. A 4000-char body is
-# ~2500 tokens, so a batch of long bodies can still outrun the token window; that
-# arrives as 429 -> TranslationUnavailable, the article keeps its originals and
-# the next run picks it up again.
+# 2026-10-02), so the gap only has to respect the request ceiling: 3s is 20 requests
+# a minute, under the 30/min. The token window cannot be spaced out for -- a
+# 4000-char body is ~3000 tokens, so two of them fill the minute -- and guessing a
+# gap wide enough would add minutes to every batch. It is left to the one
+# rate-limit retry below, which is what the provider's own wait time is for.
 GROQ_POLITENESS_SECONDS = 3.0
 # Sized under the free tier's measured allowance, not guessed: the response headers on
 # 2026-10-02 carried x-ratelimit-limit-requests: 1000. 300 requests is ~150 articles
 # (a title and a body each) and leaves the LLM client's own 900/day row alone.
 GROQ_DAILY_REQUEST_BUDGET = 300
+# A rate-limited request is not a failed one, and Groq says how long to wait: the 429
+# on 2026-10-02 carried `retry-after: 20` and a body reading "Limit 8000, Used 7600,
+# Requested 3061 ... Please try again in 19.9575s". One wait and one retry is the
+# difference between an article translated now and one that waits for the next run.
+# A second 429 means the window is still full, which is a genuine "not now".
+GROQ_RETRY_AFTER_FALLBACK_SECONDS = 20.0
+GROQ_RETRY_AFTER_CEILING_SECONDS = 60.0
 
 # One system message, one rule set. The proper-noun rule is the whole reason Groq is
 # worth the round trip: MyMemory turned "Pezeshkian" into "doctors" on 2026-10-01.
@@ -203,7 +211,7 @@ class GroqBackend:
     An LLM keeps proper nouns intact, which is the failure MyMemory had: on the
     2026-10-01 check it rendered "Pezeshkian" as "doctors". One request per call --
     Groq's context holds a whole article, so there is no MyMemory-style chunking --
-    and one second between calls.
+    three seconds between calls, and one retry when Groq says how long to wait.
 
     Polite by construction the way MyMemoryBackend is: every request is reserved
     against the day's budget in budget_counters before it is sent, so no number of
@@ -236,6 +244,22 @@ class GroqBackend:
             time.sleep(wait)
         self._last_call = time.monotonic()
 
+    @staticmethod
+    def _retry_after_seconds(exc: urllib.error.HTTPError) -> float:
+        """How long Groq asked us to wait, from the header it puts on a 429.
+
+        Clamped so a missing, unparseable or absurd value cannot turn a rate limit
+        into either a busy loop or an hour of sleep; the ceiling is above the
+        longest wait ever seen (57s of x-ratelimit-reset-tokens, 2026-10-02).
+        """
+        header = exc.headers.get("retry-after") if exc.headers else None
+        if not header:
+            return GROQ_RETRY_AFTER_FALLBACK_SECONDS
+        try:
+            return min(max(float(header), 0.0), GROQ_RETRY_AFTER_CEILING_SECONDS)
+        except ValueError:
+            return GROQ_RETRY_AFTER_FALLBACK_SECONDS
+
     def _complete(self, text: str, source_lang: str, target_lang: str) -> str:
         """One chat completion, or TranslationUnavailable. Never any other exception."""
         body = json.dumps(
@@ -259,28 +283,45 @@ class GroqBackend:
                 "reasoning_effort": "low",
             }
         ).encode("utf-8")
-        req = urllib.request.Request(
-            GROQ_URL,
-            data=body,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "news-pipeline/1.0 (translation enrichment)",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=GROQ_TIMEOUT) as resp:
-                raw = resp.read().decode("utf-8", "replace")
-        except urllib.error.HTTPError as exc:
-            # 401/402/429/5xx all land here and none of them is worth a retry on a
-            # free tier: the article keeps its originals and the backfill retries it.
-            detail = exc.read()[:160].decode("utf-8", "replace")
-            raise TranslationUnavailable(f"Groq HTTP {exc.code}: {detail}") from exc
-        except (urllib.error.URLError, OSError, TimeoutError) as exc:
-            # urlopen surfaces a timeout as the socket's TimeoutError and a refused
-            # connection as URLError, which is an OSError. All of it is "not now".
-            raise TranslationUnavailable(f"Groq request failed: {exc}") from exc
+        raw = ""
+        for attempt in (0, 1):
+            # A new Request every attempt. Reusing one does not survive this egress
+            # proxy: measured 2026-10-02, a second urlopen on the same object comes
+            # back RemoteDisconnected instead of a response, which would turn every
+            # rate-limit retry into a "connection failed".
+            req = urllib.request.Request(
+                GROQ_URL,
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "news-pipeline/1.0 (translation enrichment)",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=GROQ_TIMEOUT) as resp:
+                    raw = resp.read().decode("utf-8", "replace")
+                break
+            except urllib.error.HTTPError as exc:
+                # 429 is the one failure worth waiting out: it costs no tokens and
+                # Groq's own retry-after is the wait it wants, so one retry is the
+                # difference between a translated row and one that waits for the
+                # next run. The reservation already spent covers it -- an attempt
+                # the provider refused is not work done. 401/402/5xx are not worth
+                # a retry on a free tier; the article keeps its originals and the
+                # backfill retries it.
+                if exc.code == 429 and not attempt:
+                    wait = self._retry_after_seconds(exc)
+                    logger.info("Groq rate limited; waiting %ss before one retry", wait)
+                    time.sleep(wait)
+                    continue
+                detail = exc.read()[:160].decode("utf-8", "replace")
+                raise TranslationUnavailable(f"Groq HTTP {exc.code}: {detail}") from exc
+            except (urllib.error.URLError, OSError, TimeoutError) as exc:
+                # urlopen surfaces a timeout as the socket's TimeoutError and a refused
+                # connection as URLError, which is an OSError. All of it is "not now".
+                raise TranslationUnavailable(f"Groq request failed: {exc}") from exc
 
         try:
             data = json.loads(raw)
