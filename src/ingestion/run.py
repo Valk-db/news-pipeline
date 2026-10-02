@@ -27,6 +27,7 @@ from src.ingestion.adapters.rss_evidence_adapter import RssEvidenceAdapter
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_dynamic_gate
+from src.shared.bulk_write import bulk_write
 from src.shared.database import get_session
 from src.schema.models import RawArticle, StatusLog
 from src.shared.config import get_settings
@@ -448,10 +449,10 @@ async def run_ingestion(
             print("Dry run complete.")
             return results
 
-        # Persist new raw articles
-        for art in new_articles:
-            session.add(art)
-        await session.commit()
+        # Persist new raw articles, chunked: one multi-row INSERT for the whole
+        # batch is an all-or-nothing statement, and a run that fetched 997
+        # articles lost all of them to a single dropped connection.
+        await bulk_write(session, new_articles)
         await log_status(session, "ingest", ingest_status, results["phases"]["ingestion"])
 
         # Phase 2: Build reporting units (near-dup clustering)
