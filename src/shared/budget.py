@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 # Budget names, one row per name per day. Named for what is spent, not who spends it.
 GROQ_REQUESTS = "groq_requests"
+# Translation's own row, not GROQ_REQUESTS: it is best-effort enrichment that runs
+# after the LLM work, and sharing one cap would let a long translation batch starve
+# caption/classification work that ran first (or the reverse).
+GROQ_TRANSLATION_REQUESTS = "groq_translation_requests"
 MYMEMORY_CHARS = "mymemory_chars"
 
 _SPEND = text(
