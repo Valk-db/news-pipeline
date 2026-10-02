@@ -668,25 +668,34 @@ async def _ingest_one_window(
                 event_index = {}
 
         if gkg_path:
-            articles, rows, joined, skipped = await asyncio.to_thread(
-                parse_gkg_file,
-                gkg_path,
-                event_index,
-                "gdelt-static",
-                max_articles,
-                known_url_hashes,
-            )
-            result.gkg_rows += rows
-            result.joined += joined
-            result.skipped_no_geo += skipped
-            existing = {a.url_hash for a in result.articles}
-            for art in articles:
-                if art.url_hash not in existing:
-                    result.articles.append(art)
-                    existing.add(art.url_hash)
-            STATS.record(source_key, "entries_seen", rows)
-            STATS.record(source_key, "ok", len(articles))
-            STATS.record(source_key, "skipped_no_geo", skipped)
+            try:
+                articles, rows, joined, skipped = await asyncio.to_thread(
+                    parse_gkg_file,
+                    gkg_path,
+                    event_index,
+                    "gdelt-static",
+                    max_articles,
+                    known_url_hashes,
+                )
+                result.gkg_rows += rows
+                result.joined += joined
+                result.skipped_no_geo += skipped
+                existing = {a.url_hash for a in result.articles}
+                for art in articles:
+                    if art.url_hash not in existing:
+                        result.articles.append(art)
+                        existing.add(art.url_hash)
+                STATS.record(source_key, "entries_seen", rows)
+                STATS.record(source_key, "ok", len(articles))
+                STATS.record(source_key, "skipped_no_geo", skipped)
+            except (OSError, ValueError, zipfile.BadZipFile, csv.Error) as e:
+                # I-P1-7: same guard as the sibling events parse above.
+                # csv.Error is not an OSError/ValueError; without it a corrupt
+                # zip degrades this window (soft skip) instead of ending the
+                # entire run via fetch() -> run.py.
+                logger.warning("GDELT static GKG parse failed for %s: %s", stamp, e)
+                result.soft_skips.append(f"gkg parse {stamp}")
+                STATS.record(source_key, "gkg_parse_failed", 1)
     finally:
         for path in paths:
             try:

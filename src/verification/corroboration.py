@@ -21,7 +21,7 @@ and both are fixed here, once, in this module:
    waiting for wire ingestion. That limitation is stated here rather than papered over.
 
 2. **Two places counting, one answer.** `recompute_story_counters()` persists `distinct_owners`
-   and the gate's own unit walk builds the `(tier, owner)` pairs `evaluate_tier1_gate()` decides
+   and the gate's own unit walk builds the `(unit_id, owner)` pairs `evaluate_tier1_gate()` decides
    on. When two places count independently they drift, and a decision cannot be explained by the
    counter printed beside it. `load_corroboration()` is the single resolution both paths call,
    and the `Corroboration` object it returns is the only thing either of them counts from.
@@ -223,15 +223,50 @@ class Corroboration:
     def distinct_owners(self, units: Iterable) -> int:
         return len(self.owner_histogram(units))
 
-    def tier1_pairs(self, units: Iterable) -> list[tuple[str, str]]:
-        """The `(tier, owner)` pairs `evaluate_tier1_gate()` counts, one per tier-1 article.
+    def tier1_pairs(self, units: Iterable) -> list[tuple[uuid.UUID, str]]:
+        """The `(unit_id, owner)` pairs `evaluate_tier1_gate()` counts: one per (unit, owner).
 
-        Same shape the gate always consumed -- a pair per tier-1 article, so the unit half of
-        the rule is unchanged -- with the owner half post-collapse.
+        One pair per distinct tier-1 owner of each unit, post wire-collapse -- never one per
+        article. A reporting unit is one reporting event plus its syndications, so two tier-1
+        articles inside one unit are one piece of reporting however many outlets reprinted it;
+        collapsing to one pair per (unit, owner) is what keeps a single syndicated event from
+        clearing the ">= 2 tier-1 units" bar by itself. The gate counts distinct units and
+        distinct owners off this list.
         """
-        return [
-            (SourceTier.TIER1.value, owner) for owner in self._tier1_owners(units)
-        ]
+        return self._tier1_unit_owners(units)
+
+    def _tier1_unit_owners(self, units: Iterable) -> list[tuple[uuid.UUID, str]]:
+        """One `(unit_id, owner)` per distinct tier-1 owner of each unit, post-collapse.
+
+        The gate's unit walk, next to `_tier1_owners`' per-article list that feeds the histogram:
+        the two answer different questions (how many units back this vs. how many articles
+        attributed to each owner) and are kept as separate code on purpose. The unresolved-unit
+        fallback mirrors `_tier1_owners`' -- the stored histogram `build_reporting_units()` wrote,
+        already collapsed -- but contributes one pair per stored owner: the unit still counts as
+        one unit, never as many as its stored article count.
+        """
+        units = list(units)
+        pairs: list[tuple[uuid.UUID, str]] = []
+        unresolved: set[uuid.UUID] = set()
+        for unit in units:
+            unit_id = unit_id_of(unit)
+            owners = {
+                article.owner
+                for article in self.by_unit.get(unit_id, ())
+                if article.is_tier1
+            }
+            if owners:
+                pairs.extend((unit_id, owner) for owner in sorted(owners))
+            else:
+                unresolved.add(unit_id)
+
+        for ref in self.refs:
+            if ref.unit_id not in unresolved or not ref.tier1_owner_groups:
+                continue
+            pairs.extend(
+                (ref.unit_id, owner) for owner in sorted(ref.tier1_owner_groups)
+            )
+        return pairs
 
     def tier1_article_count(self, units: Iterable) -> int:
         return len(self._tier1_owners(units))

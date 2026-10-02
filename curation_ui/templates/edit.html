@@ -43,9 +43,9 @@
         <div class="story-media edit-media">
             {% for asset in media %}
             {% if asset.media_type.value == 'image' %}
-                <img src="{{ asset.thumbnail_url or asset.url }}" alt="{{ asset.alt_text or 'Article image' }}" class="media-thumbnail" loading="lazy">
+                <img src="{{ (asset.thumbnail_url or asset.url) | is_safe_url }}" alt="{{ asset.alt_text or 'Article image' }}" class="media-thumbnail" loading="lazy">
             {% elif asset.media_type.value == 'video' %}
-                <a href="{{ asset.url }}" target="_blank" class="media-video-link" title="{{ asset.alt_text or 'Video' }}">
+                <a href="{{ asset.url | is_safe_url }}" target="_blank" class="media-video-link" title="{{ asset.alt_text or 'Video' }}">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polygon points="5 3 19 12 5 21 5 3"></polygon>
                     </svg>
@@ -55,7 +55,7 @@
                     {% endif %}
                 </a>
             {% elif asset.media_type.value == 'embed' %}
-                <a href="{{ asset.url }}" target="_blank" class="media-embed-link" title="{{ asset.alt_text or 'Embed' }}">
+                <a href="{{ asset.url | is_safe_url }}" target="_blank" class="media-embed-link" title="{{ asset.alt_text or 'Embed' }}">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
                         <polyline points="17 2 17 7 22 7"></polyline>
@@ -63,7 +63,7 @@
                     <span>{{ asset.source|title }}</span>
                 </a>
             {% elif asset.media_type.value == 'audio' %}
-                <a href="{{ asset.url }}" target="_blank" class="media-audio-link" title="{{ asset.alt_text or 'Audio' }}">
+                <a href="{{ asset.url | is_safe_url }}" target="_blank" class="media-audio-link" title="{{ asset.alt_text or 'Audio' }}">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M11 5v14"></path>
                         <path d="M19 9v6"></path>

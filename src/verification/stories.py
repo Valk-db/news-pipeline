@@ -356,7 +356,11 @@ async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) 
                         viewpoint_clusters[story.id] = []
                     viewpoint_clusters[story.id].append(viewpoint_story.id)
 
-            # Apply dynamic gate to viewpoint sub-stories to prevent gate bypass
+            # Gate the viewpoint sub-stories so a slice cannot bypass the gate the parent
+            # passed. The gate counts each child on child-exclusive units only (tiers.py): the
+            # slice's units are all shared with the parent, so a child never passes on cloned
+            # corroboration -- it stays BLOCKED and remains visible as a viewpoint slice of its
+            # parent rather than as an independently admitted story.
             if viewpoint_clusters.get(story.id):
                 viewpoint_story_ids = [sid for sid in viewpoint_clusters[story.id]]
                 await apply_dynamic_gate(session, story_ids=viewpoint_story_ids)

