@@ -37,6 +37,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from curation_ui.app_state import BASE_DIR, templates  # noqa: F401  (re-exported: tests import main.templates)
+from curation_ui.cache import map_read_cache
 from curation_ui.curation import router as curation_router
 from curation_ui.discovery import (  # noqa: F401  (public read API, re-exported: tests import these from main)
     MAP_EVENTS_MAX_LIMIT,
@@ -137,6 +138,15 @@ async def content_security_policy(request: Request, call_next):
         nonce=request.state.csp_nonce
     )
     return response
+
+
+# Registered second so it is the OUTERMOST of the two: Starlette's add_middleware
+# inserts at position 0, so the last registered wraps everything below it. The
+# request therefore reaches the router and comes back through the CSP middleware
+# first (CSP header attached), then through this one, which reads the body to
+# decide whether it was an error and only then adds Cache-Control. Both headers
+# end up on the same response.
+app.middleware("http")(map_read_cache)
 
 
 if __name__ == "__main__":
