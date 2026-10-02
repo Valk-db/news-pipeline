@@ -113,20 +113,24 @@ def sample_story_viral():
 
 
 def test_evaluate_tier1_gate_baseline():
-    """Test the original boolean gate logic still works."""
+    """Test the original boolean gate logic still works.
+
+    The gate consumes one (unit_id, owner) pair per distinct tier-1 owner of each unit; the
+    unit half of the rule counts distinct unit ids.
+    """
     # Should pass: 2 tier-1 units, 2 distinct owners
-    pairs = [("tier1", "BBC"), ("tier1", "Guardian")]
+    pairs = [(uuid.uuid4(), "BBC"), (uuid.uuid4(), "Guardian")]
     should_queue, reason = evaluate_tier1_gate(pairs)
     assert should_queue is True
 
     # Should fail: only 1 tier-1 unit
-    pairs = [("tier1", "BBC")]
+    pairs = [(uuid.uuid4(), "BBC")]
     should_queue, reason = evaluate_tier1_gate(pairs)
     assert should_queue is False
-    assert "Only 1 tier-1 units" in reason
+    assert "Only 1 tier-1 unit" in reason
 
     # Should fail: 2 tier-1 units but same owner
-    pairs = [("tier1", "BBC"), ("tier1", "BBC")]
+    pairs = [(uuid.uuid4(), "BBC"), (uuid.uuid4(), "BBC")]
     should_queue, reason = evaluate_tier1_gate(pairs)
     assert should_queue is False
     assert "only 1 owner" in reason
@@ -297,7 +301,7 @@ async def test_compute_admission_score_basic(mock_session, sample_story):
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
-    score, breakdown = await compute_admission_score(mock_session, story, 2)
+    score, breakdown = await compute_admission_score(mock_session, story, 2, tier1_units=2)
 
     # 2 independent owners: baseline=40 (owners>=2) + corroboration=20 (2*10) + owners=10 (2*5)
     # + virality=0 + harm=0 = 70
@@ -347,7 +351,7 @@ async def test_compute_admission_score_harm_high(mock_session, sample_story_high
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
-    score, breakdown = await compute_admission_score(mock_session, story, 2)
+    score, breakdown = await compute_admission_score(mock_session, story, 2, tier1_units=2)
 
     # base_score=70, harm_penalty=-20, final=50
     assert breakdown["harm_level"] == "high"
@@ -384,7 +388,7 @@ async def test_compute_admission_score_virality(mock_session, sample_story_viral
     # Correct sequence: virality FIRST, then harm_level (claim, then entity)
     mock_session.execute.side_effect = [viral_result, claim_result, entity_result]
 
-    score, breakdown = await compute_admission_score(mock_session, story, 2)
+    score, breakdown = await compute_admission_score(mock_session, story, 2, tier1_units=2)
 
     # base=70, virality=10 (5*2), final=80
     assert breakdown["virality"] == 10
@@ -400,19 +404,51 @@ async def test_score_counts_independent_owners_not_articles(mock_session, sample
     old score as a high article count and passed, while the boolean gate blocked it. With the score
     counting independent owners, the two agree on independence: a single owner cannot reach 50, and
     the breakdown says which count it was given.
+
+    V-P1-14: the score mirrors the boolean gate's FULL admission condition (>= 2 tier-1 units AND
+    >= 2 distinct owners), not just the owners half. The independence factors award nothing when
+    the condition fails -- a single reporting unit cannot corroborate itself -- so a story the
+    boolean gate blocks on independence can score at most the virality 10 and can never reach 50.
     """
-    for distinct_owners, expected_base in ((1, 15), (2, 70), (4, 90)):
+    for distinct_owners, expected_base in ((1, 0), (2, 70), (4, 90)):
         mock_session.execute.side_effect = [
             make_result_mock([]),  # compute_virality_signal: no tier3/4 units
             make_first_mock(None),  # compute_harm_level: no ALLEGATION claim
         ]
         score, breakdown = await compute_admission_score(
-            mock_session, sample_story, distinct_owners
+            mock_session, sample_story, distinct_owners, tier1_units=2
         )
         assert breakdown["independent_owners"] == distinct_owners
+        assert breakdown["tier1_units"] == 2
         assert breakdown["base_score"] == expected_base
         assert score == expected_base
         assert breakdown["passes"] is (expected_base >= 50)
+
+
+@pytest.mark.asyncio
+async def test_score_baseline_requires_both_halves_of_the_gate(mock_session, sample_story):
+    """V-P1-14: mirroring only the owners half still diverges where P0-4 bites.
+
+    One reporting unit carrying four tier-1 articles from four distinct owners: the boolean gate
+    blocks it ("Only 1 tier-1 unit"), so the score must not pass it either. A baseline that only
+    checked owners would award 40 + 30 + 20 = 90 here; with both conditions mirrored the
+    independence factors award nothing and the story scores 0.
+    """
+    mock_session.execute.side_effect = [
+        make_result_mock([]),            # compute_virality_signal: no tier3/4 units
+        make_scalar_mock(None),          # compute_harm_level: no ALLEGATION claim
+    ]
+    score, breakdown = await compute_admission_score(
+        mock_session, sample_story, 4, tier1_units=1
+    )
+    assert breakdown["independent_owners"] == 4
+    assert breakdown["tier1_units"] == 1
+    assert breakdown["tier_baseline"] == 0
+    assert breakdown["corroboration"] == 0
+    assert breakdown["distinct_owners"] == 0
+    assert breakdown["base_score"] == 0
+    assert score == 0
+    assert breakdown["passes"] is False
 
 
 @pytest.mark.asyncio
