@@ -451,10 +451,13 @@ async def run_ingestion(
         # Phase 1.6: Re-extract entities from the translated English text.
         # Ingestion extracts entities from the ORIGINAL body, and the extractor
         # is an English model, so a non-English article arrived with no entities
-        # and stayed inert downstream no matter how well it translated. This
-        # runs the same extractor over body_text_en so a translated article is
-        # actually groupable and gateable. Same contract as translation: it
-        # never breaks ingest.
+        # and stayed inert downstream no matter how well it translated: an
+        # entity-less unit builds a story with empty primary_entities, which
+        # build_stories() then skips when matching later units, so that story is
+        # one unit forever and the corroboration gate can never be evaluated for
+        # it. This runs the same extractor over body_text_en so a translated
+        # article is actually mergeable and gateable. Same contract as
+        # translation: it never breaks ingest.
         print("Phase 1.6: Re-extracting entities from translated text...")
         entity_summary = {"eligible": 0, "refreshed": 0, "entities_found": 0, "errors": 0}
         if new_articles:

@@ -455,11 +455,27 @@ def refresh_entities_after_translation(
     from the ORIGINAL body (src/ingestion/rss.py, in process_feed_entry), and
     extraction runs en_core_web_sm, which is an English model. A French,
     Turkish or Chinese article therefore arrives with an empty entity map and
-    stays inert -- no canonical entity, no reporting-unit grouping, no
-    corroboration, no topic label -- no matter how good the translation is.
-    On the dev database, of 34 non-English articles, the 6 whose translation
-    had succeeded carried real entity labels and the 28 whose translation had
-    not carried none; every one of the 28 was inert downstream.
+    stays inert -- no canonical entity, no story merge, no corroboration, no
+    topic label -- no matter how good the translation is.
+
+    On the dev database (2026-10-02): 28 non-English articles, every one of
+    them with a translated body, and only 5 carrying usable entities -- 3 of
+    those from the GDELT static join, 2 from the English-NER path. 23 had
+    nothing. Those 23 are the ones this function is about, and the cost of
+    having no entities is specific rather than cosmetic: build_stories()
+    builds a story's canonical entities from the unit's representative
+    article, and a unit with no entities creates a story with empty
+    primary_entities, which build_stories() then skips when matching later
+    units. Such a story is one unit forever, so the corroboration gate
+    (>=2 units, >=2 owners) can never be evaluated for it.
+    Reporting units themselves are not affected -- those cluster by shingle
+    containment on body_text, not by entities -- so the loss is at the story
+    layer and above, which is where the gate lives.
+
+    After this step, on those same 28 rows: 0 with no canonical entity (was
+    23), all 28 sharing at least one canonical entity with an existing story
+    and with an English article, and 2 already past the 0.4 Jaccard attach
+    threshold against today's stories.
 
     So translation without this step bought a translated string and nothing
     else. This runs the same extractor over body_text_en, in the same thread-
