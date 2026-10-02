@@ -33,7 +33,12 @@ class TestHealthEndpoint:
     def test_healthz_without_database_url(
         self, monkeypatch
     ):
-        """GET /healthz with DATABASE_URL unset returns env_set.DATABASE_URL: false and verdict."""
+        """GET /healthz with DATABASE_URL unset reports degraded liveness.
+
+        The detailed env/topology report moved to the auth-gated
+        /healthz/details (P3.4); the anonymous endpoint answers only
+        {"status", "database"}.
+        """
         # Clear settings cache and unset DATABASE_URL
         # Use setenv("") instead of delenv to override .env file values
         monkeypatch.setenv("DATABASE_URL", "")
@@ -49,11 +54,7 @@ class TestHealthEndpoint:
 
         response = client.get("/healthz")
         assert response.status_code == 200
-        data = response.json()
-        assert data["env_set"]["DATABASE_URL"] is False
-        assert "verdict" in data
-        assert isinstance(data["verdict"], str)
-        assert len(data["verdict"]) > 0
+        assert response.json() == {"status": "degraded", "database": "not_configured"}
 
 
 class TestAuthBoundary:
