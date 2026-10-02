@@ -65,3 +65,5 @@ target/
 # Scratch helpers for agent batches (never committed)
 devenv.py
 scratch_*.py
+scratch_*.json
+scratch_*.txt
