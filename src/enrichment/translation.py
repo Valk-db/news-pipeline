@@ -29,7 +29,7 @@ gitignored directory on an ephemeral runner, so the cap was really per run and
 two runs a day could send twice the anonymous limit. Translation never breaks
 ingest: failures are caught, reported, and the article persists untranslated.
 
-Groq politeness: 1s between requests and a daily request budget of 300 counted
+Groq politeness: 3s between requests and a daily request budget of 300 counted
 in the same table under its own name (groq_translation_requests). Sharing the
 LLM client's row would let a long translation batch spend the budget that
 caption and classification work -- which runs first -- was counted against.
@@ -72,7 +72,13 @@ GROQ_MODEL = "openai/gpt-oss-20b"
 # generation stops at the stop token.
 GROQ_MAX_TOKENS = 4096
 GROQ_TIMEOUT = 30
-GROQ_POLITENESS_SECONDS = 1.0
+# The free tier is 30 requests/minute and 8000 tokens/minute (x-ratelimit headers,
+# 2026-10-02), so the gap is set by the request ceiling, not by taste: 3s is 20
+# requests a minute, under the 30/min with room for a retry. A 4000-char body is
+# ~2500 tokens, so a batch of long bodies can still outrun the token window; that
+# arrives as 429 -> TranslationUnavailable, the article keeps its originals and
+# the next run picks it up again.
+GROQ_POLITENESS_SECONDS = 3.0
 # Sized under the free tier's measured allowance, not guessed: the response headers on
 # 2026-10-02 carried x-ratelimit-limit-requests: 1000. 300 requests is ~150 articles
 # (a title and a body each) and leaves the LLM client's own 900/day row alone.
