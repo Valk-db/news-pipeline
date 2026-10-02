@@ -236,6 +236,23 @@ def build_adapters(
     feed list and its own polling cadence and is not a tiered source at all.
     It is deliberately absent from the unfiltered candidate list, so a run with
     no --sources behaves exactly as it did before the evidence locker existed.
+
+    The opt-in stays, but it is no longer the whole story, and that is a
+    correction worth reading before touching it again. The evidence locker is
+    the only path that appends to merkle_log_entries, so leaving it opt-in with
+    nothing scheduled asking for it meant the log never grew in production
+    (measured on dev 2026-10-02: 1811 articles fetched, 0 stamped) and every
+    /proof permalink rendered "pending" forever. It is now run on its own
+    schedule by .github/workflows/transparency-stamp.yml, which passes
+    `--sources rss_evidence` explicitly and lands before both the 06:00
+    checkpoint cron and the 06:23 tiered ingest. tests/test_scheduled_stamping.py
+    fails if that workflow stops asking for the adapter.
+
+    Do not "fix" this by adding the locker to the candidate list. The evidence
+    feeds are a subset of the tier-1 feeds (src/ingestion/source_registry.py)
+    and raw_articles.url_hash is UNIQUE, so in one combined run the tiered
+    adapters would claim the rows first and the locker would stamp nothing,
+    while doubling the outbound feed fetches.
     """
     candidates = []
     if SourceTier.TIER1 in tiers:

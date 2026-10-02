@@ -33,6 +33,7 @@ from src.schema.models import (
 )
 from src.transparency.checkpoint import HmacDevSigner, build_checkpoint, sign_checkpoint
 from src.transparency.log import (
+    MerkleLogEntry,
     SqlAlchemyMerkleLog,
     TransparencyBase,
     leaf_hash,
@@ -105,7 +106,7 @@ def _make_article(db_session, **overrides):
         url=url,
         url_hash=hashlib.sha256(url.encode()).hexdigest(),
         title=overrides.get("title", "Test headline"),
-        body_text="Body text.",
+        body_text=overrides.get("body_text", "Body text."),
         source_domain="example.test",
         source_tier=SourceTier.TIER1,
         published_at=datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc),
@@ -690,3 +691,99 @@ class TestStoredXssNeutralized:
         assert "XSS headline" in body
         assert "javascript:" not in body
         assert 'href="#"' in body
+
+
+class TestUnstampedHonesty:
+    """An unstamped page must say WHY, not just that it is unstamped.
+
+    The old copy read identically whether the stamping workflow was broken or
+    the row was archived by a path that never stamps. That is the difference
+    between a bug report and a documentation question, and a reader cannot tell
+    them apart from the page.
+    """
+
+    async def test_body_backed_article_says_it_was_archived_by_the_unstamped_path(
+        self, app_with_db, db_session
+    ):
+        article = _make_article(db_session, log_index=None, body_text="Real body. " * 60)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "ordinary feed ingest" in body
+        assert "not applied retroactively" in body
+        assert "gap in coverage" in body
+
+    async def test_headline_only_article_says_there_is_no_stampable_body(
+        self, app_with_db, db_session
+    ):
+        article = _make_article(db_session, log_index=None, body_text="Headline only.")
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "no stampable body" in body
+        assert "200-character minimum" in body
+        assert "ordinary feed ingest" not in body
+
+    async def test_page_reports_archive_wide_stamping_scale(self, app_with_db, db_session):
+        """Scale is what lets a reader tell normal from broken."""
+        log = SqlAlchemyMerkleLog(db_session)
+        stamped = _make_article(db_session, url="https://example.test/stamped-1")
+        await _stamp_article(db_session, stamped, log)
+        _make_article(db_session, url="https://example.test/plain-1", log_index=None)
+        article = _make_article(db_session, url="https://example.test/plain-2", log_index=None)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "1 of 3 archived articles carry an inclusion stamp" in body
+        assert "Archive-wide stamping scale" in body
+        assert "33.33%" in body
+
+    async def test_stale_log_is_reported_as_a_stalled_stamping_pass(
+        self, app_with_db, db_session
+    ):
+        """A log that stopped growing is a different problem from this row."""
+        log = SqlAlchemyMerkleLog(db_session)
+        stamped = _make_article(db_session, url="https://example.test/stamped-old")
+        await _stamp_article(db_session, stamped, log)
+        # Backdate the only log entry well past the daily run's cadence. Done in
+        # SQL because the log is append-only through its API on purpose.
+        await db_session.execute(
+            update(MerkleLogEntry).values(timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc))
+        )
+        article = _make_article(db_session, url="https://example.test/plain-3", log_index=None)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "stamping pass looks stalled" in body
+
+    async def test_scale_is_omitted_rather_than_guessed_when_counters_fail(
+        self, app_with_db, db_session, monkeypatch
+    ):
+        """A counter that cannot be read must not invent a number."""
+        import curation_ui.proofs as proofs_module
+
+        def boom(*_a, **_k):
+            raise RuntimeError("count query exploded")
+
+        # Inside the guarded block: _stamping_scale builds its queries with the
+        # module-level select, so this exercises the real except path.
+        monkeypatch.setattr(proofs_module, "select", boom)
+        article = _make_article(db_session, log_index=None, body_text="Real body. " * 60)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "archived articles carry an inclusion stamp" not in body
+        assert "ordinary feed ingest" in body, "the per-article reason must survive"
+
+
+def test_stampable_body_floor_matches_the_ingestion_floor():
+    """proofs.py copies the threshold instead of importing it (bundle size).
+
+    That copy is only safe while a test pins the two together: rss_evidence
+    raises its own floor silently and the page would start calling a
+    headline-only row unstampable for the wrong reason, or vice versa.
+    """
+    from curation_ui.proofs import MIN_STAMPABLE_BODY_CHARS
+    from src.ingestion.rss_evidence import MIN_BODY_CHARS
+
+    assert MIN_STAMPABLE_BODY_CHARS == MIN_BODY_CHARS
