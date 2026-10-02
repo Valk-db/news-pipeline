@@ -49,12 +49,17 @@ class TestOwnershipGroups:
 
 
 class TestEvaluateTier1GatePure:
-    """Tests for the pure evaluate_tier1_gate function."""
+    """Tests for the pure evaluate_tier1_gate function.
+
+    The gate consumes one (unit_id, owner) pair per distinct tier-1 owner of each unit: the
+    unit half of the rule counts distinct unit ids, so two articles inside one reporting unit
+    are one unit's worth of corroboration.
+    """
 
     def test_passes_with_two_tier1_different_owners(self):
         units = [
-            ("tier1", "AP"),
-            ("tier1", "Reuters"),
+            (uuid.uuid4(), "AP"),
+            (uuid.uuid4(), "Reuters"),
         ]
         should_queue, reason = evaluate_tier1_gate(units)
         assert should_queue is True
@@ -62,30 +67,37 @@ class TestEvaluateTier1GatePure:
 
     def test_fails_only_one_tier1_unit(self):
         units = [
-            ("tier1", "AP"),
-            ("tier2", "NYT"),
+            (uuid.uuid4(), "AP"),
         ]
         should_queue, reason = evaluate_tier1_gate(units)
         assert should_queue is False
-        assert "Only 1 tier-1 units" in reason
+        assert "Only 1 tier-1 unit" in reason
 
     def test_fails_two_tier1_same_owner(self):
         units = [
-            ("tier1", "AP"),
-            ("tier1", "AP"),
+            (uuid.uuid4(), "AP"),
+            (uuid.uuid4(), "AP"),
         ]
         should_queue, reason = evaluate_tier1_gate(units)
         assert should_queue is False
         assert "owner" in reason.lower()
 
     def test_fails_no_tier1_units(self):
-        units = [
-            ("tier2", "NYT"),
-            ("tier2", "WaPo"),
-        ]
+        units = []
         should_queue, reason = evaluate_tier1_gate(units)
         assert should_queue is False
         assert "Only 0 tier-1 units" in reason
+
+    def test_one_unit_two_owners_is_still_one_unit(self):
+        # P0-4: one reporting event republished by two tier-1 outlets is one unit, not two.
+        unit_id = uuid.uuid4()
+        units = [
+            (unit_id, "AP"),
+            (unit_id, "Reuters"),
+        ]
+        should_queue, reason = evaluate_tier1_gate(units)
+        assert should_queue is False
+        assert "Only 1 tier-1 unit" in reason
 
 
 # Integration tests using PostgreSQL (pgvector service container)

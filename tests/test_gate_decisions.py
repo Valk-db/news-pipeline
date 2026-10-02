@@ -461,12 +461,16 @@ async def test_score_agrees_with_the_boolean_gate_on_independence(db_session):
             row for row in await _decisions(db_session, story.id) if row.gate_name == "dynamic"
         ]
         breakdown = score_row.breakdown
-        # One owner, four articles: 0 baseline + 10 corroboration + 5 owners, nothing else on this
-        # fixture (no tier3/4 units to be viral, no ALLEGATION claim).
+        # One owner, four articles: the boolean gate's full admission condition (>= 2 tier-1
+        # units AND >= 2 distinct owners) fails on owners, so the independence factors award
+        # nothing -- a single outlet cannot corroborate itself, and the score cannot admit what
+        # the gate held out. Nothing else on this fixture (no tier3/4 units to be viral, no
+        # ALLEGATION claim).
         assert breakdown["independent_owners"] == 1
+        assert breakdown["tier1_units"] == 4
         assert breakdown["tier_baseline"] == 0
-        assert breakdown["corroboration"] == 10
-        assert breakdown["base_score"] == score_row.score == 15
+        assert breakdown["corroboration"] == 0
+        assert breakdown["base_score"] == score_row.score == 0
         assert score_row.score < score_row.pass_threshold == 50
         assert score_row.passed is False
         assert breakdown["passes"] is False
