@@ -169,10 +169,11 @@
                         {% endfor %}
                     </tbody>
                 </table>
-                <p class="proof-note">Shell recipe for one level (hex to raw bytes, then hash):</p>
-                <pre class="proof-pre">{% raw %}echo -n "$LEFT_HEX"  | xxd -r -p > left.bin
-echo -n "$RIGHT_HEX" | xxd -r -p > right.bin
-printf '\x01' | cat - left.bin right.bin | sha256sum{% endraw %}</pre>
+                <p class="proof-note">
+                    One command per level, standard library only, substituting the row's two
+                    child hashes. It must print the digest in that row's last column:
+                </p>
+                <pre class="proof-pre" id="verify-recipe">{% raw %}python3 -c 'import binascii,hashlib,sys;h=binascii.unhexlify;print(hashlib.sha256(b"\x01"+h(sys.argv[1])+h(sys.argv[2])).hexdigest())' "$LEFT_HEX" "$RIGHT_HEX"{% endraw %}</pre>
             </section>
             {% endif %}
 

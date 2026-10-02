@@ -8,9 +8,10 @@ public proof page needs:
     latest_checkpoint_covering(session, idx)  newest checkpoint whose tree covers idx
 
 The model sits on TransparencyBase (see log.py), deliberately NOT on the app
-Base: the table is created by migration, and init_db() must not create it
-before the migration exists. DDL: docs/proof-permalinks-ddl.sql, generated
-from this model with the postgres dialect.
+Base: keeping the log's tables out of Base keeps them out of
+scripts/check_schema.py's drift comparison. DDL:
+supabase/migrations/20261002000100_proof_permalinks.sql, generated from this
+model with the postgres dialect.
 """
 from __future__ import annotations
 

@@ -9,6 +9,9 @@ verifier checks.
 """
 
 import hashlib
+import html
+import re
+import subprocess
 import uuid
 from datetime import datetime, timezone
 
@@ -19,7 +22,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.shared.config import get_settings
 from src.shared import database as database_module
-from src.schema.models import Base, RawArticle, SourceTier
+from src.schema.models import (
+    Base,
+    RawArticle,
+    ReportingUnit,
+    SourceTier,
+    Story,
+    StoryUnitLink,
+)
 from src.transparency.checkpoint import HmacDevSigner, build_checkpoint, sign_checkpoint
 from src.transparency.log import (
     SqlAlchemyMerkleLog,
@@ -192,6 +202,46 @@ class TestProofPage:
         # Server-rendered: no JS needed for the proof content.
         assert "canonical payload" in body.lower()
 
+    async def test_printed_verify_recipe_actually_recomputes_a_level(
+        self, app_with_db, db_session
+    ):
+        """The command the page prints must run and land on the digest it prints.
+
+        A verify affordance nobody can run is not an affordance, so this shells
+        out to the recipe rendered in the page rather than re-deriving it here.
+        """
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session)
+        entry = await _stamp_article(db_session, article, log)
+        await _stamp_article(db_session, _make_article(db_session, url="https://example.test/a2"), log)
+        await _stamp_article(db_session, _make_article(db_session, url="https://example.test/a3"), log)
+        signed = await _checkpoint_all(db_session, log)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        recipe = html.unescape(
+            re.search(r'<pre class="proof-pre" id="verify-recipe">(.*?)</pre>', body, re.S).group(1)
+        )
+        levels = re.findall(
+            r'<td class="mono">\d+</td>\s*<td class="mono">\d+</td>\s*'
+            r'<td class="mono">([0-9a-f]{64})</td>\s*<td class="mono">([0-9a-f]{64})</td>\s*'
+            r'<td class="mono">([0-9a-f]{64})</td>',
+            body,
+        )
+        assert levels, "the page rendered no proof steps"
+        left, right, digest = levels[-1]
+        result = subprocess.run(
+            ["bash", "-c", recipe.replace("$LEFT_HEX", left).replace("$RIGHT_HEX", right)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == digest
+        # ... and the last level is the root the checkpoint signs.
+        assert digest == signed.checkpoint.merkle_root.hex()
+        assert entry.index == 0
+
     async def test_unstamped_article_renders_pending(self, app_with_db, db_session):
         article = _make_article(db_session, log_index=None)
         await db_session.commit()
@@ -259,6 +309,74 @@ class TestProofPage:
         response = client.get(f"/proof/{article.id}")
         # Anonymous: no 401, the pending page renders.
         assert response.status_code == 200
+
+    async def test_public_story_page_links_a_stamped_article_to_its_permalink(
+        self, app_with_db, db_session
+    ):
+        """The entry point: a reader on the story page can reach the proof."""
+        article = _make_article(db_session, log_index=3)
+        unit = ReportingUnit(
+            id=uuid.uuid4(),
+            day=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            representative_article_id=article.id,
+            article_count=1,
+            source_tiers={"tier1": 1},
+            owner_groups={"AP": 1},
+            tier1_owner_groups={"AP": 1},
+        )
+        story = Story(
+            id=uuid.uuid4(),
+            day=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            primary_entities=["test-entity"],
+            status=Story.Status.QUEUED,
+            tier1_unit_count=1,
+            tier2_unit_count=0,
+            tier3_unit_count=0,
+            tier4_unit_count=0,
+            distinct_owners=1,
+        )
+        db_session.add_all([unit, story, StoryUnitLink(story_id=story.id, unit_id=unit.id)])
+        await db_session.commit()
+
+        client = TestClient(app_with_db)
+        story_page = client.get(f"/stories/{story.id}")
+        assert story_page.status_code == 200
+        link = re.search(r'href="(/proof/[0-9a-f-]{36})"', story_page.text)
+        assert link is not None, "the public story page offers no inclusion-proof link"
+        assert link.group(1) == f"/proof/{article.id}"
+        # And the link it advertises actually resolves.
+        assert client.get(link.group(1)).status_code == 200
+
+    async def test_public_story_page_omits_the_link_for_an_unstamped_article(
+        self, app_with_db, db_session
+    ):
+        article = _make_article(db_session, log_index=None)
+        unit = ReportingUnit(
+            id=uuid.uuid4(),
+            day=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            representative_article_id=article.id,
+            article_count=1,
+            source_tiers={"tier1": 1},
+            owner_groups={"AP": 1},
+            tier1_owner_groups={"AP": 1},
+        )
+        story = Story(
+            id=uuid.uuid4(),
+            day=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            primary_entities=["test-entity"],
+            status=Story.Status.QUEUED,
+            tier1_unit_count=1,
+            tier2_unit_count=0,
+            tier3_unit_count=0,
+            tier4_unit_count=0,
+            distinct_owners=1,
+        )
+        db_session.add_all([unit, story, StoryUnitLink(story_id=story.id, unit_id=unit.id)])
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/stories/{story.id}").text
+        # No proof exists for this article, so no dead-end link is offered.
+        assert "/proof/" not in body
 
 
 class TestCheckpointStore:

@@ -11,7 +11,8 @@ States, all rendered honestly:
 - pending_no_entry: stamped index is beyond the log's current length.
 - pending_no_checkpoint: stamped, but no checkpoint covers the index yet.
 - pending_log_missing: the transparency tables are not provisioned in this
-  database yet (the DDL in docs/proof-permalinks-ddl.sql has not been applied).
+  database yet (20261001000700_merkle_log_entries.sql and
+  20261002000100_proof_permalinks.sql have not been applied).
 """
 from __future__ import annotations
 
@@ -139,8 +140,9 @@ async def build_proof_view(session, article: RawArticle) -> ProofView:
                 "pending_log_missing",
                 "Proof pending: the transparency log is not provisioned yet",
                 "The merkle_log_entries table does not exist in this database. "
-                "Apply docs/rss-evidence-merkle-ddl.sql and "
-                "docs/proof-permalinks-ddl.sql, then re-run the evidence locker.",
+                "Apply 20261001000700_merkle_log_entries.sql and "
+                "20261002000100_proof_permalinks.sql (scripts/migrate.py), then "
+                "re-run the evidence locker.",
             )
         raise
 

@@ -13,10 +13,10 @@
 --     print(CreateTable(TransparencyCheckpoint.__table__).compile(dialect=d)); \
 --     [print(CreateIndex(i).compile(dialect=d)) for i in TransparencyCheckpoint.__table__.indexes]"
 --
--- Apply through the Supabase dashboard SQL editor, together with
--- docs/rss-evidence-merkle-ddl.sql if that has not been applied yet. Until
--- both tables exist, the proof page renders the honest "proof pending"
--- states: it never fabricates a proof.
+-- Applied by scripts/migrate.py, like every other file in this directory, which
+-- is the schema authority. 20261001000700_merkle_log_entries.sql must be applied
+-- too: the proof page reads both. Until both exist, the page renders the honest
+-- "proof pending" states and never fabricates a proof.
 --
 -- raw_articles.log_index links an article row to its merkle_log_entries.index.
 -- It is written by src/ingestion/rss_evidence.py stamp_observations() at
@@ -26,6 +26,9 @@
 -- path, by design. A permalink anchors to the newest checkpoint covering its
 -- entry, so readers verify against a published signed root, never the
 -- operator's moving head.
+--
+-- No RLS here on purpose: a checkpoint is a public, signed artifact and readers
+-- are meant to be able to fetch one without trusting this service.
 
 CREATE TABLE IF NOT EXISTS transparency_checkpoints (
     id           UUID NOT NULL,

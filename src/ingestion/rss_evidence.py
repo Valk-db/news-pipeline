@@ -29,12 +29,13 @@ Extraction, not headlines. An item only becomes an article once trafilatura
 returned a body of at least 200 characters. A headline with no body is not
 evidence, so it is dropped rather than stored half-formed.
 
-The merkle_log_entries table does not exist in the dev database yet. The
+The merkle_log_entries table may not exist in a given database yet. The
 stamping path is therefore defensive: the first missing-table error disables
 stamping for the rest of the run, logs a warning, and leaves content_hash plus
-provenance on the result dict so a later step can stamp retroactively. Applying
-docs/rss-evidence-merkle-ddl.sql turns it on. pipeline_runs is treated the same
-way: a missing ledger table must not sink an ingestion run.
+provenance on the result dict so a later step can stamp retroactively.
+supabase/migrations/20261001000700_merkle_log_entries.sql turns it on.
+pipeline_runs is treated the same way: a missing ledger table must not sink an
+ingestion run.
 
 The Batch C columns canonical_url_v1 and url_hash_v1 are deliberately NOT set
 here. They are not in the dev database yet, and
@@ -801,12 +802,13 @@ async def stamp_observations(
     Putting it there means the chain commits to when we read these bytes, not
     merely that we read them.
 
-    DEFENSIVE: merkle_log_entries does not exist in the dev database yet. The
-    first missing-table error disables stamping for the remainder of the run
+    DEFENSIVE: merkle_log_entries may not exist in a deployment's database yet.
+    The first missing-table error disables stamping for the remainder of the run
     (the session is unusable after a failed flush), logs a warning, and reports
     table_missing. The content_hash and provenance stay on the returned dict so
-    a later step can stamp them once docs/rss-evidence-merkle-ddl.sql is
-    applied -- nothing is lost, only deferred.
+    a later step can stamp them once
+    supabase/migrations/20261001000700_merkle_log_entries.sql is applied --
+    nothing is lost, only deferred.
     """
     log = merkle_log if merkle_log is not None else SqlAlchemyMerkleLog(session)
     # The DB-backed appends run inside a SAVEPOINT. A failed statement in
@@ -854,7 +856,8 @@ async def stamp_observations(
         # Link the article row to its log entry so the public proof permalink
         # can find it without scanning payloads. The attribute write rides the
         # caller's transaction; a deployment whose raw_articles predates the
-        # log_index column must apply docs/proof-permalinks-ddl.sql first.
+        # log_index column must apply
+        # supabase/migrations/20261002000100_proof_permalinks.sql first.
         article.log_index = entry.index
 
     return {
