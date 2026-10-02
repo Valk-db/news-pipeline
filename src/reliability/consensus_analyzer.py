@@ -13,6 +13,7 @@ from src.schema.models import (
     FactCheckRecord, SourceReliabilitySnapshot, CorrectionRecord,
 )
 from src.enrichment import get_embedding_service, cosine_similarity
+from src.shared.bulk_write import bulk_write
 
 logger = logging.getLogger(__name__)
 
@@ -445,6 +446,7 @@ async def detect_corrections(session: AsyncSession) -> int:
     articles = result.scalars().all()
 
     corrections_found = 0
+    corrections: list[CorrectionRecord] = []
 
     for article in articles:
         # Re-fetch current version
@@ -475,10 +477,13 @@ async def detect_corrections(session: AsyncSession) -> int:
                     correction_date=datetime.now(timezone.utc),
                     correction_url=article.url,
                 )
-                session.add(correction)
+                corrections.append(correction)
                 corrections_found += 1
 
-    await session.commit()
+    # Chunked: each row carries up to 10KB of original and corrected text, so a
+    # single INSERT over every correction in the table is a statement worth
+    # losing to one dropped connection.
+    await bulk_write(session, corrections)
     return corrections_found
 
 
