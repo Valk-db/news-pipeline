@@ -350,12 +350,162 @@ header h1 {
   border: 1px solid rgba(88, 166, 255, 0.3);
 }
 
+/* Corroboration badge on a triage card.
+   The one state a curator must not miss, so it sits in the card header next to
+   the status badge: filled green with a check for corroborated, amber outline
+   with a dot for anything not yet confirmed. */
+.verify-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--accent-yellow);
+  background: rgba(210, 153, 34, 0.12);
+  color: var(--accent-yellow);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.verify-badge.is-corroborated {
+  border-color: var(--accent-green);
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--accent-green);
+}
+
+.verify-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
 /* Story tier badges row */
 .story-tier-badges {
   display: flex;
   gap: 6px;
   margin-bottom: 16px;
   flex-wrap: wrap;
+}
+
+/* Discovery toolbar above the story queue.
+   The map page's discovery instrument in the curation workbench's own tokens:
+   search box, tier chips, date window, sort. Server-rendered in its initial
+   state, so the form alone filters the queue even with no JavaScript. */
+.discovery-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px;
+  margin-bottom: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.discovery-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.discovery-search {
+  flex: 1 1 260px;
+}
+
+.discovery-label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.discovery-input,
+.discovery-bar select {
+  min-height: 36px;
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.875rem;
+  transition: all var(--transition-fast);
+}
+
+.discovery-input {
+  width: 100%;
+}
+
+.discovery-bar select {
+  cursor: pointer;
+}
+
+.discovery-input:focus,
+.discovery-bar select:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+}
+
+.discovery-input::placeholder {
+  color: var(--text-muted);
+}
+
+.discovery-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Tier chips: the map's chip semantics (tier is on, or it is not), in the
+   curation palette. All four on is the unfiltered queue. */
+.tier-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+}
+
+.tier-chip {
+  min-width: 40px;
+  min-height: 32px;
+  padding: 4px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.tier-chip:hover {
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+.tier-chip:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.tier-chip.is-on {
+  background: rgba(88, 166, 255, 0.15);
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
 }
 
 /* Viewpoint badges */
@@ -982,6 +1132,19 @@ header h1 {
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
+  }
+
+  .discovery-bar {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .discovery-search {
+    flex: 1 1 100%;
+  }
+
+  .discovery-actions {
+    width: 100%;
   }
 }
 

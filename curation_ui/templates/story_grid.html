@@ -5,7 +5,11 @@
 {% endif %}
 {% if not stories %}
 <div class="empty-state">
+    {% if filters_active %}
+    <p>No pending stories match these filters. Widen the window or turn a tier back on.</p>
+    {% else %}
     <p>No pending stories. Run the ingestion pipeline or check back later.</p>
+    {% endif %}
 </div>
 {% else %}
 <div class="stories-grid" id="stories">

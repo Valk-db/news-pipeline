@@ -34,10 +34,116 @@
             </div>
         </header>
 
+        <!-- ======================= DISCOVERY =======================
+             Tier chips, date window, sort, and topic search, server-rendered
+             in their initial state from the query string so first paint shows
+             the filtered queue. It sits outside #stories on purpose: the
+             approve/reject responses swap that fragment only, so the controls
+             a curator is holding survive the swap. -->
+        <form class="discovery-bar" id="discovery-bar" method="get" action="/" role="search" aria-label="Filter the triage queue">
+            <div class="discovery-field discovery-search">
+                <label class="discovery-label" for="discovery-q">Search topics</label>
+                <input type="search" id="discovery-q" name="q" class="discovery-input"
+                       placeholder="Search headlines and topics…" value="{{ active_q }}"
+                       autocomplete="off" aria-label="Search stories by topic">
+            </div>
+            <div class="discovery-field">
+                <span class="discovery-label" id="discovery-tiers-label">Tiers</span>
+                <div class="tier-chips" role="group" aria-labelledby="discovery-tiers-label">
+                    <input type="hidden" name="tiers" value="{{ active_tiers_csv }}">
+                    {% for t in [1, 2, 3, 4] %}
+                    <button type="button" class="tier-chip{% if t in active_tiers %} is-on{% endif %}"
+                            data-tier="{{ t }}" aria-pressed="{{ 'true' if t in active_tiers else 'false' }}"
+                            title="Show stories with tier {{ t }} sources">T{{ t }}</button>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="discovery-field">
+                <label class="discovery-label" for="discovery-hours">Window</label>
+                <select id="discovery-hours" name="hours" aria-label="Date window">
+                    <option value="0"{% if active_hours == 0 %} selected{% endif %}>All time</option>
+                    <option value="24"{% if active_hours == 24 %} selected{% endif %}>Last 24 hours</option>
+                    <option value="168"{% if active_hours == 168 %} selected{% endif %}>Last 7 days</option>
+                    <option value="720"{% if active_hours == 720 %} selected{% endif %}>Last 30 days</option>
+                </select>
+            </div>
+            <div class="discovery-field">
+                <label class="discovery-label" for="discovery-sort">Sort</label>
+                <select id="discovery-sort" name="sort" aria-label="Sort stories">
+                    <option value="newest"{% if active_sort == 'newest' %} selected{% endif %}>Newest first</option>
+                    <option value="oldest"{% if active_sort == 'oldest' %} selected{% endif %}>Oldest first</option>
+                    <option value="top"{% if active_sort == 'top' %} selected{% endif %}>Top corroborated</option>
+                </select>
+            </div>
+            <div class="discovery-actions">
+                <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+                <a class="btn btn-ghost btn-sm" href="/">Reset</a>
+            </div>
+        </form>
+
         {% include "story_grid.html" %}
     </div>
 
     <script nonce="{{ request.state.csp_nonce }}">
+        // Discovery controls. The toolbar is a plain GET form, so the queue is
+        // filterable with no JavaScript; this only adds the live behaviour: the
+        // tier chips toggle the one hidden tiers field and submit, the selects
+        // submit on change, and the search box debounces like the map's.
+        (function () {
+            const bar = document.getElementById('discovery-bar');
+            if (!bar) return;
+            const tiersField = bar.querySelector('input[name="tiers"]');
+            const chips = Array.prototype.slice.call(bar.querySelectorAll('.tier-chip'));
+
+            function chipTiers() {
+                return chips
+                    .filter(function (chip) { return chip.classList.contains('is-on'); })
+                    .map(function (chip) { return chip.dataset.tier; });
+            }
+
+            function syncTiers() {
+                const on = chipTiers();
+                // Every tier on is the unfiltered queue, so send nothing rather
+                // than all four, which is what the Reset link does too.
+                tiersField.value = on.length === chips.length ? '' : on.join(',');
+            }
+
+            chips.forEach(function (chip) {
+                chip.addEventListener('click', function () {
+                    chip.classList.toggle('is-on');
+                    chip.setAttribute('aria-pressed', chip.classList.contains('is-on') ? 'true' : 'false');
+                    syncTiers();
+                    bar.submit();
+                });
+            });
+
+            Array.prototype.forEach.call(bar.querySelectorAll('select'), function (select) {
+                select.addEventListener('change', function () { bar.submit(); });
+            });
+
+            const search = document.getElementById('discovery-q');
+            let debounce = null;
+            search.addEventListener('input', function () {
+                if (debounce) window.clearTimeout(debounce);
+                debounce = window.setTimeout(function () { bar.submit(); }, 400);
+            });
+
+            syncTiers();
+        })();
+
+        // The keyboard shortcuts approve and reject through the same routes the
+        // buttons do, so they carry the toolbar's current filters too.
+        function activeFilterQuery() {
+            const form = document.getElementById('discovery-bar');
+            if (!form) return '';
+            const params = new URLSearchParams();
+            new FormData(form).forEach(function (value, key) {
+                if (String(value).trim() !== '') params.set(key, value);
+            });
+            const query = params.toString();
+            return query ? '?' + query : '';
+        }
+
         // Theme toggle
         const themeToggle = document.getElementById('theme-toggle');
         const sunIcon = document.getElementById('theme-icon-sun');
@@ -104,10 +210,10 @@
 
             if (key === 'a') {
                 e.preventDefault();
-                htmx.ajax('POST', `/story/${storyId}/approve`, { target: '#stories', swap: 'outerHTML' });
+                htmx.ajax('POST', `/story/${storyId}/approve${activeFilterQuery()}`, { target: '#stories', swap: 'outerHTML' });
             } else if (key === 'r') {
                 e.preventDefault();
-                htmx.ajax('POST', `/story/${storyId}/reject`, { target: '#stories', swap: 'outerHTML' });
+                htmx.ajax('POST', `/story/${storyId}/reject${activeFilterQuery()}`, { target: '#stories', swap: 'outerHTML' });
             } else if (key === 'e') {
                 e.preventDefault();
                 window.location.href = `/story/${storyId}/edit`;

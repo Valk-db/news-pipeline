@@ -3,6 +3,22 @@
         <span class="badge badge-{{ 'success' if item.story.status.value == 'queued' else 'warning' }}">
             {{ item.story.status.value|upper }}
         </span>
+        {% if item.verification %}
+        <span class="verify-badge{% if item.verification.corroborated %} is-corroborated{% endif %}"
+              title="{{ item.verification.outlets }} distinct outlet{{ 's' if item.verification.outlets != 1 else '' }} · tier mix T1:{{ item.verification.tier_mix.t1 }} T2:{{ item.verification.tier_mix.t2 }} T3:{{ item.verification.tier_mix.t3 }} T4:{{ item.verification.tier_mix.t4 }}">
+            {% if item.verification.corroborated %}
+            <svg class="verify-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M20 6L9 17l-5-5"></path>
+            </svg>
+            {% else %}
+            <svg class="verify-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="8"></circle>
+                <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"></circle>
+            </svg>
+            {% endif %}
+            <span class="verify-label">{{ item.verification.label }}</span>
+        </span>
+        {% endif %}
         <span class="story-day">{{ item.story.day.strftime('%Y-%m-%d') }}</span>
         <span class="story-gate">{{ item.story.gate_reason or 'Pending review' }}</span>
     </div>
@@ -157,10 +173,10 @@
     {% endif %}
 
     <div class="story-actions">
-        <button class="btn btn-success" hx-post="/story/{{ item.story.id }}/approve" hx-target="#stories" hx-swap="outerHTML">
+        <button class="btn btn-success" hx-post="/story/{{ item.story.id }}/approve{{ item.filter_query or '' }}" hx-target="#stories" hx-swap="outerHTML">
             Approve (A)
         </button>
-        <button class="btn btn-danger" hx-post="/story/{{ item.story.id }}/reject" hx-target="#stories" hx-swap="outerHTML">
+        <button class="btn btn-danger" hx-post="/story/{{ item.story.id }}/reject{{ item.filter_query or '' }}" hx-target="#stories" hx-swap="outerHTML">
             Reject (R)
         </button>
         <a href="/story/{{ item.story.id }}/edit" class="btn btn-primary">
