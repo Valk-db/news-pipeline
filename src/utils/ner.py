@@ -6,6 +6,8 @@ from typing import List, Dict, Set, Optional, Tuple
 from functools import lru_cache
 from dataclasses import dataclass
 
+from src.shared.analyzer_versions import CLUSTER_VERSION, compute_input_hash
+
 # Load spaCy model (download with: python -m spacy download en_core_web_sm)
 @lru_cache
 def get_nlp():
@@ -339,14 +341,22 @@ class EntityCanonicalizer:
         canonical_entity = CanonicalEntity(
             id=canonical_id,
             canonical_name=canonical_name,
-            entity_type=entity_type
+            entity_type=entity_type,
+            # What produced this row: entity canonicalization (NER version), not the geocoder
+            # that later writes coordinates onto it. The input is the (type, canonical name)
+            # pair the row was minted from -- the surface forms that produced it are the
+            # aliases, and each alias row hashes its own surface form.
+            analyzer_version=CLUSTER_VERSION,
+            input_hash=compute_input_hash(CLUSTER_VERSION, entity_type, canonical_name),
         )
         self.session.add(canonical_entity)
 
         # Create initial alias (the surface form itself)
         alias = EntityAlias(
             canonical_entity_id=canonical_id,
-            alias=surface_form
+            alias=surface_form,
+            analyzer_version=CLUSTER_VERSION,
+            input_hash=compute_input_hash(CLUSTER_VERSION, surface_form),
         )
         self.session.add(alias)
 
@@ -356,7 +366,9 @@ class EntityCanonicalizer:
             if normalized_alias != _normalize_text(canonical_name, entity_type):
                 alias_obj = EntityAlias(
                     canonical_entity_id=canonical_id,
-                    alias=alias_text
+                    alias=alias_text,
+                    analyzer_version=CLUSTER_VERSION,
+                    input_hash=compute_input_hash(CLUSTER_VERSION, alias_text),
                 )
                 self.session.add(alias_obj)
                 # Add to cache

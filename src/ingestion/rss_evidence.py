@@ -76,6 +76,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.schema.models import EdgePredicate, EntityEdge, RawArticle, SourceTier
+from src.shared.analyzer_versions import DEDUPE_VERSION, compute_input_hash
 from src.shared.ledger import stage_run
 from src.shared.config import get_settings
 from src.transparency.log import SqlAlchemyMerkleLog
@@ -938,6 +939,19 @@ async def link_to_gdelt_radar(session: AsyncSession, articles: Sequence[RawArtic
                     object_type="article",
                     object_id=other.id,
                     confidence=100,
+                    # Dedupe, not narrative: this edge says two feeds carried one story and
+                    # the URL/content-hash dedupe collapsed them, which is the same analyzer
+                    # that produced reporting_units. Same 5-tuple hash as the story-to-story
+                    # edges so an edge is verifiable however it was written.
+                    analyzer_version=DEDUPE_VERSION,
+                    input_hash=compute_input_hash(
+                        DEDUPE_VERSION,
+                        "article",
+                        str(article.id),
+                        EdgePredicate.SAME_EVENT_AS.value,
+                        "article",
+                        str(other.id),
+                    ),
                 )
             )
             entities = other.entities if isinstance(other.entities, dict) else {}

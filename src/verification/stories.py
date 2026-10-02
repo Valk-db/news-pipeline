@@ -9,6 +9,12 @@ from src.utils.ner import (
     canonical_jaccard,
 )
 from src.verification.tiers import recompute_story_counters, apply_dynamic_gate
+from src.shared.analyzer_versions import (
+    STORY_VERSION,
+    VIEWPOINT_VERSION,
+    compute_input_hash,
+    hash_id_set,
+)
 from datetime import datetime, timezone, timedelta
 import json
 import re
@@ -201,6 +207,11 @@ async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
 
     # Recompute counters for all modified stories after all attachments are done
     if modified_story_ids:
+        # Membership is final at this point, so each modified story's input_hash describes the
+        # story as it will actually be stored. One query per modified story rather than one per
+        # attachment; _attach_unit_to_story deliberately leaves the hash alone.
+        for story_id in modified_story_ids:
+            await _refresh_story_input_hash(session, story_id)
         await recompute_story_counters(session, list(modified_story_ids))
 
     # Phase 2: Viewpoint sub-clustering within stories
@@ -312,6 +323,17 @@ async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) 
                         primary_entities=story.primary_entities,
                         status=Story.Status.PENDING,
                         viewpoint_cluster_id=story.id,  # Link to parent story
+                        # A viewpoint child is a different analyzer from its parent: an LLM
+                        # stance pass over the unit excerpts, not the entity-Jaccard grouping
+                        # that made the parent. Versioned apart because the two can be
+                        # re-run independently, and because cluster_viewpoints() skips a
+                        # parent that already has children -- so a stale child would stick
+                        # instead of being replaced.
+                        analyzer_version=VIEWPOINT_VERSION,
+                        # The membership is already in hand for a viewpoint child -- these
+                        # are exactly the unit ids that go into it -- so the hash is computed
+                        # here rather than by re-reading the links back.
+                        input_hash=hash_id_set(VIEWPOINT_VERSION, unit_ids),
                     )
                     session.add(viewpoint_story)
                     await session.flush()
@@ -319,7 +341,14 @@ async def cluster_viewpoints(session: AsyncSession, story_ids: list[uuid.UUID]) 
                     # Link units to viewpoint story
                     from src.schema.models import StoryUnitLink
                     for unit_id in unit_ids:
-                        link = StoryUnitLink(story_id=viewpoint_story.id, unit_id=unit_id)
+                        link = StoryUnitLink(
+                            story_id=viewpoint_story.id,
+                            unit_id=unit_id,
+                            analyzer_version=VIEWPOINT_VERSION,
+                            input_hash=compute_input_hash(
+                                VIEWPOINT_VERSION, str(viewpoint_story.id), str(unit_id)
+                            ),
+                        )
                         session.add(link)
 
                     # Also keep original story as "master" cluster
@@ -366,8 +395,42 @@ async def _get_recent_stories_with_entities(
 
 async def _attach_unit_to_story(session: AsyncSession, unit_id: uuid.UUID, story_id: uuid.UUID) -> None:
     """Attach a unit to an existing story via StoryUnitLink."""
-    link = StoryUnitLink(story_id=story_id, unit_id=unit_id)
+    link = StoryUnitLink(
+        story_id=story_id,
+        unit_id=unit_id,
+        # One link row is one (story, unit) membership decision, so its input is exactly the
+        # pair. Stamped on the link so a story whose membership later changes still has a
+        # record of which grouping version first put these two together.
+        analyzer_version=STORY_VERSION,
+        input_hash=compute_input_hash(STORY_VERSION, str(story_id), str(unit_id)),
+    )
     session.add(link)
+    await session.flush()
+    # The story's own input_hash is its membership, so attaching a unit invalidates it. It is
+    # NOT refreshed here: one query per attach would be a query per unit, and build_stories
+    # already knows the full membership set once the attach loop is done, so it refreshes every
+    # modified story once at the end instead.
+
+
+async def _refresh_story_input_hash(session: AsyncSession, story_id: uuid.UUID) -> None:
+    """Recompute a story's input_hash from its current member unit ids.
+
+    Called once per modified story at the end of build_stories, because that is the first point
+    where the membership of a story that gained units is fully known. The analyzer version is
+    read from the story row rather than assumed, so a viewpoint child keeps viewpoint/v1 instead
+    of being relabelled story/v1 by the helper.
+    """
+    # no_autoflush so adding these two reads cannot change when the surrounding code flushes
+    # pending inserts: without it this helper would introduce an extra autoflush point into
+    # build_stories, which is exactly the kind of ordering change a membership insert must not
+    # depend on. Everything the caller built is already flushed by the attach path.
+    with session.no_autoflush:
+        story = (await session.execute(select(Story).where(Story.id == story_id))).scalar_one_or_none()
+        if story is None:
+            return
+        stmt = select(StoryUnitLink.unit_id).where(StoryUnitLink.story_id == story_id)
+        unit_ids = (await session.execute(stmt)).scalars().all()
+    story.input_hash = hash_id_set(story.analyzer_version or STORY_VERSION, unit_ids)
     await session.flush()
 
 
@@ -404,13 +467,23 @@ async def create_story_from_units(
         # on every process and evict entities stored by a previous run.
         primary_entities=sorted(combined_entities)[:MAX_PRIMARY_ENTITIES],
         status=Story.Status.PENDING,
+        # The membership is the input, so the hash is the sorted set of member unit ids
+        # under this analyzer version. create_story_from_units does not know which units
+        # will attach later, hence _refresh_story_input_hash at the attach point.
+        analyzer_version=STORY_VERSION,
+        input_hash=hash_id_set(STORY_VERSION, [u.id for u in units]),
     )
     session.add(story)
     await session.flush()
 
     # Link units
     for unit in units:
-        link = StoryUnitLink(story_id=story.id, unit_id=unit.id)
+        link = StoryUnitLink(
+            story_id=story.id,
+            unit_id=unit.id,
+            analyzer_version=STORY_VERSION,
+            input_hash=compute_input_hash(STORY_VERSION, str(story.id), str(unit.id)),
+        )
         session.add(link)
 
     await session.commit()

@@ -1,6 +1,7 @@
 """Embedding service for semantic enrichment using pgvector."""
 
 from typing import List, Dict, Any, Optional
+import hashlib
 import numpy as np
 import logging
 
@@ -251,6 +252,11 @@ async def embed_story(story_id: str, texts: List[str]) -> Dict[str, Any]:
         "model": service.model_name,
         "embedding": embedding,
         "dimensions": service.dimensions,
+        # The digest of the exact string that was embedded, so the writer can record what the
+        # vector was computed from without this module needing to know about input_hash. The
+        # raw text is deliberately not returned: it can be thousands of words and the caller
+        # already has the article bodies.
+        "embedded_text_sha256": hashlib.sha256(combined_text.encode("utf-8")).hexdigest(),
     }
 
 

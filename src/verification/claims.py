@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import Story, Claim, ClaimEvidence, ClaimType, ClaimStance
 from src.verification.stories import _gather_unit_texts_for_story
+from src.shared.analyzer_versions import CLAIM_VERSION, compute_input_hash, hash_text
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +78,17 @@ async def extract_claims_for_story(session: AsyncSession, story_id: uuid.UUID) -
         data = llm._parse_json_response(result["choices"][0]["message"]["content"])
 
         for claim_data in data.get("claims", []):
+            claim_text = claim_data["text"]
             claim = Claim(
                 story_id=story_id,
-                text=claim_data["text"],
+                text=claim_text,
                 claim_type=ClaimType(claim_data.get("claim_type", "fact")),
+                # A claim's input is the story it was extracted from plus the claim text
+                # itself, normalized: the same claim re-worded only in whitespace or case is
+                # the same claim, and a re-run that returned it slightly differently must not
+                # look like new state.
+                analyzer_version=CLAIM_VERSION,
+                input_hash=hash_text(CLAIM_VERSION, story_id, claim_text),
             )
             session.add(claim)
             await session.flush()  # get claim.id before adding evidence rows
@@ -88,11 +96,20 @@ async def extract_claims_for_story(session: AsyncSession, story_id: uuid.UUID) -
 
             for ev in claim_data.get("evidence", []):
                 try:
+                    stance = ClaimStance(ev.get("stance", "neutral"))
                     evidence = ClaimEvidence(
                         claim_id=claim.id,
                         unit_id=uuid.UUID(ev["unit_id"]),
-                        stance=ClaimStance(ev.get("stance", "neutral")),
+                        stance=stance,
                         confidence=int(ev.get("confidence", 50)),
+                        # One evidence row is one (claim, unit) stance report -- the same key
+                        # as uq_claim_unit -- plus the stance itself, which is the judgement
+                        # the row records. The confidence is a number attached to that
+                        # judgement, not an input to it.
+                        analyzer_version=CLAIM_VERSION,
+                        input_hash=compute_input_hash(
+                            CLAIM_VERSION, str(claim.id), str(ev["unit_id"]), stance.value
+                        ),
                     )
                     session.add(evidence)
                     results["evidence_created"] += 1

@@ -16,6 +16,7 @@ from src.enrichment.video_finder import find_videos_for_story
 from src.enrichment.social_snippets import find_snippets_for_story
 from src.enrichment.snippet_extractor import enrich_story_with_snippets
 from src.enrichment.embedding_service import embed_story
+from src.shared.analyzer_versions import EMBEDDING_VERSION, compute_input_hash
 
 logger = logging.getLogger(__name__)
 
@@ -301,11 +302,29 @@ async def _persist_story_embedding(
     embedding_result: Dict[str, Any]
 ) -> None:
     """Persist story embedding to StoryEmbedding table."""
+    model = embedding_result.get("model", "unknown")
     embedding = StoryEmbedding(
         story_id=story_id,
-        model=embedding_result.get("model", "unknown"),
+        model=model,
         embedding=embedding_result.get("embedding", []),
         dimensions=embedding_result.get("dimensions", 0),
+        # The vector is a function of (story, model, the exact text embedded), so those are
+        # the hash's inputs -- the model twice over, once as a column and once in the hash,
+        # because a model swap silently invalidates every vector it did not produce.
+        # embedded_text_sha256 comes from embed_story(); a caller that built the payload some
+        # other way gets None rather than a hash of nothing, which would falsely claim the
+        # input was known.
+        analyzer_version=EMBEDDING_VERSION,
+        input_hash=(
+            compute_input_hash(
+                EMBEDDING_VERSION,
+                str(story_id),
+                model,
+                embedding_result["embedded_text_sha256"],
+            )
+            if embedding_result.get("embedded_text_sha256")
+            else None
+        ),
     )
     session.add(embedding)
 

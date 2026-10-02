@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import Story, EntityEdge, EdgePredicate
+from src.shared.analyzer_versions import NARRATIVE_VERSION, compute_input_hash
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,18 @@ async def link_narrative_arcs(session: AsyncSession, story_id) -> list[dict]:
             object_id=older_story_id,
             confidence=confidence,
             source_unit_id=None,  # Could link to a specific unit later
+            # The business key of the edge is the 5-tuple (uq_entity_edge), so that is what
+            # the hash covers -- not the confidence, which is a judgement recorded about the
+            # edge rather than an input to deciding it exists.
+            analyzer_version=NARRATIVE_VERSION,
+            input_hash=compute_input_hash(
+                NARRATIVE_VERSION,
+                "story",
+                str(story_id),
+                predicate.value,
+                "story",
+                str(older_story_id),
+            ),
         )
         session.add(edge)
         await session.flush()
