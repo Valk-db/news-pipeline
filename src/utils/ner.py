@@ -319,7 +319,12 @@ def _person_surnames(mentions: Dict[str, CanonicalMention]) -> Dict[str, Canonic
 
 
 class EntityCanonicalizer:
-    """Resolves entity mentions to canonical entities using database-backed aliases."""
+    """Resolves entity mentions to canonical entities using database-backed aliases.
+
+    Requires a database session: initialize() and get_or_create() raise
+    RuntimeError without one, because a session-less canonicalizer used to
+    mint a fresh UUID per mention, silently splitting one entity's stories.
+    """
 
     def __init__(self, session=None):
         self.session = session
@@ -332,7 +337,21 @@ class EntityCanonicalizer:
         if self._initialized:
             return
         if not self.session:
-            return
+            # Fail loudly, not silently: the old code returned early here,
+            # leaving _initialized False so resolve() returned None and
+            # get_or_create() minted a fresh UUID per mention. The same
+            # entity in two articles then got two IDs, canonical Jaccard
+            # dropped to 0, and every reporting unit became its own story --
+            # with no error anywhere. There is no legitimate session-less
+            # production path (build_stories always passes one); tests that
+            # need a session-free resolver use the snapshot pattern from
+            # procmon-dev/eval/eval.py (populate _cache, set _initialized).
+            raise RuntimeError(
+                "EntityCanonicalizer.initialize() requires a database session. "
+                "Without one, get_or_create() cannot persist entities and would "
+                "mint a fresh UUID per mention, silently splitting stories. "
+                "Pass a session, or use the eval snapshot pattern for tests."
+            )
 
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
@@ -428,14 +447,12 @@ class EntityCanonicalizer:
 
         # Not found - create new canonical entity
         if not self.session:
-            # Fallback: return unresolved mention with generated ID
-            import uuid
-            return CanonicalMention(
-                surface_form=surface_form,
-                canonical_id=str(uuid.uuid4()),
-                canonical_name=surface_form,
-                entity_type=entity_type,
-                confidence=0.5
+            # No silent UUID minting: a fresh random ID per call makes the
+            # same entity unmatchable across articles (see initialize()).
+            raise RuntimeError(
+                "EntityCanonicalizer.get_or_create() requires a database "
+                "session to persist the new entity. Pass a session at "
+                "construction time."
             )
 
         from src.schema.models import CanonicalEntity, EntityAlias
