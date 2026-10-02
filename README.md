@@ -236,8 +236,7 @@ replenished. See `src/shared/budget.py`.
   broken or none of them produced anything, or if `scripts/check_freshness.py` finds no tier-1
   article in 30h. Each broken tier-1 source also gets an `::error` annotation, and
   `scripts/check_orphans.py` fails the run when its report is incomplete. (`run.py` also has a
-  "tier-1 critical GDELT domains down" exit, but `GDELT_TIER1_CRITICAL_DOMAINS` is empty, so it
-  cannot fire while GDELT is off.)
+  "tier-1 critical GDELT domains down" exit, but   `GDELT_TIER1_CRITICAL_DOMAINS` is empty, so that branch cannot fire at all.)
 
 ## Grouping Windows
 
