@@ -851,6 +851,11 @@ async def stamp_observations(
             break
         stamped += 1
         entries.append((article.url, entry.leaf_hash_hex, entry.index))
+        # Link the article row to its log entry so the public proof permalink
+        # can find it without scanning payloads. The attribute write rides the
+        # caller's transaction; a deployment whose raw_articles predates the
+        # log_index column must apply docs/proof-permalinks-ddl.sql first.
+        article.log_index = entry.index
 
     return {
         "stamped": stamped,

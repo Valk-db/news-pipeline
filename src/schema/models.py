@@ -66,6 +66,13 @@ class RawArticle(Base):
     url_hash_v1 = Column(String(64), nullable=True)  # SHA256 hex of the u1 canonical form
     # END scheme u1, additive block.
 
+    # merkle_log_entries.index for this article's evidence stamp, written by
+    # src/ingestion/rss_evidence.py stamp_observations(). Nullable because the
+    # log is opt-in and (deliberately) has no migration yet: NULL means the
+    # article has not been stamped, and the public proof permalink says so
+    # plainly instead of inventing a proof.
+    log_index = Column(Integer, nullable=True)
+
 
 class ReportingUnit(Base):
     """A cluster of near-duplicate articles (syndication, verbatim repub)."""

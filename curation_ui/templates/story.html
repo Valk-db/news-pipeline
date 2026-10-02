@@ -65,6 +65,7 @@
                             {{ article.source_domain }}
                             {%- if article.source_tier %} · tier {{ article.source_tier }}{% endif %}
                             {%- if article.published_at %} · {{ article.published_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
+                            {%- if article.log_index is not none %} · <a href="/proof/{{ article.id }}">inclusion proof</a>{% endif %}
                         </span>
                     </li>
                     {% endfor %}

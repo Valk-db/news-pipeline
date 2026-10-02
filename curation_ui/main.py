@@ -31,6 +31,7 @@ from src.schema.models import Story, StoryUnitLink, ReportingUnit, RawArticle, C
 from src.shared.llm import get_llm_client, validate_caption, build_deterministic_caption
 from src.shared.config import get_settings
 from curation_ui.health import router as health_router
+from curation_ui.proofs import build_proof_view
 from datetime import datetime, timedelta, timezone
 import uuid
 import os
@@ -1562,9 +1563,11 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
             if representative is None:
                 continue
             articles.append({
+                "id": str(representative.id),
                 "title": representative.title,
                 "url": representative.url,
                 "source_domain": representative.source_domain,
+                "log_index": representative.log_index,
                 "source_tier": (
                     representative.source_tier.value if representative.source_tier else None
                 ),
@@ -1615,6 +1618,39 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
             }
             for event in events
         ],
+    })
+
+
+# Inclusion proof permalinks
+#
+# One public, read only page per archived article: /proof/{article_id}. The
+# proof steps are server-rendered so the page is complete before JS runs, and
+# an article that has not been stamped yet renders an honest "proof pending"
+# page rather than a fabricated proof.
+
+
+@app.get("/proof/{article_id}", response_class=HTMLResponse)
+async def public_proof_page(article_id: uuid.UUID, request: Request):
+    """Public read only inclusion proof for one archived article.
+
+    Shows the article's identity, its log entry, the sibling path that folds
+    the entry's leaf hash up to a signed checkpoint root, and the checkpoint
+    itself, with every intermediate digest so a reader can recompute the root
+    by hand.
+    """
+    db_ok, db_msg = check_database_available()
+    if not db_ok:
+        return render_error_page(request, db_msg)
+
+    async with get_session() as session:
+        article = await session.get(RawArticle, article_id)
+        if article is None:
+            raise HTTPException(404, "Article not found")
+        view = await build_proof_view(session, article)
+
+    return templates.TemplateResponse(request, "proof.html", {
+        "request": request,
+        "view": view,
     })
 
 
