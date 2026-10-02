@@ -645,6 +645,21 @@ class EntityEdge(Base):
     """
     __tablename__ = "entity_edges"
     __table_args__ = (
+        # The business key of an edge is the 5-tuple, not id: the same typed
+        # relation between the same two things is the same edge. Without this
+        # the table had only its primary key, so the two writers that
+        # check-then-insert (src/verification/narrative.py and
+        # src/ingestion/rss_evidence.py link_to_gdelt_radar) were idempotent
+        # only against themselves -- two concurrent runs could both see "no
+        # row" and both insert, and nothing in the database would catch it.
+        UniqueConstraint(
+            "subject_type",
+            "subject_id",
+            "predicate",
+            "object_type",
+            "object_id",
+            name="uq_entity_edge",
+        ),
         Index("ix_entity_edges_subject", "subject_type", "subject_id"),
         Index("ix_entity_edges_object", "object_type", "object_id"),
         Index("ix_entity_edges_predicate", "predicate"),
