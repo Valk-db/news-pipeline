@@ -1,18 +1,35 @@
 """Tests for globe visualization functionality."""
 
-import pytest
+import json
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from src.enrichment.geocoder import Geocoder, parse_nominatim_hit
 from src.schema.models import (
-    Event, EventGeometry, EventLayer
+    CanonicalEntity, Event, EventGeometry, EventLayer, Story
 )
-from src.enrichment.geocoder import Geocoder, GeoResult
-from src.enrichment.event_locator import (
-    classify_event_type,
-    extract_location_candidates,
+
+from scripts.backfill_globe_events import (
+    PLACE_SPECIFICITY,
+    UNKNOWN_SPECIFICITY,
+    group_by_story,
+    most_specific,
+    story_event,
 )
+
+
+NOMINATIM_HIT = {
+    "display_name": "New York City, New York, United States",
+    "lat": "40.7128",
+    "lon": "-74.0060",
+    "addresstype": "city",
+    "type": "administrative",
+    "class": "place",
+    "importance": 0.7396,
+}
 
 
 def test_event_model_fields():
@@ -72,6 +89,7 @@ def test_event_geometry_model():
 
 def test_event_layer_model():
     """Test EventLayer model."""
+
     layer = EventLayer(
         id=uuid.uuid4(),
         name="Conflicts",
@@ -88,120 +106,9 @@ def test_event_layer_model():
     assert layer.is_default is True
 
 
-def test_classify_event_type():
-    """Test event type classification from keywords."""
-    # Conflict
-    event_type, confidence = classify_event_type("War breaks out as troops clash in battle with artillery strikes")
-    assert event_type == "conflict"
-    assert confidence > 0.5
-
-    # Protest (3 keywords: protest, demonstration, rally)
-    event_type, confidence = classify_event_type("Thousands protest in demonstration rally against policy")
-    assert event_type == "protest"
-    assert confidence > 0.5
-
-    # Election
-    event_type, confidence = classify_event_type("Election day as voters cast ballots in presidential vote")
-    assert event_type == "election"
-    assert confidence > 0.5
-
-    # Disaster
-    event_type, confidence = classify_event_type("Earthquake strikes city causing flood and landslide damage")
-    assert event_type == "disaster"
-    assert confidence > 0.5
-
-    # Unknown
-    event_type, confidence = classify_event_type("Random text with no event keywords")
-    assert event_type == "other"
-    assert confidence == 0.3
-
-
-def test_extract_location_candidates():
-    """Test location candidate extraction from text and entities."""
-    text = "The protest in Paris yesterday drew thousands. Officials in New York City responded."
-    entities = {
-        "GPE": ["Paris", "New York City"],
-        "LOC": ["France"],
-        "PERSON": ["John"],
-    }
-
-    candidates = extract_location_candidates(text, entities)
-
-    assert "Paris" in candidates
-    assert "New York City" in candidates
-    assert "France" in candidates
-
-
-def test_geocoder_result():
-    """Test GeoResult dataclass."""
-
-    result = GeoResult(
-        name="New York City",
-        latitude=40.7128,
-        longitude=-74.0060,
-        location_type="city",
-        country_code="US",
-        admin1="New York",
-        geonames_id="5128581",
-    )
-    assert result.latitude == 40.7128
-    assert result.longitude == -74.0060
-    assert result.country_code == "US"
-
-
-@pytest.mark.asyncio
-async def test_geocoder_nominatim():
-    """Test Nominatim geocoding (mocked)."""
-
-    geocoder = Geocoder()
-
-    # Mock the HTTP client
-    with patch('httpx.AsyncClient.get') as mock_get:
-        mock_response = MagicMock()
-        mock_response.json.return_value = [{
-            "display_name": "New York City, New York, USA",
-            "lat": "40.7128",
-            "lon": "-74.0060",
-            "type": "city",
-            "address": {"country_code": "us", "state": "New York"},
-        }]
-        mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
-
-        results = await geocoder.geocode_nominatim("New York City", limit=1)
-
-        assert len(results) == 1
-        assert results[0].name == "New York City, New York, USA"
-        assert results[0].latitude == 40.7128
-        assert results[0].longitude == -74.0060
-        assert results[0].location_type == "city"
-        assert results[0].country_code == "US"
-
-
-@pytest.mark.asyncio
-async def test_classify_event_type_llm():
-    """Test LLM-based event classification (mocked)."""
-    from src.enrichment.event_locator import infer_event_type_llm
-
-    with patch('src.enrichment.event_locator.get_llm_client') as mock_get_llm:
-        mock_client = AsyncMock()
-        mock_get_llm.return_value = mock_client
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = '{"event_type": "conflict", "confidence": 95, "reasoning": "Clear military action"}'
-        mock_client.chat_completion.return_value = mock_response
-
-        event_type, confidence = await infer_event_type_llm(
-            "War breaks out as troops advance with artillery",
-            "War Breaks Out"
-        )
-
-        assert event_type == "conflict"
-        assert confidence == 0.95
-
-
 def test_event_layer_style():
     """Test EventLayer style configuration."""
+
     layer = EventLayer(
         id=uuid.uuid4(),
         name="Heatmap",
@@ -232,24 +139,8 @@ def test_event_geometry_types():
         assert geom.geometry_type.value == geom_type
 
 
-def test_event_radius_estimation():
-    """Test event radius estimation by location type."""
-    from src.enrichment.event_locator import _estimate_radius
-
-    assert _estimate_radius("point") == 1.0
-    assert _estimate_radius("city") == 25.0
-    assert _estimate_radius("town") == 10.0
-    assert _estimate_radius("village") == 5.0
-    assert _estimate_radius("country") == 500.0
-    assert _estimate_radius("state") == 100.0
-    assert _estimate_radius("region") == 200.0
-    assert _estimate_radius("unknown") == 25.0  # Default
-
-
 def test_canonical_entity_geolocation():
     """Test CanonicalEntity with geolocation fields."""
-    from src.schema.models import CanonicalEntity
-
     entity = CanonicalEntity(
         id=uuid.uuid4(),
         canonical_name="Paris",
@@ -266,29 +157,202 @@ def test_canonical_entity_geolocation():
     assert entity.geonames_id == "2988507"
 
 
+# --- geocoder ---------------------------------------------------------------
+
+
+def test_parse_nominatim_hit():
+    """A Nominatim hit becomes a point plus the granularity label."""
+    result = parse_nominatim_hit(NOMINATIM_HIT)
+    assert result.latitude == 40.7128
+    assert result.longitude == -74.0060
+    # addresstype is the useful label; `type` is the fallback.
+    assert result.location_type == "city"
+    assert result.importance == 0.7396
+
+
+def test_parse_nominatim_hit_rejects_unusable_points():
+    """A hit without coordinates, or with coordinates off the globe, is not a place."""
+    assert parse_nominatim_hit({"display_name": "nowhere"}) is None
+    assert parse_nominatim_hit({"lat": "abc", "lon": "1"}) is None
+    assert parse_nominatim_hit({"lat": "91", "lon": "0"}) is None
+    assert parse_nominatim_hit({"lat": "0", "lon": "181"}) is None
+
+
+def test_parse_nominatim_hit_falls_back_to_type():
+    """A hit without addresstype still carries a granularity label."""
+    assert parse_nominatim_hit({"lat": "0", "lon": "0", "type": "country"}).location_type == "country"
+    assert parse_nominatim_hit({"lat": "0", "lon": "0"}).location_type == "place"
+
+
+def test_parse_nominatim_hit_without_a_score():
+    """A hit with no prominence score is worth nothing, not an error."""
+    assert parse_nominatim_hit({"lat": "1", "lon": "2"}).importance == 0.0
+    assert parse_nominatim_hit({"lat": "1", "lon": "2", "importance": "x"}).importance == 0.0
+
+
 @pytest.mark.asyncio
-async def test_enrich_story_with_event():
-    """Test story enrichment with event (mocked)."""
-    from src.enrichment.event_locator import enrich_story_with_event
+async def test_geocoder_returns_first_hit():
+    """A resolved name comes back as a point, and the lookup is cached."""
+    geocoder = Geocoder()
+    response = MagicMock()
+    response.read.return_value = json.dumps([NOMINATIM_HIT]).encode()
+    response.__enter__ = lambda self: self
+    response.__exit__ = lambda *args: False
 
-    mock_session = AsyncMock()
+    with patch("src.enrichment.geocoder.urllib.request.urlopen", return_value=response) as urlopen:
+        first = await geocoder.geocode("New York City")
+        second = await geocoder.geocode("new york city")
 
-    # Mock the story query
-    mock_story = MagicMock()
-    mock_story.id = uuid.uuid4()
-    mock_story.story_ids = []
+    assert (first.latitude, first.longitude) == (40.7128, -74.0060)
+    assert second == first
+    assert urlopen.call_count == 1
 
-    mock_session.execute = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = mock_story
-    mock_session.execute.return_value = mock_result
 
-    # Mock create_event_from_story
-    with patch('src.enrichment.event_locator.create_event_from_story', new_callable=AsyncMock) as mock_create:
-        mock_create.return_value = None  # No event created
+@pytest.mark.asyncio
+async def test_geocoder_returns_none_for_no_match():
+    """A name Nominatim does not know resolves to nothing, not an error."""
+    geocoder = Geocoder()
+    response = MagicMock()
+    response.read.return_value = b"[]"
+    response.__enter__ = lambda self: self
+    response.__exit__ = lambda *args: False
 
-        result = await enrich_story_with_event(mock_session, str(uuid.uuid4()))
-        assert result is False
+    with patch("src.enrichment.geocoder.urllib.request.urlopen", return_value=response):
+        assert await geocoder.geocode("Flibbertigibbet") is None
+
+
+@pytest.mark.asyncio
+async def test_geocoder_survives_a_broken_provider():
+    """An unreachable geocoder returns None and is not retried in the same run."""
+    geocoder = Geocoder()
+
+    with patch(
+        "src.enrichment.geocoder.urllib.request.urlopen",
+        side_effect=OSError("connection refused"),
+    ) as urlopen:
+        assert await geocoder.geocode("Iran") is None
+        assert await geocoder.geocode("Iran") is None
+
+    assert urlopen.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_geocoder_ignores_blank_names():
+    """A blank name never reaches the network."""
+    geocoder = Geocoder()
+
+    with patch("src.enrichment.geocoder.urllib.request.urlopen") as urlopen:
+        assert await geocoder.geocode("   ") is None
+
+    urlopen.assert_not_called()
+
+
+# --- backfill ---------------------------------------------------------------
+
+
+def located(name, latitude, longitude, location_type="city", importance=0.0):
+    return CanonicalEntity(
+        id=uuid.uuid4(),
+        canonical_name=name,
+        entity_type="GPE",
+        latitude=latitude,
+        longitude=longitude,
+        location_type=location_type,
+        geo_importance=importance,
+    )
+
+
+def test_most_specific_prefers_the_finest_place():
+    """A story naming a country and one of its cities dots the city."""
+    country = located("United States", 39.8, -98.6, "country")
+    state = located("Alabama", 32.8, -86.8, "state")
+    city = located("Birmingham", 33.5, -86.8, "city")
+
+    assert most_specific([country, city]).canonical_name == "Birmingham"
+    assert most_specific([country, state]).canonical_name == "Alabama"
+    assert most_specific([state, city]).canonical_name == "Birmingham"
+
+
+def test_most_specific_prefers_the_match_the_geocoder_was_sure_about():
+    """Equal granularity is broken by match prominence, not by the alphabet.
+
+    The real case: "Man City" resolves to a village in Cote d'Ivoire and
+    "Manchester City" to Manchester. Both come back as "city", so only the
+    prominence score separates the football club from West Africa.
+    """
+    man_city = located("Man City", 7.4103, -7.5504, "city", importance=0.34)
+    manchester = located("Manchester City", 53.4795, -2.2451, "city", importance=0.74)
+
+    assert most_specific([man_city, manchester]).canonical_name == "Manchester City"
+    assert most_specific([manchester, man_city]).canonical_name == "Manchester City"
+
+
+def test_most_specific_is_deterministic():
+    """With nothing to separate them, the name decides, and it always does."""
+    first = located("Alabama", 32.8, -86.8, "state")
+    second = located("Minnesota", 46.3, -94.3, "state")
+
+    assert most_specific([first, second]).canonical_name == "Alabama"
+    assert most_specific([second, first]).canonical_name == "Alabama"
+
+
+def test_most_specific_ranks_unknown_labels_last():
+    """A granularity we do not know never wins against one we do."""
+    known = located("Tel Aviv", 32.08, 34.78, "city")
+    unknown = located("Somewhere", 0.0, 0.0, "wormhole")
+
+    assert most_specific([unknown, known]).canonical_name == "Tel Aviv"
+    assert all(UNKNOWN_SPECIFICITY > rank for rank in PLACE_SPECIFICITY.values())
+
+
+def test_story_event_copies_the_storys_own_numbers():
+    """The event carries the story's sourcing, not invented confidence."""
+    story = Story(
+        id=uuid.uuid4(),
+        day=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        tier1_unit_count=2,
+        tier2_unit_count=1,
+        tier3_unit_count=1,
+    )
+    entity = located("Tel Aviv", 32.0853, 34.7818, "city")
+
+    event = story_event(story, entity)
+
+    assert event.story_id == story.id
+    assert event.latitude == 32.0853
+    assert event.longitude == 34.7818
+    assert event.location_name == "Tel Aviv"
+    assert event.location_type == "city"
+    assert event.start_time == story.day
+    # Nothing classifies the event, so nothing claims to know its type.
+    assert event.event_type == Event.EventType.OTHER
+    assert event.source_count == 4
+    assert event.tier1_source_count == 2
+    assert event.confidence == 0.5
+    assert event.entities == {"GPE": ["Tel Aviv"]}
+    assert event.layer_id is None
+
+
+def test_story_event_keeps_coordinates_off_null_island():
+    """An entity on the equator or the prime meridian is still a real point."""
+    story = Story(id=uuid.uuid4(), day=datetime(2026, 10, 1, tzinfo=timezone.utc))
+
+    event = story_event(story, located("Ghana", 0.0, 0.0, "country"))
+
+    assert event.latitude == 0.0
+    assert event.longitude == 0.0
+    assert event.confidence == 0.0
+
+
+def test_group_by_story_collapses_a_storys_entities():
+    """One story with three located entities is one story, not three."""
+    story = Story(id=uuid.uuid4(), day=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    rows = [(story, located("A", 1.0, 1.0)), (story, located("B", 2.0, 2.0))]
+
+    grouped = group_by_story(rows)
+
+    assert list(grouped) == [story.id]
+    assert len(grouped[story.id][1]) == 2
 
 
 if __name__ == "__main__":

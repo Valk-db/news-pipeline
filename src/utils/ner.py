@@ -14,6 +14,13 @@ def get_nlp():
 
 ENTITY_LABELS = {"PERSON", "ORG", "GPE", "LOC", "EVENT", "PRODUCT"}
 
+# Entity types whose canonical entities carry coordinates. Only PERSON, ORG and
+# GPE ever reach a canonical entity at all: resolve_entities_to_canonical is
+# called with the primary labels only (src/verification/stories.py), so a LOC or
+# EVENT row cannot exist to be geocoded. GPE is the one of the three that names
+# a place, so it is the only type worth spending a geocoder request on.
+GEOCODABLE_ENTITY_TYPES = frozenset({"GPE"})
+
 
 @dataclass
 class CanonicalMention:
@@ -362,6 +369,23 @@ class EntityCanonicalizer:
                 )
 
         await self.session.flush()
+
+        # A brand new GPE is a place the pipeline has never seen, so this is the
+        # one moment geocoding costs a request instead of hitting the cache. The
+        # coordinates go on the entity, not the mention: where a place is does not
+        # depend on which article happened to name it first. A name the geocoder
+        # cannot resolve leaves the entity unlocated, which costs the story its
+        # point on the globe but nothing else: the backfill skips an unlocated
+        # entity rather than guessing.
+        if entity_type in GEOCODABLE_ENTITY_TYPES:
+            from src.enrichment.geocoder import get_geocoder
+
+            place = await get_geocoder().geocode(canonical_name)
+            if place is not None:
+                canonical_entity.latitude = place.latitude
+                canonical_entity.longitude = place.longitude
+                canonical_entity.location_type = place.location_type
+                canonical_entity.geo_importance = place.importance
 
         # Add the main entry to cache
         normalized = _normalize_text(canonical_name, entity_type)
