@@ -1,4 +1,4 @@
-"""The public read filter and ranking rules the map, globe and story pages share.
+"""The public read filter and ranking rules the map and story pages share.
 
 Every rule here answers one question a reader's query asks — which stories count
 as published, which tiers count as corroboration, how wide the window is, which

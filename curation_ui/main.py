@@ -9,11 +9,11 @@ importing main and each surface can be read on its own:
   story_api.py      the auth-gated per-story JSON APIs
   globe.py          public /api/globe/* JSON
   map_api.py        public /api/map/* JSON plus the freshness and story serializers
-  public_pages.py   public /stories/{id}, /proof/{id}, /globe, /map
+  public_pages.py   public /stories/{id}, /proof/{id}, /map
   health.py         /healthz and the authenticated /healthz/details
   security.py       require_auth, the failed-auth limiter, CSRF
-  discovery.py      the public read filter/ranking rules the map, globe and story pages share
-  events.py         the event query and GeoJSON Feature serializer shared by globe and replay
+  discovery.py      the public read filter/ranking rules the map and story pages share
+  events.py         the event query and GeoJSON Feature serializer shared by events and replay
   app_state.py      the Jinja environment, the error page, and the availability checks
 """
 
@@ -109,22 +109,22 @@ app.state.check_llm_available = check_llm_available
 # 'unsafe-inline' because a nonce cannot cover inline style attributes, and
 # Leaflet and the templates both position elements with style="".
 #
-# img-src is https: wide on purpose: story thumbnails and map/globe imagery come
-# from arbitrary outlet and tile domains, and narrowing it would drop real
-# article images. Everything else is pinned to the origins the pages actually
-# load from, and object/frame/form/base are locked down.
+# img-src is https: wide on purpose: story thumbnails and map imagery come from
+# arbitrary outlet and tile domains, and narrowing it would drop real article
+# images. Everything else is pinned to the origins the pages actually load
+# from, and object/frame/form/base are locked down.
 CSP_TEMPLATE = "; ".join([
     "default-src 'self'",
     "base-uri 'self'",
     "object-src 'none'",
     "frame-ancestors 'none'",
     "form-action 'self'",
-    "script-src 'self' 'nonce-{nonce}' https://unpkg.com https://cesium.com",
-    "style-src 'self' 'unsafe-inline' https://unpkg.com https://cesium.com https://fonts.googleapis.com",
+    "script-src 'self' 'nonce-{nonce}' https://unpkg.com",
+    "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data: https://fonts.gstatic.com",
     "connect-src 'self'",
-    "worker-src 'self' blob: https://cesium.com",
+    "worker-src 'self' blob:",
 ])
 
 

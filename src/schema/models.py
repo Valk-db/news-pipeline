@@ -205,7 +205,7 @@ class CanonicalEntity(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
-    # Geolocation fields for globe visualization
+    # Geolocation fields for the public map
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
     location_type = Column(String(50), nullable=True)
@@ -283,7 +283,7 @@ class EventGeometry(Base):
 
 
 class EventLayer(Base):
-    """Layer configuration for globe visualization."""
+    """Layer configuration for the public map."""
     __tablename__ = "event_layers"
     __table_args__ = (
         Index("ix_event_layers_name", "name"),
@@ -306,7 +306,7 @@ class EventLayer(Base):
 
 
 class Event(Base):
-    """Event on the globe - linked to stories and geography."""
+    """Event on the map - linked to stories and geography."""
     __tablename__ = "events"
     __table_args__ = (
         Index("ix_events_story_id", "story_id"),

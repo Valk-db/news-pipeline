@@ -26,7 +26,7 @@ def _event_conditions(
 ) -> list:
     """Build the WHERE clauses shared by the event GeoJSON endpoints.
 
-    An unparseable bbox is ignored (matches the historical globe behavior);
+    An unparseable bbox is ignored (matches the historical behavior);
     start/end arrive already parsed by _parse_iso_timestamp.
     min_tier1_sources applies the tier 1 corroboration threshold.
     """

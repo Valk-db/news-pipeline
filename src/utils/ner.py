@@ -375,7 +375,7 @@ class EntityCanonicalizer:
         # coordinates go on the entity, not the mention: where a place is does not
         # depend on which article happened to name it first. A name the geocoder
         # cannot resolve leaves the entity unlocated, which costs the story its
-        # point on the globe but nothing else: the backfill skips an unlocated
+        # map point but nothing else: the backfill skips an unlocated
         # entity rather than guessing.
         if entity_type in GEOCODABLE_ENTITY_TYPES:
             from src.enrichment.geocoder import get_geocoder

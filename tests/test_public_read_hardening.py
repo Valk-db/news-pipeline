@@ -179,7 +179,6 @@ def _add_units(db_session, story, count, day):
 # surfaces answer 503 when the database is unconfigured (render_error_page's
 # contract, unchanged); the JSON surfaces answer 200 with {"error": ...}.
 ANONYMOUS_SURFACES = [
-    "/globe",
     "/map",
     "/api/globe/events",
     "/api/globe/stats",

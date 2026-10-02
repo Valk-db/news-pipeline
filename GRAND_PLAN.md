@@ -37,7 +37,7 @@ GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → C
 1. Broader ingestion (more sources/sensors)
 2. Narrative/story intelligence (claim matrix, arcs)
 3. Verification & certification layer (claims, provenance, evidence)
-4. Geography/globe expansion
+4. Geography/map expansion
 
 **Budget stance:** strict $0/month for now. Every addition below has to survive on
 a free tier. The data model and infra patterns are chosen so that switching a
@@ -181,7 +181,7 @@ already in the schema.
 
 ---
 
-## 4. Geography / globe expansion (Phase 4)
+## 4. Geography / map expansion (Phase 4)
 
 You already have the bones: `EventGeometry`, `EventLayer`, `Event`, canonical
 entities with lat/lon. Mostly UI + data-feeding work once Phases 1–3 exist.
@@ -192,7 +192,7 @@ entities with lat/lon. Mostly UI + data-feeding work once Phases 1–3 exist.
 - Layer types beyond points: conflict-zone polygons, disputed-territory
   overlays, disaster radii.
 - Sub-national resolution — region/admin-boundary geocoding instead of just
-  country/city, which makes conflict tracking actually useful on the globe.
+  country/city, which makes conflict tracking actually useful on the map.
 
 ---
 

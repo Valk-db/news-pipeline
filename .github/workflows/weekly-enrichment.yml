@@ -223,7 +223,7 @@ jobs:
         run: uv sync --frozen --extra pipeline --extra enrichment
 
       
-      - name: Run globe events backfill
+      - name: Run map events backfill
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PYTHONUNBUFFERED: "1"

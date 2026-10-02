@@ -8,7 +8,7 @@
 > Finding #2 was never in the tree — the `slowapi` code and dependency claims are deleted and
 > replaced with what actually protects the auth route now; Finding #1's line reference is
 > refreshed and its stale test tallies are dropped rather than restated; and the non-blocking
-> observations that the 2026-10-02 security batch (public status filter, globe limit clamp, CSP,
+> observations that the 2026-10-02 security batch (public status filter, event limit clamp, CSP,
 > failed-auth limiter, CSRF, trimmed `/healthz`) has since closed are marked as closed.
 
 ---
@@ -158,6 +158,6 @@ both are dead weight awaiting removal (tracked in `AGENT_TASKS_v38.md` §3).
 - [x] CSP header middleware
 - [x] CSRF protection on the state-changing routes
 - [x] Trim `/healthz` to a liveness signal
-- [x] Serve only approved stories on the public map/globe routes
+- [x] Serve only approved stories on the public map routes
 - [ ] Remove the dead `slowapi` dependency (`pyproject.toml`, `requirements.txt`, `uv.lock`)
 - [ ] Enable Vercel WAF managed rules (operational)

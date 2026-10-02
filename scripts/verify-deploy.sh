@@ -27,7 +27,7 @@ echo ""
 check "Homepage (auth-gated)" "$URL/" "401"
 check "Map page" "$URL/map" "200"
 check "Health" "$URL/healthz" "200"
-check "Globe events API" "$URL/api/globe/events?limit=1" "200"
+check "Map events API" "$URL/api/globe/events?limit=1" "200"
 check "Map stories API" "$URL/api/map/stories" "200"
 
 echo ""

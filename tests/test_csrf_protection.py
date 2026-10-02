@@ -260,7 +260,7 @@ class TestTokenProperties:
     def test_public_pages_carry_no_token(self, app_with_db):
         """An anonymous page must not hand out a token."""
         client = TestClient(app_with_db)
-        for path in ("/map", "/globe", "/stories/" + str(uuid.uuid4())):
+        for path in ("/map", "/stories/" + str(uuid.uuid4())):
             response = client.get(path)
             assert "csrf_token" not in response.text
             assert "X-CSRF-Token" not in response.text

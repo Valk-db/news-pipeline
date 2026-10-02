@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-"""Put located canonical entities on the globe, one point per story.
+"""Put located canonical entities on the map, one point per story.
 
 A story's ``primary_entities`` are the canonical entity ids that defined it, so
 the stories that name a located place are exactly the ones whose
 ``primary_entities`` contain that entity. For every such story with no Event
 yet, this writes one Event at the most specific located entity it names, and
-copies the story's own tier counts onto the event so the globe's corroboration
+copies the story's own tier counts onto the event so the events' corroboration
 filter means the same thing for events as it does for stories.
 
 What the point means: the geocoded location of a place the story NAMES. It is
@@ -187,7 +187,7 @@ async def backfill_events(dry_run: bool = True) -> int:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Create globe events from located canonical entities."
+        description="Create map events from located canonical entities."
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Report what would be created and stop."

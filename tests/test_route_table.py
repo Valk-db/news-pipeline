@@ -10,8 +10,9 @@ compared, not a sample of it.
 
 EXPECTED_ROUTE_TABLE below was dumped from the unsplit app at commit 2946cec by
 running the extraction in this file over curation_ui.main there and printing the
-result. It is a literal, not a recomputation, so the assertion is independent of
-the code it checks.
+result, minus /globe: the globe page was removed on Tyler's directive
+(2026-10-02) and test_globe_removed_is_not_served pins that. It is a literal,
+not a recomputation, so the assertion is independent of the code it checks.
 """
 
 import curation_ui.main as main_module
@@ -30,7 +31,6 @@ EXPECTED_ROUTE_TABLE = [
     ("/api/stories/{story_id}/viewpoints", ("GET",), True, False),
     ("/docs", ("GET",), False, False),
     ("/docs/oauth2-redirect", ("GET",), False, False),
-    ("/globe", ("GET",), False, False),
     ("/healthz", ("GET",), False, False),
     ("/healthz/details", ("GET",), True, False),
     ("/map", ("GET",), False, False),
@@ -131,7 +131,6 @@ class TestRouteTableMatchesPreSplitApp:
         assert by_path["/api/map/replay"][2] is False
         assert by_path["/stories/{story_id}"][2] is False
         assert by_path["/proof/{article_id}"][2] is False
-        assert by_path["/globe"][2] is False
         assert by_path["/map"][2] is False
         assert by_path["/healthz"][2] is False
         assert by_path["/healthz/details"][2] is True
@@ -149,3 +148,51 @@ class TestRouteTableMatchesPreSplitApp:
     def test_app_is_the_one_main_exports(self):
         """api/index.py and the test suite both import curation_ui.main:app."""
         assert main_module.app is app
+
+
+class TestGlobeRemoved:
+    """The globe page is gone; its data APIs stay.
+
+    Tyler removed the page on 2026-10-02. /api/globe/events is what map.js plots,
+    so the JSON survives under its existing paths while the HTML route is a 404.
+    """
+
+    def test_globe_page_is_not_served(self):
+        """No route claims /globe, so an anonymous GET is a 404, not a 200."""
+        from fastapi.testclient import TestClient
+
+        assert TestClient(app).get("/globe").status_code == 404
+
+    def test_globe_json_apis_are_still_served(self):
+        """map.js plots /api/globe/events, so removing the page keeps the JSON."""
+        paths = {row[0] for row in route_table(app)}
+        assert "/api/globe/events" in paths
+        assert "/api/globe/stats" in paths
+        assert "/api/globe/layers" in paths
+
+    def test_no_surviving_route_renders_the_globe_template(self):
+        """globe.html is deleted; a route reaching for it would 500 at request time."""
+        assert "/globe" not in {row[0] for row in route_table(app)}
+
+    def test_no_template_or_static_asset_still_loads_globe_scripts(self):
+        """The globe assets are deleted, so no page may reference them."""
+        import os
+        import re
+
+        import curation_ui.app_state as app_state_module
+
+        base = os.path.dirname(os.path.abspath(app_state_module.__file__))
+        pattern = re.compile(r"/static/globe/|[\"']globe\.html[\"']|[\"']/globe[\"']")
+        offenders = []
+        for subdir in ("templates", "static"):
+            root = os.path.join(base, subdir)
+            for dirpath, _dirnames, filenames in os.walk(root):
+                for name in filenames:
+                    if not name.endswith((".html", ".js", ".css")):
+                        continue
+                    full = os.path.join(dirpath, name)
+                    with open(full, encoding="utf-8") as handle:
+                        text = handle.read()
+                    if pattern.search(text):
+                        offenders.append(os.path.relpath(full, base))
+        assert offenders == []

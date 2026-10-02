@@ -1,6 +1,6 @@
 """Tests for the public map: auth boundary, default view, freshness stamp.
 
-The map, the globe and their read only APIs are anonymous. Curation, including
+The map and the read only APIs behind it are anonymous. Curation, including
 the queue and anything that reveals it, is not.
 """
 
@@ -121,7 +121,6 @@ def _make_story(
 # be added here on purpose rather than slipping in unnoticed.
 PUBLIC_ROUTES = [
     "/map",
-    "/globe",
     "/api/globe/events",
     "/api/globe/stats",
     "/api/globe/layers",
@@ -155,7 +154,7 @@ class TestPublicRouteMatrix:
 
     @pytest.mark.asyncio
     async def test_public_html_routes_render(self, app_with_db, db_session):
-        """/map and /globe render their templates for an anonymous reader."""
+        """/map renders its template for an anonymous reader."""
         now = datetime.now(timezone.utc)
         _make_story(db_session, day=now - timedelta(hours=2), events=1)
         await db_session.commit()
@@ -168,10 +167,6 @@ class TestPublicRouteMatrix:
         # Freshness stamp and the top stories list are server rendered.
         assert "map-stamp" in map_response.text
         assert "Top stories" in map_response.text
-
-        globe_response = client.get("/globe")
-        assert globe_response.status_code == 200
-        assert "text/html" in globe_response.headers.get("content-type", "")
 
     @pytest.mark.asyncio
     async def test_public_story_page_renders_for_anonymous_reader(self, app_with_db, db_session):
@@ -560,7 +555,7 @@ class TestContentSecurityPolicy:
     def test_header_is_present_on_pages_assets_and_apis(self, app_with_db):
         """CSP rides on HTML, static assets, JSON and the health probe alike."""
         client = TestClient(app_with_db)
-        for path in ("/map", "/globe", "/healthz", "/static/style.css",
+        for path in ("/map", "/healthz", "/static/style.css",
                      "/static/errors.js", "/api/map/stories"):
             response = client.get(path)
             csp = response.headers.get("content-security-policy")

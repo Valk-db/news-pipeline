@@ -71,8 +71,6 @@
 
     /**
      * Event type vocabulary mirrored from src/schema/models.py EventType.
-     * Hexes are unchanged from the globe page on purpose, so one event reads
-     * the same on both surfaces.
      */
     var EVENT_TYPES = [
         { value: 'conflict', label: 'Conflict', color: '#ff4757' },

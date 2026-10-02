@@ -61,7 +61,7 @@ def _units_without_story(cutoff: datetime):
 
 
 def _stories_without_event(cutoff: datetime):
-    """Stories that were never located, so they have no event on the globe."""
+    """Stories that were never located, so they have no event."""
     return (
         select(func.count(Story.id))
         .outerjoin(Event, Event.story_id == Story.id)
