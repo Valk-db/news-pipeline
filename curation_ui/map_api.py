@@ -15,7 +15,7 @@ from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from curation_ui.app_state import check_database
+from curation_ui.app_state import check_database_public
 from curation_ui.discovery import (
     MAP_CORROBORATION_MIN_OWNERS,
     MAP_CORROBORATION_MIN_TIER1,
@@ -193,7 +193,7 @@ async def _collect_map_freshness(session: AsyncSession, now: datetime) -> dict:
 @router.get("/api/map/freshness")
 async def get_map_freshness(request: Request):
     """Freshness stamp for the public map. Read only, degrades to an empty stamp."""
-    db_ok, db_msg = check_database(request)
+    db_ok, db_msg = check_database_public(request)
     if not db_ok:
         return {"error": db_msg}
 
@@ -379,6 +379,25 @@ async def _collect_top_stories(
     return deduped
 
 
+def _effective_window_hours(
+    hours: int,
+    start: datetime | None,
+    end: datetime | None,
+) -> int | None:
+    """The hours the query really used, or None when the window is unbounded.
+
+    Mirrors _collect_top_stories' own choice: an explicit start/end pair wins
+    over hours, and hours of 0 (or absent) means unbounded.
+    """
+    if start is not None or end is not None:
+        if start is None or end is None:
+            return None
+        return int(max(0.0, (end - start).total_seconds()) // 3600)
+    if not hours or hours <= 0:
+        return None
+    return min(int(hours), MAP_MAX_WINDOW_HOURS)
+
+
 @router.get("/api/map/stories")
 async def get_map_stories(
     request: Request,
@@ -398,7 +417,7 @@ async def get_map_stories(
     sort (top|newest|oldest), q (ranked topic search over headlines), start/end
     (ISO 8601 window on event time, wins over hours).
     """
-    db_ok, db_msg = check_database(request)
+    db_ok, db_msg = check_database_public(request)
     if not db_ok:
         return {"error": db_msg}
 
@@ -432,6 +451,10 @@ async def get_map_stories(
         "stories": stories,
         "count": len(stories),
         "window_hours": hours,
+        # hours is echoed above as asked for; this is what the query actually
+        # used. _resolve_window clamps to MAP_MAX_WINDOW_HOURS, so an
+        # anonymous caller asking for hours=999999 was served a 1 year window.
+        "effective_window_hours": _effective_window_hours(hours, start_dt, end_dt),
         "min_owners": min_owners,
         "tiers": tiers,
         "sort": sort,
@@ -467,7 +490,7 @@ async def get_map_replay(
     window metadata as foreign members. Result count is capped at
     MAP_EVENTS_MAX_LIMIT; see the comment above that constant.
     """
-    db_ok, db_msg = check_database(request)
+    db_ok, db_msg = check_database_public(request)
     if not db_ok:
         return {"error": db_msg}
 

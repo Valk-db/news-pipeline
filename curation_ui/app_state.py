@@ -33,6 +33,29 @@ def check_database(request: Request) -> tuple[bool, str]:
     return request.app.state.check_database_available()
 
 
+# What an anonymous caller is told when the database is not configured. The
+# diagnostic message names the environment variable to set, which tells a
+# stranger which deployment knob is missing and helps them not at all; the
+# curator-facing routes keep the diagnostic because the curator can act on it.
+DATABASE_UNAVAILABLE_PUBLIC = (
+    "The story database is not available right now. Please try again shortly."
+)
+
+
+def check_database_public(request: Request) -> tuple[bool, str]:
+    """(available, error_message) for an anonymous surface.
+
+    Same check, generic message: every route that renders this for a caller with
+    no credentials (/globe, /map, /stories/{id}, /proof/{id} and the JSON behind
+    them) goes through here, and a misconfigured deployment should not publish
+    its own configuration to the public.
+    """
+    available, _ = check_database(request)
+    if available:
+        return True, ""
+    return False, DATABASE_UNAVAILABLE_PUBLIC
+
+
 def check_llm(request: Request) -> tuple[bool, str]:
     """(available, error_message) for the LLM, as the app factory sees it."""
     return request.app.state.check_llm_available()

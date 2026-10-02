@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.orm import selectinload
 
-from curation_ui.app_state import check_database
+from curation_ui.app_state import check_database_public
 from curation_ui.discovery import (
     MAP_DEFAULT_WINDOW_HOURS,
     MAP_EVENTS_MAX_LIMIT,
@@ -27,6 +27,12 @@ from src.schema.models import Event, EventLayer
 from src.shared.database import get_session
 
 router = APIRouter()
+
+# /api/globe/layers is anonymous, and event_layers is a table nothing in the
+# request path can bound: the cap is defense in depth, the way MAP_EVENTS_MAX_LIMIT
+# is for the event endpoints. The effective cap is reported back so a truncated
+# layer list is visible instead of silently short.
+MAP_LAYERS_MAX_LIMIT = 200
 
 
 @router.get("/api/globe/events")
@@ -50,7 +56,7 @@ async def get_globe_events(
     "1,2") keeps only events whose story has a unit in an included tier. limit is
     clamped to MAP_EVENTS_MAX_LIMIT and the effective cap is reported back.
     """
-    db_ok, db_msg = check_database(request)
+    db_ok, db_msg = check_database_public(request)
     if not db_ok:
         return {"error": db_msg}
 
@@ -92,7 +98,7 @@ async def get_globe_stats(
     request: Request,
 ):
     """Get globe statistics."""
-    db_ok, db_msg = check_database(request)
+    db_ok, db_msg = check_database_public(request)
     if not db_ok:
         return {"error": db_msg}
 
@@ -139,12 +145,12 @@ async def get_globe_layers(
     request: Request,
 ):
     """Get all event layers for globe visualization."""
-    db_ok, db_msg = check_database(request)
+    db_ok, db_msg = check_database_public(request)
     if not db_ok:
         return {"error": db_msg}
 
     async with get_session() as session:
-        stmt = select(EventLayer).order_by(EventLayer.name)
+        stmt = select(EventLayer).order_by(EventLayer.name).limit(MAP_LAYERS_MAX_LIMIT)
         result = await session.execute(stmt)
         layers = result.scalars().all()
 
@@ -163,5 +169,8 @@ async def get_globe_layers(
                     "color": layer.color,
                 }
                 for layer in layers
-            ]
+            ],
+            "count": len(layers),
+            "limit": MAP_LAYERS_MAX_LIMIT,
+            "max_limit": MAP_LAYERS_MAX_LIMIT,
         }

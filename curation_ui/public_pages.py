@@ -12,9 +12,9 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 
-from curation_ui.app_state import check_database, render_error_page, templates
+from curation_ui.app_state import check_database_public, render_error_page, templates
 from curation_ui.discovery import (
     MAP_CORROBORATION_MIN_OWNERS,
     MAP_CORROBORATION_MIN_TIER1,
@@ -30,6 +30,17 @@ from src.shared.database import get_session
 
 router = APIRouter()
 
+# Per-story page size for an anonymous reader.
+#
+# The story page is keyed on a story id and needs no request parameter to reach
+# a big story: one event covered by two hundred outlets has two hundred reporting
+# units, and the page fetched every one of them plus every event. Both lists are
+# capped here, one row over the cap is fetched to know whether the list was
+# complete, and the page says so out loud rather than presenting a truncated
+# evidence list as the whole one.
+PUBLIC_STORY_UNIT_CAP = 200
+PUBLIC_STORY_EVENT_CAP = 200
+
 
 @router.get("/stories/{story_id}", response_class=HTMLResponse)
 async def public_story_page(story_id: uuid.UUID, request: Request):
@@ -40,7 +51,7 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
     stories a curator has approved are served; anything else in the queue is a
     404 to an anonymous caller (see PUBLIC_STORY_STATUSES).
     """
-    db_ok, db_msg = check_database(request)
+    db_ok, db_msg = check_database_public(request)
     if not db_ok:
         return render_error_page(request, db_msg)
 
@@ -58,9 +69,22 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
             select(ReportingUnit)
             .join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
             .where(StoryUnitLink.story_id == story_id)
+            .limit(PUBLIC_STORY_UNIT_CAP + 1)
         )
         units_result = await session.execute(units_stmt)
         units = units_result.scalars().all()
+        units_truncated = len(units) > PUBLIC_STORY_UNIT_CAP
+        units = units[:PUBLIC_STORY_UNIT_CAP]
+
+        # The true unit total, counted rather than inferred from the capped page,
+        # so the header can state the real size of the story.
+        unit_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(StoryUnitLink)
+                .where(StoryUnitLink.story_id == story_id)
+            )
+        ).scalar() or 0
 
         articles = []
         for unit in units:
@@ -95,9 +119,12 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
             select(Event)
             .where(Event.story_id == story_id)
             .order_by(desc(Event.start_time))
+            .limit(PUBLIC_STORY_EVENT_CAP + 1)
         )
         events_result = await session.execute(events_stmt)
-        events = events_result.scalars().all()
+        events = list(events_result.scalars().all())
+        events_truncated = len(events) > PUBLIC_STORY_EVENT_CAP
+        events = events[:PUBLIC_STORY_EVENT_CAP]
 
         latest_at = max(
             (event.start_time for event in events if event.start_time is not None),
@@ -113,7 +140,8 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
         "articles": articles,
         "outlets": int(story.distinct_owners or 0),
         "tier1_units": int(story.tier1_unit_count or 0),
-        "units": len(units),
+        "units": int(unit_count),
+        "units_truncated": units_truncated,
         "day": story.day,
         "latest_at": latest_at,
         "corroborated": (
@@ -121,6 +149,7 @@ async def public_story_page(story_id: uuid.UUID, request: Request):
             and int(story.distinct_owners or 0) >= MAP_CORROBORATION_MIN_OWNERS
         ),
         "verification": _verification_badge(story),
+        "events_truncated": events_truncated,
         "events": [
             {
                 "location_name": event.location_name,
@@ -152,7 +181,7 @@ async def public_proof_page(article_id: uuid.UUID, request: Request):
     itself, with every intermediate digest so a reader can recompute the root
     by hand.
     """
-    db_ok, db_msg = check_database(request)
+    db_ok, db_msg = check_database_public(request)
     if not db_ok:
         return render_error_page(request, db_msg)
 
@@ -172,7 +201,7 @@ async def public_proof_page(article_id: uuid.UUID, request: Request):
 @router.get("/globe", response_class=HTMLResponse)
 async def globe_page(request: Request):
     """Globe visualization page. Public and read only."""
-    db_ok, db_msg = check_database(request)
+    db_ok, db_msg = check_database_public(request)
     if not db_ok:
         return render_error_page(request, db_msg)
 
@@ -198,7 +227,7 @@ async def map_page(
     date window) are server-rendered in their initial state and stay in sync
     with the query string, so first paint already reflects the reader's filters.
     """
-    db_ok, db_msg = check_database(request)
+    db_ok, db_msg = check_database_public(request)
     if not db_ok:
         return render_error_page(request, db_msg)
 

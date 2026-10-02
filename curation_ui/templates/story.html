@@ -35,6 +35,7 @@
                 {{ units }} reporting unit{{ '' if units == 1 else 's' }}
                 {%- if latest_at %} · latest {{ latest_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
             </p>
+            {% if units_truncated or events_truncated %}<p class="story-public-meta">Truncated for display: {{ articles | length }} of {{ units }} source{{ '' if units == 1 else 's' }}{% if events_truncated %}, and the {{ events | length }} most recent of this story's events{% endif %}.</p>{% endif %}
 
             {% if events %}
             <section class="story-public-section" aria-label="Where this happened">
