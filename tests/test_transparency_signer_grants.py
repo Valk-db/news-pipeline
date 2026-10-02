@@ -294,6 +294,7 @@ async def scratch():
         pytest.skip(f"cannot reach Postgres: {exc}")
 
     created_role = False
+    granted_membership = False
     try:
         me = await conn.fetchval("SELECT current_user")
         if not await conn.fetchval("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)", ROLE):
@@ -302,10 +303,26 @@ async def scratch():
                 created_role = True
             except Exception as exc:  # noqa: BLE001
                 pytest.skip(f"cannot create the {ROLE} role: {exc}")
-        try:
-            await conn.execute(f"GRANT {ROLE} TO {me}")
-        except Exception as exc:  # noqa: BLE001
-            pytest.skip(f"cannot become {ROLE}: {exc}")
+        # Only grant membership if SET ROLE would not already work. Two traps
+        # here, both paid for on dev:
+        #   - pg_auth_members can hold a row for (me, role) that does not permit
+        #     SET ROLE: PG 16+ rows carry inherit_option/set_option, and the
+        #     durable row dev inherited from a pooled in-transaction grant has
+        #     set_option = false. `EXISTS (pg_auth_members)` is therefore the
+        #     wrong test; pg_has_role(..., 'USAGE') is the right one.
+        #   - re-granting a membership that already has a row ADDS a second row
+        #     (a different grantor), and that table is cluster-wide. A test that
+        #     tidies up after itself has to notice it never dirtied anything;
+        #     REVOKE removes only the caller's own row, so the fixture revokes
+        #     exactly what it granted and nothing else.
+        if not await conn.fetchval(
+            "SELECT pg_has_role($1, $2, 'USAGE')", me, ROLE
+        ):
+            try:
+                await conn.execute(f"GRANT {ROLE} TO {me}")
+                granted_membership = True
+            except Exception as exc:  # noqa: BLE001
+                pytest.skip(f"cannot become {ROLE}: {exc}")
 
         await conn.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
         await conn.execute(f"CREATE SCHEMA {SCHEMA}")
@@ -333,6 +350,9 @@ async def scratch():
             # owner, or Postgres refuses with "must be owner of schema".
             await conn.execute("RESET ROLE")
             await conn.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
+            if granted_membership:
+                me = await conn.fetchval("SELECT current_user")
+                await conn.execute(f"REVOKE {ROLE} FROM {me}")
         finally:
             if created_role:
                 await conn.execute(f"DROP ROLE IF EXISTS {ROLE}")

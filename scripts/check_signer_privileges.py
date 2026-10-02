@@ -275,11 +275,20 @@ async def main() -> int:
     async with get_session_for_url(database_url) as session:
         me = (await session.execute(text("SELECT current_user"))).scalar_one()
         print(f"connected as {me}; checking role {ROLE}\n")
-        try:
-            await session.execute(text(f"GRANT {ROLE} TO CURRENT_USER"))
-        except Exception as exc:  # noqa: BLE001
-            print(f"cannot grant myself membership: {type(exc).__name__}: {exc}")
-            return 1
+        # SET ROLE needs direct membership with the SET option. pg_auth_members
+        # can hold a row for (me, role) that does not permit it -- dev's
+        # inherited row has set_option = false -- so the test is pg_has_role,
+        # not a row lookup, and the grant is skipped when it is already possible.
+        usable = (await session.execute(
+            text("SELECT pg_has_role(current_user, :role, 'USAGE')"), {"role": ROLE}
+        )).scalar_one()
+        if not usable:
+            try:
+                await session.execute(text(f"GRANT {ROLE} TO CURRENT_USER"))
+            except Exception as exc:  # noqa: BLE001
+                print(f"cannot grant myself membership: {type(exc).__name__}: {exc}")
+                return 1
+            print("granted myself membership for this run (rolled back below)")
         await catalog(session)
 
         # From here on the session IS the role. The catalog has to be read as an
