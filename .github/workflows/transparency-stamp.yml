@@ -109,7 +109,7 @@ jobs:
         run: |
           uv run python -m src.ingestion.run --sources rss_evidence
 
-      - name: Report the log (if: always())
+      - name: "Report the log state"
         # Reporting, not gating: a day with no new articles is a legitimate
         # outcome and must not red the build. The signer still fails closed on
         # an empty log, so a genuinely broken stamp path shows up there.

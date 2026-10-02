@@ -156,3 +156,81 @@ def test_every_scheduled_workflow_declares_a_bounded_timeout():
         if not SCHEDULE_RE.search(_workflow_text(path)):
             continue
         assert "timeout-minutes:" in _workflow_text(path), f"{path.name} has no timeout-minutes"
+
+
+# --- workflow files must be parseable YAML ---------------------------------
+#
+# These guards read the workflow as text, which means nothing here would notice a
+# file GitHub refuses to load. It happened: `- name: Report the log (if: always())`
+# is an unquoted scalar containing ": ", so the whole workflow was invalid YAML and
+# the fix it carries would never have run. All four of the tests above would still
+# have passed on that file. So lint the one YAML mistake that is invisible to
+# regex: a mapping value that itself contains an unquoted colon-space.
+#
+# No YAML parser: pyyaml reaches the lock file only as a transitive dependency of
+# the enrichment extra (sentence-transformers -> transformers), so it is absent
+# from the CI test environment (uv sync --extra dev --extra pipeline) and an
+# importorskip guard would silently never run.
+
+BLOCK_SCALAR_RE = re.compile(r":\s*[|>][+-]?\d*\s*(?:#.*)?$")
+MAPPING_LINE_RE = re.compile(r"^\s*(?:-\s+)?[^\s:#][^:]*?:\s+(\S.*?)\s*$")
+
+
+def _ambiguous_yaml_values(text: str) -> list[tuple[int, str]]:
+    """Lines whose unquoted mapping value contains a colon-space.
+
+    Block scalar bodies are skipped: their contents are opaque text, not YAML
+    keys, and `run: |` scripts legitimately contain colons.
+    """
+    problems: list[tuple[int, str]] = []
+    block_indent: int | None = None
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if block_indent is not None:
+            if indent > block_indent:
+                continue
+            block_indent = None
+        if BLOCK_SCALAR_RE.search(line):
+            block_indent = indent
+            continue
+        match = MAPPING_LINE_RE.match(line)
+        if not match:
+            continue
+        value = match.group(1)
+        if value[0] in "'\"|>":
+            continue
+        if ": " in value or value.endswith(":"):
+            problems.append((number, stripped))
+    return problems
+
+
+def test_the_lint_catches_the_colon_bug_it_exists_for():
+    broken = "      - name: Report the log (if: always())\n        if: always()\n"
+    assert _ambiguous_yaml_values(broken) == [(1, "- name: Report the log (if: always())")]
+
+
+def test_the_lint_ignores_quoted_values_and_block_bodies():
+    ok = (
+        "- name: 'Report (if: always())'\n"
+        '      - name: "Report the log (if: always())"\n'
+        "        run: |\n"
+        "          echo 'a: b'\n"
+        "          python -c 'print(1)'\n"
+        "        uses: actions/checkout@v4\n"
+    )
+    assert _ambiguous_yaml_values(ok) == []
+
+
+def test_every_workflow_file_is_loadable_yaml():
+    """The guards above read text, so this is what keeps them reading a real file."""
+    for path in _workflow_files():
+        problems = _ambiguous_yaml_values(_workflow_text(path))
+        assert not problems, (
+            f"{path.name} has an unquoted mapping value containing a colon "
+            f"(line {problems[0][0]}: {problems[0][1]!r}); GitHub will refuse to "
+            f"load the workflow and every other guard here will still pass"
+        )
+
