@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 from src.verification.units import get_owner_group, build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_tier1_gate, evaluate_tier1_gate
-from src.shared.database import init_db, get_session
+from src.shared.database import get_session
 from src.schema.models import (
     RawArticle, ReportingUnit, Story, StoryUnitLink, SourceTier
 )
@@ -131,8 +131,6 @@ async def db_session():
         if os.environ.get("CI") == "true":
             pytest.fail(f"Refusing to run integration tests against non-localhost DB (host: {host_info})")
         pytest.skip(f"Refusing to run integration tests against non-localhost DB (host: {host_info})")
-
-    await init_db()
 
     async with get_session() as session:
         # TRUNCATE CASCADE handles the circular FK between raw_articles and reporting_units.

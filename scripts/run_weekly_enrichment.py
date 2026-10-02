@@ -12,12 +12,11 @@ import asyncio
 import json
 import os
 
-from src.shared.database import init_db, get_session_maker
+from src.shared.database import get_session_maker
 from src.enrichment.pipeline import enrich_recent_stories
 
 
 async def main() -> None:
-    await init_db()
     session_factory = get_session_maker()
     results = await enrich_recent_stories(session_factory, hours_back=168, max_stories=100)
     print(f"Enriched {len(results)} stories")

@@ -24,7 +24,7 @@ This guide walks through deploying the FastAPI curation UI to Vercel with a Supa
    cd news-pipeline
    cp .env.example .env
    # Edit .env with your Supabase connection string
-   uv run scripts/init_db.py
+   uv run scripts/migrate.py
    ```
 
 ## 2. Configure Environment Variables in Vercel

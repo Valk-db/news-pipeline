@@ -11,12 +11,11 @@ import asyncio
 import json
 import os
 
-from src.shared.database import init_db, get_session_maker
+from src.shared.database import get_session_maker
 from src.verification.reliability import compute_source_topic_reliability
 
 
 async def main() -> None:
-    await init_db()
     session_factory = get_session_maker()
     async with session_factory() as session:
         results = await compute_source_topic_reliability(session, lookback_days=90)

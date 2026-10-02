@@ -27,7 +27,7 @@ from src.ingestion.adapters.rss_evidence_adapter import RssEvidenceAdapter
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_dynamic_gate
-from src.shared.database import get_session, init_db
+from src.shared.database import get_session
 from src.schema.models import RawArticle, StatusLog
 from src.shared.config import get_settings
 from src.utils.ingest_stats import STATS
@@ -533,9 +533,6 @@ async def main(argv: list[str] | None = None):
     dry_run = args.dry_run
 
     apply_env(args.env)
-
-    # Initialize DB
-    await init_db()
 
     try:
         results = await run_ingestion(

@@ -7,7 +7,7 @@ Usage:
 
 import asyncio
 import uuid
-from src.shared.database import init_db, get_session_maker
+from src.shared.database import get_session_maker
 from src.schema.models import TopicGroup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,7 +68,6 @@ async def seed_topic_groups(session: AsyncSession) -> int:
 
 
 async def main() -> None:
-    await init_db()
     session_factory = get_session_maker()
     async with session_factory() as session:
         created = await seed_topic_groups(session)

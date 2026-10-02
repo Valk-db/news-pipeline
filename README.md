@@ -68,8 +68,8 @@ uv sync --extra pipeline
 cp .env.example .env
 # Edit .env with your keys
 
-# Initialize database
-uv run python -m scripts.init_db
+# Create or update the schema from supabase/migrations/
+uv run python -m scripts.migrate
 
 # Test ingestion (dry run)
 uv run python -m src.ingestion.run --dry-run
@@ -167,12 +167,12 @@ src/
   shared/                   # Config, DB, LLM
   utils/                    # MinHash, NER, trafilatura
 curation_ui/                # FastAPI + HTMX
-scripts/                    # Init, seed, verify, backfill_globe_events
+scripts/                    # Migrate, check, seed, verify, backfill_globe_events
 ```
 
 ## Database Schema Changes
 
-Every schema change — including **new tables**, new columns, column type changes, and enum label additions — needs an idempotent SQL file in `supabase/migrations/` applied to Supabase **BEFORE** deploying. `init_db()` is a CI/dev convenience that creates missing tables on-the-fly; it is **not** a deployment mechanism (it never runs against the tables the deployed curation UI or the daily-ingest job depend on before the weekly-enrichment cron happens to hit them first). Run `uv run python scripts/check_schema.py` to detect drift; run `uv run python scripts/enable_rls.py` after new tables are created (RLS is enabled directly by migrations now, but the script is a harmless no-op sanity check).
+Every schema change — **new tables**, new columns, column type changes, enum type names and labels — is an idempotent SQL file in `supabase/migrations/`, and `supabase/migrations/` is the only thing that changes the schema. `Base.metadata.create_all` is gone: it used to run from `init_db()` on every ingest and weekly job, which is how dev ended up with SQLAlchemy's enum type names while the migration files declared different ones, and why five tables the models expect had never been created. Apply with `uv run python -m scripts.migrate` (or paste the files into the Supabase SQL editor, which is the production path). Run `uv run python scripts/check_schema.py` to detect drift, and `uv run python scripts/enable_rls.py` to check that every table has RLS enabled (migrations enable it directly; the script is a no-op sanity check).
 
 ## Extending
 

@@ -388,7 +388,6 @@ class TestRunIngestionIntegration:
         with patch("src.ingestion.rss.ingest_rss_feeds") as mock_rss, \
              patch("src.ingestion.gdelt.ingest_gdelt") as mock_gdelt, \
              patch("src.ingestion.reddit.ingest_reddit") as mock_reddit, \
-             patch("src.ingestion.run.init_db"), \
              patch("src.ingestion.run.get_session") as mock_session, \
              patch("src.ingestion.run.log_status"):
 
@@ -420,8 +419,7 @@ class TestRunIngestionIntegration:
         """main() exits non-zero when tier1 critical domain is down (not dry run)."""
         from src.ingestion.run import main
 
-        with patch("src.ingestion.run.init_db"), \
-             patch("src.ingestion.run.run_ingestion") as mock_run, \
+        with patch("src.ingestion.run.run_ingestion") as mock_run, \
              patch("sys.exit") as mock_exit:
 
             mock_run.return_value = {
@@ -446,8 +444,7 @@ class TestRunIngestionIntegration:
         """main() exits zero when only BBC/Guardian/NPR fail (RSS backup exists)."""
         from src.ingestion.run import main
 
-        with patch("src.ingestion.run.init_db"), \
-             patch("src.ingestion.run.run_ingestion") as mock_run, \
+        with patch("src.ingestion.run.run_ingestion") as mock_run, \
              patch("sys.exit") as mock_exit:
 
             mock_run.return_value = {

@@ -118,20 +118,3 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
-
-
-async def init_db() -> None:
-    """Create tables."""
-    from src.schema.models import Base
-    from src.shared.config import get_settings
-    settings = get_settings()
-
-    if not settings.has_database:
-        return  # Skip if no database configured
-
-    engine = _get_engine()
-    if engine is None:
-        return
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)

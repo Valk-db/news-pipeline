@@ -56,8 +56,7 @@ async def pg_session():
             pytest.fail(f"Refusing to run integration tests against non-localhost DB (host: {host_info})")
         pytest.skip(f"Refusing to run integration tests against non-localhost DB (host: {host_info})")
 
-    from src.shared.database import init_db, get_session
-    await init_db()
+    from src.shared.database import get_session
 
     async with get_session() as session:
         await session.execute(text(_TRUNCATE_ALL))
