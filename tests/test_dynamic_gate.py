@@ -436,7 +436,7 @@ async def test_score_baseline_requires_both_halves_of_the_gate(mock_session, sam
     """
     mock_session.execute.side_effect = [
         make_result_mock([]),            # compute_virality_signal: no tier3/4 units
-        make_scalar_mock(None),          # compute_harm_level: no ALLEGATION claim
+        make_first_mock(None),           # compute_harm_level: no ALLEGATION claim
     ]
     score, breakdown = await compute_admission_score(
         mock_session, sample_story, 4, tier1_units=1
