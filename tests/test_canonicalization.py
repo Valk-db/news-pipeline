@@ -2,6 +2,8 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
+from sqlalchemy import select
+from src.schema.models import CanonicalEntity
 from src.utils.ner import (
     _normalize_text,
     _generate_aliases,
@@ -160,6 +162,118 @@ class TestEnglishAliasNormalization:
 
         assert len(bbc & guardian) == 2
         assert canonical_jaccard(bbc, guardian) == 0.5 >= 0.4
+
+
+class TestEntityGeocoding:
+    """Creating a canonical place entity stores where that place is.
+
+    This is what makes the globe possible: nothing else in the pipeline knows
+    where a canonical entity is, so a place that was never geocoded can never
+    reach the map.
+    """
+
+    class _StubGeocoder:
+        def __init__(self, result):
+            self.result = result
+            self.asked = []
+
+        async def geocode(self, name):
+            self.asked.append(name)
+            return self.result
+
+    @staticmethod
+    def _stub(monkeypatch, result):
+        from src.enrichment import geocoder
+
+        stub = TestEntityGeocoding._StubGeocoder(result)
+        monkeypatch.setattr(geocoder, "get_geocoder", lambda: stub)
+        return stub
+
+    @pytest.mark.asyncio
+    async def test_new_gpe_is_stored_with_its_coordinates(self, db_session, monkeypatch):
+        """A place the pipeline has never seen gets a point on first sight."""
+        from src.enrichment.geocoder import GeoResult
+
+        self._stub(
+            monkeypatch, GeoResult("Tel Aviv", 32.0853, 34.7818, "city", importance=0.72)
+        )
+
+        canonicalizer = EntityCanonicalizer(db_session)
+        await canonicalizer.initialize()
+        await canonicalizer.get_or_create("Tel Aviv", "GPE")
+        await db_session.commit()
+
+        entity = (
+            await db_session.execute(
+                select(CanonicalEntity).where(CanonicalEntity.canonical_name == "Tel Aviv")
+            )
+        ).scalar_one()
+        assert entity.latitude == 32.0853
+        assert entity.longitude == 34.7818
+        assert entity.location_type == "city"
+        assert entity.geo_importance == 0.72
+
+    @pytest.mark.asyncio
+    async def test_the_canonical_name_is_what_gets_geocoded(self, db_session, monkeypatch):
+        """'US' is geocoded as 'United States', so the entity gets real coordinates."""
+        from src.enrichment.geocoder import GeoResult
+
+        stub = self._stub(monkeypatch, GeoResult("United States", 39.8, -98.6, "country"))
+
+        canonicalizer = EntityCanonicalizer(db_session)
+        await canonicalizer.initialize()
+        mention = await canonicalizer.get_or_create("US", "GPE")
+
+        assert stub.asked == ["United States"]
+        assert mention.canonical_name == "United States"
+
+    @pytest.mark.asyncio
+    async def test_people_and_orgs_are_never_geocoded(self, db_session, monkeypatch):
+        """A name that is not a place costs no geocoder request."""
+        from src.enrichment.geocoder import GeoResult
+
+        stub = self._stub(monkeypatch, GeoResult("nowhere", 0.0, 0.0, "city"))
+
+        canonicalizer = EntityCanonicalizer(db_session)
+        await canonicalizer.initialize()
+        await canonicalizer.get_or_create("Joe Biden", "PERSON")
+        await canonicalizer.get_or_create("BBC", "ORG")
+
+        assert stub.asked == []
+
+    @pytest.mark.asyncio
+    async def test_a_place_nobody_can_find_still_becomes_an_entity(self, db_session, monkeypatch):
+        """An unresolved name is stored unlocated, never dropped and never fatal."""
+        self._stub(monkeypatch, None)
+
+        canonicalizer = EntityCanonicalizer(db_session)
+        await canonicalizer.initialize()
+        mention = await canonicalizer.get_or_create("Wakanda", "GPE")
+        await db_session.commit()
+
+        entity = (
+            await db_session.execute(
+                select(CanonicalEntity).where(CanonicalEntity.canonical_name == "Wakanda")
+            )
+        ).scalar_one()
+        assert mention.canonical_name == "Wakanda"
+        assert entity.latitude is None
+        assert entity.longitude is None
+
+    @pytest.mark.asyncio
+    async def test_an_existing_entity_is_not_geocoded_again(self, db_session, monkeypatch):
+        """Coordinates are looked up once per place, not once per mention."""
+        from src.enrichment.geocoder import GeoResult
+
+        stub = self._stub(monkeypatch, GeoResult("Israel", 30.8124, 34.8595, "country"))
+
+        canonicalizer = EntityCanonicalizer(db_session)
+        await canonicalizer.initialize()
+        await canonicalizer.get_or_create("Israel", "GPE")
+        await canonicalizer.get_or_create("Israel", "GPE")
+        await canonicalizer.get_or_create("Israel", "GPE")
+
+        assert stub.asked == ["Israel"]
 
 
 class TestCanonicalJaccard:

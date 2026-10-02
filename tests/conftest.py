@@ -72,6 +72,24 @@ def csrf_headers():
 
 
 @pytest.fixture(autouse=True)
+def offline_geocoder(monkeypatch):
+    """No test may geocode over the network.
+
+    Canonicalization geocodes every new GPE it creates (src/utils/ner.py), so
+    without this the entity tests would call Nominatim. Tests that care about
+    coordinates patch get_geocoder themselves.
+    """
+
+    class _OfflineGeocoder:
+        async def geocode(self, name):
+            return None
+
+    from src.enrichment import geocoder
+
+    monkeypatch.setattr(geocoder, "get_geocoder", _OfflineGeocoder)
+
+
+@pytest.fixture(autouse=True)
 def budget_counter(tmp_path, monkeypatch):
     """Give every test a working daily budget counter, isolated per test.
 

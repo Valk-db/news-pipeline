@@ -202,6 +202,7 @@ class CanonicalEntity(Base):
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
     location_type = Column(String(50), nullable=True)
+    geo_importance = Column(Float, nullable=True)  # Nominatim match prominence, 0.0-1.0
     geonames_id = Column(String(50), nullable=True)
     geojson = Column(JSON, nullable=True)
     geometry_id = Column(UUID(as_uuid=True), ForeignKey("event_geometries.id", ondelete="SET NULL"), nullable=True)
