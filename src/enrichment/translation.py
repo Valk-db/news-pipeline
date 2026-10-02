@@ -7,7 +7,10 @@ result, and the UI reads ``COALESCE(title_en, title)``.
 
 Backend selection, best free option that actually works on this box:
   1. Groq (free tier, LLM quality) when GROQ_API_KEY is set. Drop-in upgrade,
-     no code change: select_backend() prefers it automatically.
+     no code change: select_backend() prefers it automatically. An LLM is the
+     only one of the two that keeps proper nouns intact: MyMemory rendered
+     "Pezeshkian" as "doctors" on 2026-10-01, and a news translation that
+     rewrites a president's name is worse than no translation.
   2. MyMemory (keyless HTTP, no account, no data-sharing opt-in, 50k
      chars/day anonymous). Verified working through the egress proxy on
      2026-10-01 with good quality on FR/ES/DE/ZH/FA/UK/SQ news headlines.
@@ -25,6 +28,11 @@ limit) counted in budget_counters. That counter was a JSON file under var/, a
 gitignored directory on an ephemeral runner, so the cap was really per run and
 two runs a day could send twice the anonymous limit. Translation never breaks
 ingest: failures are caught, reported, and the article persists untranslated.
+
+Groq politeness: 1s between requests and a daily request budget of 300 counted
+in the same table under its own name (groq_translation_requests). Sharing the
+LLM client's row would let a long translation batch spend the budget that
+caption and classification work -- which runs first -- was counted against.
 """
 
 from __future__ import annotations
@@ -33,11 +41,12 @@ import json
 import logging
 import os
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Protocol
 
-from src.shared.budget import MYMEMORY_CHARS, spend_sync as spend
+from src.shared.budget import GROQ_TRANSLATION_REQUESTS, MYMEMORY_CHARS, spend_sync as spend
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +57,42 @@ MYMEMORY_POLITENESS_SECONDS = 1.0
 # Bodies are front-loaded in news copy; translating the whole archive would
 # blow the free daily budget on one long article. The cap is reported, not hidden.
 BODY_TRANSLATE_CHAR_CAP = 4000
+
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Live-checked 2026-10-02 against the free-tier key: openai/gpt-oss-20b answers, and
+# it is the only chat model that key may use besides its 120b sibling (not on the free
+# tier) and the prompt guards. Pinned as a constant, like the MyMemory URL above,
+# rather than read from GROQ_MODEL: reasoning_effort below is a gpt-oss parameter, so
+# a model swap made in one place and not the other would 400 into silence.
+GROQ_MODEL = "openai/gpt-oss-20b"
+# gpt-oss reasons before it answers and the reasoning tokens come out of the same
+# max_tokens budget: asked for 10 tokens it returned an empty completion with 8 of
+# them spent on reasoning. 4096 covers a 4000-char body's translation (worst seen:
+# ~2500 tokens) plus its reasoning, and costs nothing when unused, because
+# generation stops at the stop token.
+GROQ_MAX_TOKENS = 4096
+GROQ_TIMEOUT = 30
+GROQ_POLITENESS_SECONDS = 1.0
+# Sized under the free tier's measured allowance, not guessed: the response headers on
+# 2026-10-02 carried x-ratelimit-limit-requests: 1000. 300 requests is ~150 articles
+# (a title and a body each) and leaves the LLM client's own 900/day row alone.
+GROQ_DAILY_REQUEST_BUDGET = 300
+
+# One system message, one rule set. The proper-noun rule is the whole reason Groq is
+# worth the round trip: MyMemory turned "Pezeshkian" into "doctors" on 2026-10-01.
+_TRANSLATION_SYSTEM = (
+    "You are a professional news translator. You translate the whole text, you never "
+    "summarize it, and you never comment on it."
+)
+_TRANSLATION_RULES = (
+    "Rules:\n"
+    "- Output only the translation: no preamble, no notes, no wrapping quotes.\n"
+    "- Translate every sentence, including repeated ones. Never summarize or shorten.\n"
+    "- Proper nouns (people, places, organizations) must stay recognizable: keep the\n"
+    "  original spelling or its standard English transliteration (for example\n"
+    "  \"Pezeshkian\"), and never translate what a name means.\n"
+    "- Keep numbers, dates, units and titles as written.\n"
+)
 
 class TranslationUnavailable(Exception):
     """Raised when no translation backend can serve a request right now."""
@@ -144,26 +189,126 @@ class MyMemoryBackend:
 
 
 class GroqBackend:
-    """LLM translation via Groq free tier. Deferred until GROQ_API_KEY lands.
+    """LLM translation via Groq's free tier, the upgrade MyMemory cannot make.
 
-    Kept as a first-class backend so the upgrade is a config change, not a
-    code change: select_backend() picks this automatically when the key exists.
+    An LLM keeps proper nouns intact, which is the failure MyMemory had: on the
+    2026-10-01 check it rendered "Pezeshkian" as "doctors". One request per call --
+    Groq's context holds a whole article, so there is no MyMemory-style chunking --
+    and one second between calls.
+
+    Polite by construction the way MyMemoryBackend is: every request is reserved
+    against the day's budget in budget_counters before it is sent, so no number of
+    runs can burn the free tier. Translation is best-effort enrichment, so every
+    failure mode -- no key, 401/402/429/5xx, a timeout, a truncated, empty or
+    malformed completion -- surfaces as TranslationUnavailable and leaves the
+    article untranslated instead of breaking ingest.
     """
 
     name = "groq"
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        politeness_seconds: float = GROQ_POLITENESS_SECONDS,
+        daily_budget: int = GROQ_DAILY_REQUEST_BUDGET,
+    ) -> None:
         self.api_key = api_key or os.environ.get("GROQ_API_KEY")
         if not self.api_key:
             raise TranslationUnavailable(
                 "GROQ_API_KEY is not set; Groq translation is unavailable"
             )
+        self.politeness_seconds = politeness_seconds
+        self.daily_budget = daily_budget
+        self._last_call = 0.0
+
+    def _polite_wait(self) -> None:
+        wait = self.politeness_seconds - (time.monotonic() - self._last_call)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call = time.monotonic()
+
+    def _complete(self, text: str, source_lang: str, target_lang: str) -> str:
+        """One chat completion, or TranslationUnavailable. Never any other exception."""
+        body = json.dumps(
+            {
+                "model": GROQ_MODEL,
+                "messages": [
+                    {"role": "system", "content": _TRANSLATION_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Translate the text below from {source_lang} to {target_lang}.\n\n"
+                            f"{_TRANSLATION_RULES}\nTEXT:\n{text}"
+                        ),
+                    },
+                ],
+                "max_tokens": GROQ_MAX_TOKENS,
+                "temperature": 0,
+                # gpt-oss reasons before it answers; "low" keeps that to a handful of
+                # tokens. The API rejects "none" (400, checked 2026-10-02), so the
+                # only lever is how much, not whether.
+                "reasoning_effort": "low",
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            GROQ_URL,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "news-pipeline/1.0 (translation enrichment)",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=GROQ_TIMEOUT) as resp:
+                raw = resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as exc:
+            # 401/402/429/5xx all land here and none of them is worth a retry on a
+            # free tier: the article keeps its originals and the backfill retries it.
+            detail = exc.read()[:160].decode("utf-8", "replace")
+            raise TranslationUnavailable(f"Groq HTTP {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            # urlopen surfaces a timeout as the socket's TimeoutError and a refused
+            # connection as URLError, which is an OSError. All of it is "not now".
+            raise TranslationUnavailable(f"Groq request failed: {exc}") from exc
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise TranslationUnavailable(f"Groq returned non-JSON: {raw[:160]}") from exc
+        try:
+            choice = (data.get("choices") or [{}])[0]
+            finish_reason = choice.get("finish_reason")
+            content = ((choice.get("message") or {}).get("content") or "").strip()
+        except (AttributeError, IndexError, KeyError, TypeError) as exc:
+            raise TranslationUnavailable(
+                f"Groq response was malformed: {raw[:160]}"
+            ) from exc
+        if finish_reason == "length":
+            # Half a body stored as body_text_en would be silently wrong, and the
+            # row stays eligible for the backfill, so refuse instead of truncating.
+            raise TranslationUnavailable(
+                f"Groq hit max_tokens ({GROQ_MAX_TOKENS}); refusing a truncated translation"
+            )
+        if not content:
+            raise TranslationUnavailable(f"Groq returned no translation: {raw[:160]}")
+        return content
 
     def translate(self, text: str, source_lang: str, target_lang: str = "en") -> str:
-        raise TranslationUnavailable(
-            "GroqBackend.translate is a stub until the GROQ_API_KEY is provisioned; "
-            "wireed for future use, not called today"
-        )
+        if not text or not text.strip():
+            return text
+        if source_lang == target_lang:
+            return text
+        # Reserved before the call, for the same reason as MyMemory: a refused
+        # reservation means the cap is spent or the counter is unreachable, and the
+        # safe reading of both is: do not send.
+        if spend(GROQ_TRANSLATION_REQUESTS, 1, self.daily_budget) is None:
+            raise TranslationUnavailable(
+                f"daily Groq translation budget exhausted ({self.daily_budget} requests)"
+            )
+        self._polite_wait()
+        return self._complete(text, source_lang, target_lang)
 
 
 def select_backend() -> TranslationBackend:
