@@ -37,8 +37,27 @@ async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30
         try:
             response = await client.get(feed_url, timeout=timeout, follow_redirects=True)
             response.raise_for_status()
+            feed = feedparser.parse(response.text)
+            # I-P1-4: raise_for_status() proves 2xx, not "is a feed". Validate
+            # the parsed payload before recording feed_ok: a 200 Cloudflare
+            # interstitial or HTML error page must not count as a healthy feed.
+            version = getattr(feed, "version", "") or ""
+            entries = getattr(feed, "entries", None) or []
+            bozo = bool(getattr(feed, "bozo", False))
+            if not version and not entries:
+                logger.warning(
+                    "Feed %s returned 200 but parsed as no feed (bozo=%s); recording feed_failed",
+                    feed_url,
+                    bozo,
+                )
+                STATS.record(source_key, "feed_failed:not_a_feed")
+                return None
             STATS.record(source_key, "feed_ok")
-            return feedparser.parse(response.text)
+            if bozo:
+                # Recognized feed (or entries) but malformed XML; still usable,
+                # recorded separately so tier-1 health can see the wobble.
+                STATS.record(source_key, "feed_bozo")
+            return feed
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             # Retry only on 5xx or 429
