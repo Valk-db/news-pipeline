@@ -387,7 +387,9 @@ def record_gate_decision(
     readable, which is the whole point of a table rather than a column on `stories`.
 
     * gate_name          -- 'tier1' for the boolean rule, 'dynamic' for the admission score.
-    * tier1_unit_count   -- the story's own counter, i.e. exactly what `gate_reason` reports.
+    * tier1_unit_count   -- the story's raw tier-1 article volume (summed per-unit article
+      histograms), kept for reporting, NOT the unit count `gate_reason` prints. The sentence
+      counts distinct unit ids off the same pair list evaluate_tier1_gate decided on.
     * distinct_owners    -- len(owner_groups), counted post wire-collapse. Equal to
       `stories.distinct_owners` because both come from the same Corroboration.
     * owner_groups       -- the post-collapse owner histogram the gate counted.
@@ -586,8 +588,14 @@ async def apply_tier1_gate(
         # Update story status and gate_reason (counters already updated by recompute_story_counters)
         if should_queue:
             # Gate passes: keep PENDING (awaiting curator approval)
+            # The sentence counts the units the gate decided on, not the raw article volume:
+            # story.tier1_unit_count sums each unit's stored tier-1 article histogram, so a
+            # unit with two tier-1 articles would otherwise print as "2 tier-1 units" after
+            # passing on one unit. The distinct unit ids off the pair list are exactly what
+            # evaluate_tier1_gate's ">= 2 tier-1 units" check counted.
+            tier1_units = len({unit_id for unit_id, _ in tier_owner_pairs})
             story.status = Story.Status.PENDING
-            story.gate_reason = f"Passed gate: {story.tier1_unit_count} tier-1 units, {story.distinct_owners} distinct owners"
+            story.gate_reason = f"Passed gate: {tier1_units} tier-1 units, {story.distinct_owners} distinct owners"
             queued += 1
         else:
             story.status = Story.Status.BLOCKED
