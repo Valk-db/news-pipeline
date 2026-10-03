@@ -57,18 +57,30 @@ TOKEN_UNIT = "tokens"
 REQUESTS_UNSHARE = 0.10
 
 
+def is_exhausted(row: dict) -> bool | None:
+    """Whether `row`'s counter is at or over its cap, or None if it cannot be told.
+
+    One definition, used by both the table and the flag. An earlier version stored
+    `exhausted` on the row and had two readers trust it, which is a stored boolean that can
+    disagree with the numbers it was derived from -- and a stale one is invisible, because
+    a confident "ok" is exactly what a wrong answer looks like here.
+    """
+    used, cap = row["used"], row["cap"]
+    if used is None or cap is None:
+        return None
+    return used >= cap
+
+
 def _row_for(name: str, used: int | None, cap: int, spec: CounterSpec) -> dict:
     pct = (used / cap * 100.0) if (used is not None and cap > 0) else None
-    row = {
+    return {
         "name": name,
         "unit": spec.unit,
         "used": used,
         "cap": cap,
         "percent": pct,
-        "exhausted": None if used is None else used >= cap,
         "spent_by": spec.spent_by,
     }
-    return row
 
 
 async def collect(db_url: str, day: date) -> list[dict]:
@@ -90,7 +102,11 @@ async def collect(db_url: str, day: date) -> list[dict]:
     rows = []
     for name, spec in COUNTERS_BY_NAME.items():
         raw = found.pop(name, None)
-        rows.append(_row_for(name, None if raw is None else int(raw), counter_cap(spec), spec))
+        # No row means nothing was spent, which is ZERO -- not "unreadable". Conflating
+        # the two made every untouched counter print as unreadable on an ordinary quiet
+        # day, i.e. the report cried wolf on the healthy case and taught a reader to
+        # ignore it. src/shared/budget.py's own used() makes the same distinction.
+        rows.append(_row_for(name, 0 if raw is None else int(raw), counter_cap(spec), spec))
     # A counter this module has never heard of is still spend, and a report that silently
     # omits it would read as "nothing else happened today". Reported with no cap, because
     # inventing one here would be a guess dressed as a limit.
@@ -102,7 +118,6 @@ async def collect(db_url: str, day: date) -> list[dict]:
                 "used": int(found[name]),
                 "cap": None,
                 "percent": None,
-                "exhausted": None,
                 "spent_by": "NOT IN src/shared/budget.py COUNTERS -- undeclared counter",
             }
         )
@@ -112,11 +127,14 @@ async def collect(db_url: str, day: date) -> list[dict]:
 def flag_token_exhausted(rows: list[dict]) -> list[dict]:
     """Counters whose TOKENS are spent while their REQUESTS are far under.
 
-    Pairs each token counter with the request counter that measures the same stage, which
-    is why the pairing is by unit-prefix rather than by name: `groq_request_tokens` and
-    `groq_requests` are the same calls counted in two units, and the report's whole claim
-    is that those two can disagree. A token counter with no request counterpart (Phase 2
-    never had a request counter) is reported on its own rather than silently dropped.
+    Pairs each token counter with the request counter that measures the same stage. The
+    pairing comes from CounterSpec.pairs_with rather than from string surgery on the
+    counter name, because the pair is not a naming convention (`groq_requests` pairs with
+    `groq_request_tokens`) and a derived pairing is one rename away from silently
+    comparing unrelated counters. This report's central claim is a claim about a PAIR.
+
+    A token counter with no request counterpart (Phase 2 never had a request counter) is
+    reported on its own rather than silently dropped.
     """
     by_name = {r["name"]: r for r in rows}
     flagged = []
@@ -124,14 +142,10 @@ def flag_token_exhausted(rows: list[dict]) -> list[dict]:
         # Recomputed here rather than read off the row's `exhausted` field, so this
         # function's answer depends only on the numbers it is given. A flag that trusts a
         # precomputed boolean is a flag that can be silently stale.
-        spent = row["used"]
-        cap = row["cap"]
-        if row["unit"] != TOKEN_UNIT or spent is None or cap is None or spent < cap:
+        if row["unit"] != TOKEN_UNIT or is_exhausted(row) is not True:
             continue
-        # The request counterpart of `groq_request_tokens` is `groq_requests`;
-        # of `groq_translation_tokens`, `groq_translation_requests`.
-        base = name[: -len("_tokens")]
-        twin = by_name.get(base) or by_name.get(f"{base}s")
+        spec = COUNTERS_BY_NAME.get(name)
+        twin = by_name.get(spec.pairs_with) if spec and spec.pairs_with else None
         if (
             twin is not None
             and twin["used"] is not None
@@ -153,9 +167,10 @@ def format_table(rows: list[dict], flagged: list[dict]) -> str:
         used = "unreadable" if r["used"] is None else f"{r['used']:,}"
         cap = "-" if r["cap"] is None else f"{r['cap']:,}"
         pct = "-" if r["percent"] is None else f"{r['percent']:.1f}%"
-        if r["exhausted"] is True:
+        exhausted = is_exhausted(r)
+        if exhausted is True:
             state = f"EXHAUSTED ({r['unit']})"
-        elif r["exhausted"] is False:
+        elif exhausted is False:
             state = "ok"
         else:
             state = "unknown"

@@ -20,6 +20,7 @@ from src.shared.budget import (
     GROQ_REQUEST_TOKENS,
     GROQ_REQUESTS,
     counter_cap,
+    record,
     spend,
     used,
 )
@@ -64,12 +65,19 @@ class BudgetStatus:
 
 
 class BudgetExhausted(Exception):
-    def __init__(self, status: BudgetStatus):
-        unit = "tokens" if status.exhausted_unit == "tokens" else "requests"
+    def __init__(self, status: BudgetStatus, unit: str | None = None):
+        # `unit` is passed explicitly by whichever gate refused, because status() alone
+        # cannot always tell. The headroom gate refuses a call because the ESTIMATE does
+        # not fit in what is left, which is a token refusal even though the token counter
+        # is still under its cap -- so status() would report "requests" and the operator
+        # would be sent to raise the request cap, which is precisely the wrong remedy for
+        # a token-denominated limit. The message has to name the gate that fired.
+        self.unit = unit or status.exhausted_unit
+        verb = "tokens" if self.unit == "tokens" else "requests"
         super().__init__(
             f"Groq daily budget exhausted: {status.used_today}/{status.limit} requests, "
             f"{status.tokens_used_today}/{status.token_limit} tokens "
-            f"(refused on {unit})"
+            f"({status.tokens_remaining} tokens left, refused on {verb})"
         )
         self.status = status
 
@@ -170,9 +178,12 @@ class RequestBudget:
             estimate = estimate_tokens(messages)
             remaining = await self.token_headroom()
             if estimate > remaining:
-                raise BudgetExhausted(await self.status())
+                # Refused on TOKENS even though the token counter may still be under its
+                # cap: the estimate is what did not fit. status() cannot see that, so the
+                # unit is stated here.
+                raise BudgetExhausted(await self.status(), unit="tokens")
         if await spend(GROQ_REQUESTS, 1, self.daily_limit) is None:
-            raise BudgetExhausted(await self.status())
+            raise BudgetExhausted(await self.status(), unit="requests")
         return await coro_factory()
 
     async def token_headroom(self) -> int:
@@ -195,12 +206,17 @@ class RequestBudget:
         empty content intermittently, and a call that spent tokens is spend whether or not
         it produced text.
 
-        The return of spend() is deliberately ignored. By the time this runs the tokens
-        are already spent, so refusing the *recording* would not un-spend them, and raising
-        here would turn a successful provider call into a caller-visible failure for the
-        sake of a counter. The overshoot is visible in the counter and in the daily report,
-        which is the honest place for it.
+        Recorded through budget.record(), NOT spend(), and the difference is load-bearing.
+        By the time this runs the tokens are already gone, so there is nothing a refusal
+        could protect; recording through the capped statement meant that once the counter
+        reached its cap every later charge silently matched no row and was discarded,
+        leaving the daily report showing cap/cap for a day that cost more than the cap.
+        Overshoot is now written down, which is what lets the report show it.
+
+        The return value of record() is deliberately not raised on. The tokens are spent
+        either way, and converting a successful provider call into a caller-visible failure
+        over a counter would lose the work rather than protect it.
         """
         amount = max(1, int(total_tokens or 0))
-        await spend(GROQ_REQUEST_TOKENS, amount, self.token_limit)
+        await record(GROQ_REQUEST_TOKENS, amount)
         return amount

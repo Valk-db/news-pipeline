@@ -52,6 +52,7 @@ from src.shared.budget import (
     GROQ_TRANSLATION_REQUESTS,
     GROQ_TRANSLATION_TOKENS,
     MYMEMORY_CHARS,
+    record_sync as record,
     spend_sync as spend,
 )
 
@@ -410,7 +411,10 @@ class GroqBackend:
         # refusal, not in a path the refusals skip. A zero or missing usage is charged 1
         # for the same reason -- the request happened.
         total = ((data.get("usage") or {}) or {}).get("total_tokens") or 0
-        spend(GROQ_TRANSLATION_TOKENS, max(1, int(total)), self.daily_token_budget)
+        # record(), not spend(): the tokens are already gone by here, so there is nothing
+        # a cap could protect, and recording through the capped statement would discard
+        # every charge made after the cap was reached.
+        record(GROQ_TRANSLATION_TOKENS, max(1, int(total)))
         return content
 
     def translate(self, text: str, source_lang: str, target_lang: str = "en") -> str:

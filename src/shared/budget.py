@@ -117,6 +117,14 @@ class CounterSpec:
     cap_setting: str  # attribute on Settings holding the daily cap
     default_cap: int
     spent_by: str  # which stage pays this row
+    # The other counter measuring the SAME calls in the other unit, or None. Declared
+    # rather than derived from the name because the pair is not a naming convention:
+    # `groq_requests` pairs with `groq_request_tokens`, and a rule that inferred it from
+    # the string would have to special-case the singular/plural mismatch and would then
+    # be one rename away from silently pairing the wrong counters. The daily report's
+    # central claim -- tokens spent while requests look fine -- is a claim about a PAIR,
+    # so the pairing is data.
+    pairs_with: str | None = None
 
 
 # Every counter the pipeline can spend against, in one place.
@@ -133,6 +141,7 @@ COUNTERS: tuple[CounterSpec, ...] = (
         cap_setting="groq_daily_request_budget",
         default_cap=900,
         spent_by="caption / classification (src/shared/llm_budget.py)",
+        pairs_with=GROQ_REQUEST_TOKENS,
     ),
     CounterSpec(
         name=GROQ_REQUEST_TOKENS,
@@ -140,6 +149,7 @@ COUNTERS: tuple[CounterSpec, ...] = (
         cap_setting="groq_daily_token_budget",
         default_cap=60_000,
         spent_by="caption / classification (src/shared/llm_budget.py)",
+        pairs_with=GROQ_REQUESTS,
     ),
     CounterSpec(
         name=GROQ_TRANSLATION_REQUESTS,
@@ -147,6 +157,7 @@ COUNTERS: tuple[CounterSpec, ...] = (
         cap_setting="groq_translation_daily_request_budget",
         default_cap=300,
         spent_by="translation (src/enrichment/translation.py)",
+        pairs_with=GROQ_TRANSLATION_TOKENS,
     ),
     CounterSpec(
         name=GROQ_TRANSLATION_TOKENS,
@@ -154,6 +165,7 @@ COUNTERS: tuple[CounterSpec, ...] = (
         cap_setting="groq_translation_daily_token_budget",
         default_cap=20_000,
         spent_by="translation (src/enrichment/translation.py)",
+        pairs_with=GROQ_TRANSLATION_REQUESTS,
     ),
     CounterSpec(
         name=GROQ_PHASE2_TOKENS,
@@ -209,6 +221,30 @@ _SPEND = text(
 )
 
 _USED = text("SELECT used FROM budget_counters WHERE name = :name AND day = :day").bindparams(
+    bindparam("day", type_=Date),
+)
+
+# The same upsert with NO cap predicate, for accounting rather than reservation.
+#
+# This exists because the two are different acts and conflating them loses money. spend()
+# answers "may I afford this?" and is entitled to refuse. record() answers "this happened"
+# and must never refuse, because by the time record() is called the tokens are already
+# gone: with the capped form, a charge made after the cap was reached matched no row,
+# spend() returned None, and the counter stayed frozen at exactly the cap -- so the daily
+# report showed 60,000/60,000 for a day that actually cost more, and the overshoot was
+# invisible precisely when it mattered. A cap that can hide its own overshoot is not a cap.
+#
+# Explicit bind types for the same reason as _SPEND: the statement is parsed by the same
+# server, and "inconsistent types deduced for parameter" is not a dialect curiosity.
+_RECORD = text(
+    """
+    INSERT INTO budget_counters (name, day, used) VALUES (:name, :day, :amount)
+    ON CONFLICT (name, day) DO UPDATE
+        SET used = budget_counters.used + :amount
+    RETURNING used
+    """
+).bindparams(
+    bindparam("amount", type_=BigInteger),
     bindparam("day", type_=Date),
 )
 
@@ -274,6 +310,43 @@ async def used(name: str, *, day: date | None = None) -> int | None:
     return 0 if row is None else int(row[0])
 
 
+async def record(name: str, amount: int, *, day: date | None = None) -> int | None:
+    """Add `amount` to `name` unconditionally. Returns the new total, or None if the
+    counter could not be reached.
+
+    For spend that has ALREADY happened and is only now being measured -- a provider's
+    reported token usage, chiefly. Deliberately has no `cap` parameter: the cap decides
+    whether a call may be dispatched, which is spend()'s job, and it has no business
+    deciding whether a completed call gets written down.
+
+    This lets `used()` exceed a counter's cap. That is the point: an overshoot is a fact
+    about the day, and a counter that pins itself at its cap reports a cost the pipeline
+    did not incur.
+    """
+    amount = max(0, int(amount))
+    engine = _get_engine()
+    if engine is None:
+        logger.warning("budget %s: no database engine, lost %s recorded", name, amount)
+        return None
+    try:
+        async with engine.connect() as conn:
+            row = (await conn.execute(
+                _RECORD, {"name": name, "day": day or today(), "amount": amount}
+            )).first()
+            await conn.commit()
+    except ProgrammingError:
+        logger.error(
+            "budget %s: the record statement was rejected by the server. This is a "
+            "defect, not an exhausted budget, and it is raised rather than reported as "
+            "'spent'. Amount %s.", name, amount,
+        )
+        raise
+    except Exception as exc:
+        logger.warning("budget %s unreachable, lost %s of record: %s", name, amount, type(exc).__name__)
+        return None
+    return None if row is None else int(row[0])
+
+
 def spend_sync(name: str, amount: int, cap: int, *, day: date | None = None) -> int | None:
     """spend() for the synchronous callers (src/enrichment/translation.py).
 
@@ -282,3 +355,8 @@ def spend_sync(name: str, amount: int, cap: int, *, day: date | None = None) -> 
     with NullPool, so a connection is never carried across the two loops.
     """
     return asyncio.run(spend(name, amount, cap, day=day))
+
+
+def record_sync(name: str, amount: int, *, day: date | None = None) -> int | None:
+    """record() for the same synchronous callers, on the same reasoning as spend_sync()."""
+    return asyncio.run(record(name, amount, day=day))
