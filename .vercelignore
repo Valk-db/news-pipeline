@@ -31,7 +31,6 @@ Thumbs.db
 .remember/
 *.db
 test.db
-=0.*
 
 # Tests
 pytest/
@@ -65,8 +64,8 @@ src/worker/
 node_modules/
 
 # Vercel-specific exclusions
-requirements-vercel.txt
+# uv.lock is excluded because Vercel resolves from requirements.txt; CI resolves
+# from the lock. Anything in the lock and not in requirements.txt therefore passes
+# CI and fails the deploy, which is what the uv.lock line of the check reports.
 uv.lock
 docs/
-*.md
-!README.md

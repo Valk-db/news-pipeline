@@ -176,12 +176,11 @@ def test_every_negated_rule_in_the_real_file_is_load_bearing(
         file_set: db.DeployFileSet) -> None:
     """A `!` rule that re-includes nothing is a mistake waiting to confuse someone.
 
-    Not a hypothetical here: `.vercelignore` line 62 lists
-    `requirements-vercel.txt`, a file that does not exist in the repository. That is
-    a dangling exclusion, harmless at runtime, but it means someone expected a
-    separate deploy requirement set that never arrived. This test reports it rather
-    than failing, because a dangling rule is a documentation problem, not a
-    deploy-breaking one.
+    The sibling case -- a positive rule that EXCLUDES a file which does not exist
+    -- is `test_no_exclusion_rule_names_a_file_that_does_not_exist` below. It was
+    the one that actually bit: `.vercelignore` line 62 listed
+    `requirements-vercel.txt`, a file that does not exist in the repository, so it
+    was a dangling exclusion reading as intent that was never carried out.
     """
     included = set(file_set.included)
     dangling = []
@@ -199,6 +198,134 @@ def test_every_negated_rule_in_the_real_file_is_load_bearing(
         "these `!` rules re-include nothing: %s. If one of them was meant to name a "
         "file, that file does not exist in the tree." % dangling
     )
+
+
+# Rules that name a file which is not tracked, on purpose. Each is a safety net for
+# a file that exists on SOME developer's machine and is not in git, so "it does not
+# exist in the tree" is the normal state rather than a dangling intent. Anything not
+# listed here has to name a real tracked file, and has to actually drop it.
+_TOOL_ARTIFACT_EXCLUSIONS = {
+    ".DS_Store": "macOS Finder writes one into every directory it visits",
+    "Thumbs.db": "Windows Explorer writes a thumbnail cache next to any image",
+    "test.db": "a local scratch sqlite file from ad-hoc queries, never committed",
+    ".coverage": "pytest-cov writes it on every run; it is gitignored",
+    ".Python": "a stray file some Python installs drop at the virtualenv root",
+    ".venv": "the virtualenv directory, listed bare as well as with a trailing slash",
+    "venv": "ditto, the other conventional name for the virtualenv",
+    "env": "ditto, and the third conventional name",
+}
+
+
+def _is_plain_filename_rule(rule: db.Rule) -> bool:
+    """A rule that names one file, as opposed to a directory or a glob.
+
+    `deploy_bundle.py` strips a trailing slash and a leading `!` at parse time and
+    records `directory_only`, so a directory rule is excluded here rather than by
+    its text. Glob metacharacters are excluded because a glob is a statement about
+    a class of names and is not expected to match anything in particular.
+    """
+    if rule.negated or rule.directory_only:
+        return False
+    return not any(ch in rule.pattern for ch in "*?[]!{}")
+
+
+def test_no_exclusion_rule_names_a_file_that_does_not_exist(
+        file_set: db.DeployFileSet) -> None:
+    """A rule matching nothing reads as intent that was never carried out.
+
+    Not hypothetical, and not the benign case it looks like. `.vercelignore`
+    carried `requirements-vercel.txt` for as long as the deploy-bundle checker
+    existed. That file has never been in the repository, so the rule dropped
+    nothing, cost nothing, and taught every reader that a Vercel-specific
+    requirement set was expected -- which is precisely the kind of false premise
+    that outlives the person who wrote it. `git log` and `git ls-files` both say
+    the file does not exist; the rule was intent, not documentation.
+
+    A rule that names a REAL tracked file must also actually drop it, so the
+    inverse error (a rule that looks load-bearing and is not, because a later rule
+    re-includes the same path) is caught here too.
+    """
+    tracked = set(db.tracked_files(REPO))
+    excluded = set(file_set.excluded)
+
+    dangling = [
+        (rule.lineno, rule.pattern)
+        for rule in file_set.rules
+        if _is_plain_filename_rule(rule)
+        and rule.pattern not in tracked
+        and rule.pattern not in _TOOL_ARTIFACT_EXCLUSIONS
+    ]
+    assert dangling == [], (
+        "these exclusion rules name a file that is neither tracked nor a known tool "
+        "artifact: %s. Either the file is missing (the rule reads as intent that was "
+        "never carried out) or it is a tool artifact that belongs in "
+        "_TOOL_ARTIFACT_EXCLUSIONS with a reason." % dangling
+    )
+
+    inert = [
+        (rule.lineno, rule.pattern)
+        for rule in file_set.rules
+        if _is_plain_filename_rule(rule)
+        and rule.pattern in tracked
+        and rule.pattern not in excluded
+    ]
+    assert inert == [], (
+        "these exclusion rules name a tracked file and still ship it, so a later rule "
+        "undoes them: %s" % inert
+    )
+
+
+def test_the_tool_artifact_allowlist_is_not_where_the_dangling_rule_went(
+        file_set: db.DeployFileSet) -> None:
+    """The allowlist above is the escape hatch, so it needs its own guard.
+
+    Otherwise the fix for a dangling rule is to add its name to the allowlist,
+    which is the same defect wearing a comment. Entries must be a real reason,
+    not a bare name, and `requirements-vercel.txt` may never be among them: that
+    was the rule this whole group exists because of.
+    """
+    for name, reason in _TOOL_ARTIFACT_EXCLUSIONS.items():
+        assert len(reason) > 20, (
+            "%s is allowlisted with the reason %r, which says nothing. Every entry "
+            "needs to name the tool that produces the file." % (name, reason)
+        )
+        assert not any(rule.pattern == name and rule.negated
+                       for rule in file_set.rules), (
+            "%s is in the artifact allowlist AND has a `!` rule" % name
+        )
+    assert "requirements-vercel.txt" not in _TOOL_ARTIFACT_EXCLUSIONS, (
+        "requirements-vercel.txt is a deploy intent that was never carried out, not a "
+        "tool artifact. Do not allowlist it; write the file or drop the rule."
+    )
+    # Sanity: the allowlist must not have become a dumping ground.
+    assert len(_TOOL_ARTIFACT_EXCLUSIONS) <= 12
+
+
+def test_the_documentation_rules_are_written_once(file_set: db.DeployFileSet) -> None:
+    """`*.md` then `!README.md` appeared twice, at two ends of the file.
+
+    The matcher takes the LAST matching rule, so the second copy decided every
+    markdown path and the first copy was inert -- two pairs of rules where one
+    pair would do, and a tail that reads as if it were adding something. A
+    duplicated tail is also how a later edit lands in the copy nobody reads: you
+    change the first `*.md` and the second one silently overrides it.
+    """
+    md_rules = [r for r in file_set.rules if r.pattern in ("*.md", "README.md")]
+    assert len(md_rules) == 2, (
+        "expected exactly one `*.md` and one `!README.md` rule, found %d: %s. A "
+        "duplicated tail is inert, and the copy that wins is the LAST one, so the "
+        "copy a reader edits is the copy that does nothing."
+        % (len(md_rules), [(r.lineno, r.pattern, r.negated) for r in md_rules])
+    )
+    assert [(r.pattern, r.negated) for r in md_rules] == [("*.md", False),
+                                                          ("README.md", True)], (
+        "the documentation pair is not `*.md` followed by `!README.md` in that order: "
+        "%s" % [(r.pattern, r.negated) for r in md_rules]
+    )
+    # And the decision itself, so the de-duplication is pinned as behaviour.
+    assert "README.md" in file_set.included
+    assert "VERCEL_DEPLOY.md" not in file_set.included
+    assert "DECISIONS.md" not in file_set.included
 
 
 def test_file_set_is_a_partition_of_the_tracked_tree(
@@ -375,6 +502,38 @@ def test_interpreter_startup_noise_is_not_reported_as_a_dependency(
 def test_requirements_txt_pins_are_all_pinned() -> None:
     for name, line in db.read_requirements(REPO).items():
         assert "==" in line, "%s is not pinned: %r" % (name, line)
+
+
+def test_the_report_does_not_assert_whether_pyproject_ships(file_set: db.DeployFileSet) -> None:
+    """The check must read the file set, not state a remembered fact about it.
+
+    `check_deploy_bundle.py` printed, as a hard-coded sentence, "pyproject.toml
+    does not ship, so requirements.txt is what Vercel installs". It does ship:
+    `.vercelignore` has no rule for it. The sentence was wrong in the same
+    direction that flatters the tool -- it explained away a real risk (a package
+    only `pyproject.toml` names is a deploy-time absence) by asserting a file was
+    absent when it was present, and nobody reading the output could tell.
+
+    Two assertions, because one of them is a trap: pinning the CURRENT truth
+    ("pyproject.toml ships") would be the same hard-coded claim with the sign
+    flipped. What is pinned is that the value is derived, and that the fiction
+    cannot come back as a literal.
+    """
+    source = (REPO / "scripts" / "check_deploy_bundle.py").read_text(encoding="utf-8")
+    assert "pyproject.toml does not ship, so requirements.txt is what Vercel" not in source, (
+        "the hard-coded 'pyproject.toml does not ship' sentence is back. The file set "
+        "must be read for that, not remembered: pyproject.toml ships today."
+    )
+    assert "ships_pyproject" in source and "file_set.included" in source, (
+        "the note must be computed from the filtered file set"
+    )
+    # The premise the sentence was asserting, measured rather than remembered.
+    assert "pyproject.toml" in file_set.included
+    assert "uv.lock" not in file_set.included
+    # And the two files that decide what Vercel installs are BOTH shipped, which
+    # is why the note has to be careful about which one it credits.
+    assert "requirements.txt" in file_set.included
+
 
 # --------------------------------------------------------------------------- #
 # The test that matters: the check must be able to fail

@@ -172,8 +172,15 @@ def report(tree: pathlib.Path, *, python: str | None = None,
           % _fmt_list(only_requirements))
     print("in pyproject but not in requirements.txt               : %s"
           % _fmt_list(only_pyproject))
-    print("note: pyproject.toml does not ship, so requirements.txt is what Vercel "
-          "installs.\n      A package only pyproject names is a deploy-time absence.")
+    # Computed, not asserted. This note used to be the hard-coded sentence
+    # "pyproject.toml does not ship", which is false: `.vercelignore` has no rule
+    # for it, so it ships. A check that states a fact about the file set it just
+    # computed, rather than reading the set, is a check that reports a fiction.
+    ships_pyproject = "pyproject.toml" in file_set.included
+    print("note: pyproject.toml %s ship, and uv.lock %s, so requirements.txt is what "
+          "Vercel installs.\n      A package only pyproject names is a deploy-time absence."
+          % ("does" if not ships_pyproject else "DOES",
+             "does" if "uv.lock" in file_set.included else "does not"))
 
     _rule("RESULT")
     if failures:
