@@ -130,7 +130,7 @@ See `src/ingestion/source_registry.py` for the complete, up-to-date source regis
 - The count is over articles, not reporting units: `tier1_owner_groups` is an article count per
   owner and `evaluate_tier1_gate` expands it, so one unit holding BBC and Guardian copies of the
   same wire story passes on its own. Whether that is the intended corroboration bar is an open
-  decision (`AGENT_TASKS_v38.md` §"Blocked on Tyler", item 1)
+  decision, still open: the batch note that recorded it was scratch and is deleted
 - Single-source cascades (one owner → many rewrites) blocked automatically
 - All decisions logged for audit trail
 

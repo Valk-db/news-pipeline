@@ -43,6 +43,32 @@ jobs:
         run: uv run mypy src/ curation_ui/
         continue-on-error: true  # Allow pre-existing errors, only fail on new ones
 
+      # Free, offline, no account, no token, no Docker: Yelp's detect-secrets,
+      # installed by the dev extra. Everything else needs a binary this job
+      # cannot fetch or pin.
+      #
+      # The scan is diffed against a slim baseline of the 17 known non-secrets
+      # in this tree, all reviewed by hand: placeholder DSNs (user:pass in
+      # .env.example and VERCEL_DEPLOY.md, app-user:pw and gsk_super_secret in
+      # the tests), the ephemeral postgres:postgres of this job's own service
+      # container, env(VAR) references in supabase/config.toml, and the two CDN
+      # subresource-integrity digests in map.html. Anything new fails the build
+      # and the diff names it. `--slim` drops generated_at, which is what makes
+      # the baseline byte-stable enough to diff; the cost is that it cannot be
+      # re-audited with `detect-secrets audit`, which is cheap to redo by hand
+      # at 17 lines.
+      #
+      # HexHighEntropyString is off and everything else stays on. This repo is
+      # legitimately full of high-entropy hex (content_hash, url_hash, MinHash
+      # permutations), and that one detector reported 1,169 findings, 1,160 of
+      # them in eval/data. A baseline that noisy is not a gate.
+      - name: Scan for secrets
+        run: |
+          uv run detect-secrets scan --slim \
+            --disable-plugin HexHighEntropyString \
+            --exclude-files '^\.secrets\.baseline$' > /tmp/secrets-current.json
+          diff -u .secrets.baseline /tmp/secrets-current.json
+
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
