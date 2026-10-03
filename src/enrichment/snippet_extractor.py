@@ -19,6 +19,36 @@ logger = logging.getLogger(__name__)
 SNIPPET_MAX_TOKENS = 3000
 
 
+# The five values Snippet.snippet_type's enum accepts (schema/models.py:502). The model
+# is asked for exactly these, but a free-form completion can invent one, and
+# enrich_story_with_snippets does SnippetType(s["snippet_type"]) unguarded -- an unknown
+# type raises ValueError inside the story's persistence, after the extraction succeeded.
+VALID_SNIPPET_TYPES = ("quote", "stat", "fact", "summary", "claim")
+DEFAULT_SNIPPET_TYPE = "fact"
+
+
+def _coerce_confidence(value: Any) -> int:
+    """Best-effort 0-100 int. Models answer with "high", 88.4, None or a list."""
+    try:
+        return min(100, max(0, int(float(value))))
+    except (TypeError, ValueError):
+        return 80
+
+
+def _coerce_position(value: Any) -> int:
+    """Best-effort 0..1 float -> integer character position."""
+    try:
+        return int(float(value) * 1000000)
+    except (TypeError, ValueError):
+        return 500000
+
+
+def _coerce_entities(value: Any) -> list:
+    if isinstance(value, list):
+        return [e for e in value if isinstance(e, str)]
+    return []
+
+
 def _record(source: str, event: str, n: int = 1) -> None:
     """STATS.record, but a counter can never destroy a good extraction.
 
@@ -142,35 +172,54 @@ Only return the JSON array, no explanation. Maximum {max_snippets} snippets."""
         _record("snippets", "parse_failed:not_a_list")
         return []
 
-    # Process and validate snippets
+    # Process and validate snippets.
+    #
+    # Every coercion below is defensive on purpose. This loop deliberately sits OUTSIDE
+    # the try blocks above (each failure mode needs its own event), which means an
+    # un-guarded int()/strip() here would raise straight out of the function -- and
+    # extract_snippets_for_story has no per-article guard, so one malformed field from
+    # one article would discard every other article's snippets for that story.
     processed_snippets = []
     for s in snippets_data[:max_snippets]:
         if not isinstance(s, dict):
             continue
 
-        snippet_text = s.get("text", "").strip()
-        if not snippet_text or len(snippet_text) < 20:
+        raw_text = s.get("text")
+        if not isinstance(raw_text, str):
+            continue
+        snippet_text = raw_text.strip()
+        if len(snippet_text) < 20:
             continue
 
         # Truncate if too long
         if len(snippet_text) > 300:
             snippet_text = snippet_text[:297] + "..."
 
-        # Generate minhash for dedup
-        minhash_sig = shingle_text(snippet_text, k=5)
+        snippet_type = s.get("type")
+        if snippet_type not in VALID_SNIPPET_TYPES:
+            if isinstance(snippet_type, str):
+                logger.warning(
+                    f"snippet type {snippet_type!r} is not one of "
+                    f"{VALID_SNIPPET_TYPES}; storing as {DEFAULT_SNIPPET_TYPE}"
+                )
+            snippet_type = DEFAULT_SNIPPET_TYPE
 
         processed_snippets.append({
             "article_id": article_id,
             "story_id": story_id,
-            "snippet_type": s.get("type", "quote"),
+            "snippet_type": snippet_type,
             "text": snippet_text,
-            "entities": s.get("entities", []),
-            "minhash_signature": minhash_sig,
-            "confidence": min(100, max(0, int(s.get("confidence", 80)))),
-            "position": int(s.get("position_estimate", 0.5) * 1000000),
+            "entities": _coerce_entities(s.get("entities")),
+            "minhash_signature": shingle_text(snippet_text, k=5),
+            "confidence": _coerce_confidence(s.get("confidence", 80)),
+            "position": _coerce_position(s.get("position_estimate", 0.5)),
         })
 
     _record("snippets", "extracted", len(processed_snippets))
+    if not processed_snippets:
+        # The response parsed and had entries, but none survived validation. That is a
+        # different problem from a parse failure and worth its own count.
+        _record("snippets", "no_valid_snippets")
     return processed_snippets
 
 
