@@ -31,24 +31,24 @@ behind four healthy ones.** `macro_f1` is the plain mean of the five field F1s.
 ## The rule that makes this an eval and not a demo
 
 `src/enrichment/snippet_extractor.py` is called **verbatim**. The harness supplies
-exactly two things, both of which are objects production reaches for and does not
-have:
+exactly one thing, and it is the transport: `get_llm_client` is redirected to
+return a `TransportShim` that implements the `LLMClient` surface production
+actually calls — `.chat_completion(...)` (awaited) and `._parse_json_response(...)`,
+plus `.model` — and funnels into the one seam where the request is really made, so
+the record-and-replay cache and the cost accounting still see every call.
 
-* `llm.chat.completions.create` and `llm.model` — production calls
-  `get_llm_client()` without awaiting it (`snippet_extractor.py:42`, `async def` at
-  `src/shared/llm.py:500`) and then uses attributes `LLMClient` does not define
-  (`:63-64`).
-* a `STATS` stub — `snippet_extractor.py:112` calls `record(..., count=N)` against a
-  signature of `record(source, event, n=1)` (`src/utils/ingest_stats.py:20`), which
-  raises `TypeError` *after* a successful extraction, inside the same `try`, so the
-  `except` at `:115` turns a good result into `[]`.
+There used to be a second substitution, a `STATS` stub, and the shim faked an
+`llm.chat` attribute that does not exist. Both existed because production had two
+real defects (an un-awaited `get_llm_client`, and `record(..., count=)` against a
+signature of `n=`) that made extraction return `[]` for every article. Those are
+fixed in the product, so the stubs are gone: stubbing them now would hide
+regressions instead of measuring them.
 
-Both are real production defects, reported not fixed. Neither is the prompt, the
-8000-char truncation, the 20-char minimum, the 300-char cap, the fence fallback, the
-field defaults, or the `max_snippets` slice. Those are all production's, and the
-harness reads them from the production module rather than retyping them
-(`BODY_CHARS` in `eval/adapter.py` is the one constant, and it names its source
-line).
+Neither the prompt, the 8000-char truncation, the 20-char minimum, the 300-char
+cap, the fence fallback, the field defaults, nor the `max_snippets` slice is
+supplied by the harness. Those are all production's, and the harness reads them
+from the production module rather than retyping them (`BODY_CHARS` in
+`eval/adapter.py` is the one constant, and it names its source line).
 
 ## Files
 

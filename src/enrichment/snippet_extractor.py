@@ -1,6 +1,5 @@
 """Snippet extraction from articles using LLM for key quotes, stats, facts."""
 
-import json
 import re
 from typing import List, Dict, Any
 import logging
@@ -11,6 +10,56 @@ from src.schema.models import Snippet, Snippet as SnippetType
 from src.utils.ingest_stats import STATS
 
 logger = logging.getLogger(__name__)
+
+# Completion budget for one snippet extraction. 1500 truncated 12 of 30 corpus
+# articles to nothing (batch-evalset findings): six hit the cap mid-string and
+# six were reasoning models that spent the whole budget on reasoning and
+# returned no answer at all. 3000 measured 30/30 parseable on the same corpus
+# and 4000 added nothing, so this is the smallest cap that stops losing output.
+SNIPPET_MAX_TOKENS = 3000
+
+
+# The five values Snippet.snippet_type's enum accepts (schema/models.py:502). The model
+# is asked for exactly these, but a free-form completion can invent one, and
+# enrich_story_with_snippets does SnippetType(s["snippet_type"]) unguarded -- an unknown
+# type raises ValueError inside the story's persistence, after the extraction succeeded.
+VALID_SNIPPET_TYPES = ("quote", "stat", "fact", "summary", "claim")
+DEFAULT_SNIPPET_TYPE = "fact"
+
+
+def _coerce_confidence(value: Any) -> int:
+    """Best-effort 0-100 int. Models answer with "high", 88.4, None or a list."""
+    try:
+        return min(100, max(0, int(float(value))))
+    except (TypeError, ValueError):
+        return 80
+
+
+def _coerce_position(value: Any) -> int:
+    """Best-effort 0..1 float -> integer character position."""
+    try:
+        return int(float(value) * 1000000)
+    except (TypeError, ValueError):
+        return 500000
+
+
+def _coerce_entities(value: Any) -> list:
+    if isinstance(value, list):
+        return [e for e in value if isinstance(e, str)]
+    return []
+
+
+def _record(source: str, event: str, n: int = 1) -> None:
+    """STATS.record, but a counter can never destroy a good extraction.
+
+    `record(source, event, n=1)` raised TypeError inside the extraction try
+    block on a `count=` keyword, and the fail-soft handler turned a successful
+    extraction into []. Bookkeeping must not be able to do that.
+    """
+    try:
+        STATS.record(source, event, n)
+    except Exception as exc:  # pragma: no cover - counters are best effort
+        logger.warning(f"ingest stats unavailable ({type(exc).__name__}), continuing")
 
 
 async def extract_snippets_from_article(
@@ -39,7 +88,7 @@ async def extract_snippets_from_article(
     # Truncate for LLM context
     text_for_llm = text[:8000]
 
-    llm = get_llm_client()
+    llm = await get_llm_client()
 
     prompt = f"""Extract the most important snippets from this news article. Focus on:
 1. Direct quotes from named sources
@@ -60,62 +109,123 @@ Return a JSON array of snippet objects with these fields:
 Only return the JSON array, no explanation. Maximum {max_snippets} snippets."""
 
     try:
-        response = await llm.chat.completions.create(
-            model=llm.model,
+        response = await llm.chat_completion(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=1500,
+            max_tokens=SNIPPET_MAX_TOKENS,
         )
-
-        content = response.choices[0].message.content.strip()
-
-        # Parse JSON
-        try:
-            snippets_data = json.loads(content)
-        except json.JSONDecodeError:
-            # Try to extract JSON from markdown
-            json_match = re.search(r'```json\n(.*?)\n```', content, re.DOTALL)
-            if json_match:
-                snippets_data = json.loads(json_match.group(1))
-            else:
-                logger.warning(f"Failed to parse snippet JSON: {content[:200]}")
-                return []
-
-        # Process and validate snippets
-        processed_snippets = []
-        for i, s in enumerate(snippets_data[:max_snippets]):
-            if not isinstance(s, dict):
-                continue
-
-            snippet_text = s.get("text", "").strip()
-            if not snippet_text or len(snippet_text) < 20:
-                continue
-
-            # Truncate if too long
-            if len(snippet_text) > 300:
-                snippet_text = snippet_text[:297] + "..."
-
-            # Generate minhash for dedup
-            minhash_sig = shingle_text(snippet_text, k=5)
-
-            processed_snippets.append({
-                "article_id": article_id,
-                "story_id": story_id,
-                "snippet_type": s.get("type", "quote"),
-                "text": snippet_text,
-                "entities": s.get("entities", []),
-                "minhash_signature": minhash_sig,
-                "confidence": min(100, max(0, int(s.get("confidence", 80)))),
-                "position": int(s.get("position_estimate", 0.5) * 1000000),
-            })
-
-        STATS.record("snippets", "extracted", count=len(processed_snippets))
-        return processed_snippets
-
-    except Exception as e:
-        logger.error(f"Snippet extraction failed for article {article_id}: {e}")
-        STATS.record("snippets", f"extraction_failed:error_{type(e).__name__}")
+        content = (response["choices"][0]["message"]["content"] or "").strip()
+    except Exception as exc:
+        # Provider/transport failure, or a client that is not what we think it is.
+        # Say which: an un-awaited get_llm_client() used to land here as
+        # AttributeError: 'coroutine' object has no attribute 'chat' and look
+        # identical to a quota error.
+        logger.error(
+            f"Snippet extraction provider failure for article {article_id}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        _record("snippets", f"extraction_failed:error_{type(exc).__name__}")
         return []
+
+    if not content:
+        # A reasoning model can spend the whole completion budget on reasoning
+        # and emit no answer. That is a different failure from a provider error
+        # and from a truncated response, so it gets its own event.
+        logger.warning(
+            f"Snippet extraction got empty content for article {article_id} "
+            f"(max_tokens={SNIPPET_MAX_TOKENS})"
+        )
+        _record("snippets", "empty_response")
+        return []
+
+    # _parse_json_response strips a ``` fence before json.loads; raw json.loads
+    # does not (see the note in src/verification/claims.py).
+    try:
+        snippets_data = llm._parse_json_response(content)
+    except Exception as exc:
+        logger.warning(
+            f"Failed to parse snippet JSON for article {article_id}: "
+            f"{type(exc).__name__}: {exc}; content={content[:200]!r}"
+        )
+        _record("snippets", f"parse_failed:error_{type(exc).__name__}")
+        return []
+
+    if isinstance(snippets_data, dict):
+        # Some models wrap the array in an object; accept the obvious shapes
+        # rather than dropping a good extraction on a technicality.
+        for key in ("snippets", "results", "items", "data"):
+            if isinstance(snippets_data.get(key), list):
+                snippets_data = snippets_data[key]
+                break
+        else:
+            logger.warning(
+                f"snippet JSON for article {article_id} is an object with no "
+                f"snippet array (keys={sorted(snippets_data)})"
+            )
+            _record("snippets", "parse_failed:not_a_list")
+            return []
+    if not isinstance(snippets_data, list):
+        logger.warning(
+            f"snippet JSON for article {article_id} is "
+            f"{type(snippets_data).__name__}, expected a list"
+        )
+        _record("snippets", "parse_failed:not_a_list")
+        return []
+
+    # Process and validate snippets.
+    #
+    # Every coercion below is defensive on purpose. This loop deliberately sits OUTSIDE
+    # the try blocks above (each failure mode needs its own event), which means an
+    # un-guarded int()/strip() here would raise straight out of the function -- and
+    # extract_snippets_for_story has no per-article guard, so one malformed field from
+    # one article would discard every other article's snippets for that story.
+    processed_snippets = []
+    for s in snippets_data[:max_snippets]:
+        if not isinstance(s, dict):
+            continue
+
+        raw_text = s.get("text")
+        if not isinstance(raw_text, str):
+            continue
+        snippet_text = raw_text.strip()
+        if len(snippet_text) < 20:
+            continue
+
+        # Truncate if too long
+        if len(snippet_text) > 300:
+            snippet_text = snippet_text[:297] + "..."
+
+        snippet_type = s.get("type")
+        if snippet_type not in VALID_SNIPPET_TYPES:
+            if isinstance(snippet_type, str):
+                logger.warning(
+                    f"snippet type {snippet_type!r} is not one of "
+                    f"{VALID_SNIPPET_TYPES}; storing as {DEFAULT_SNIPPET_TYPE}"
+                )
+            snippet_type = DEFAULT_SNIPPET_TYPE
+
+        processed_snippets.append({
+            "article_id": article_id,
+            "story_id": story_id,
+            "snippet_type": snippet_type,
+            "text": snippet_text,
+            "entities": _coerce_entities(s.get("entities")),
+            # shingle_text returns a Set[str], and Snippet.minhash_signature is a JSON
+            # column (models.py:516) -- so handing it the raw set makes the INSERT fail
+            # with "Object of type set is not JSON serializable". That killed every write
+            # even once the un-awaited client was fixed. sorted() keeps it deterministic,
+            # which matters because this value is a dedup input.
+            "minhash_signature": sorted(shingle_text(snippet_text, k=5)),
+            "confidence": _coerce_confidence(s.get("confidence", 80)),
+            "position": _coerce_position(s.get("position_estimate", 0.5)),
+        })
+
+    _record("snippets", "extracted", len(processed_snippets))
+    if not processed_snippets:
+        # The response parsed and had entries, but none survived validation. That is a
+        # different problem from a parse failure and worth its own count.
+        _record("snippets", "no_valid_snippets")
+    return processed_snippets
 
 
 async def extract_snippets_for_story(
