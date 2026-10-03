@@ -152,10 +152,15 @@ TIER2_DOMAINS = {
     "csis.org",
     "who.int",
     "chicagotribune.com",
-    # Regional blind-spot sources added 2026-10-02 (batch-coverage). Each was
-    # enabled in source_registry.py the same day with a live-verified working
-    # feed (measured item counts in the registry comments), which is the
-    # membership rule for this set.
+    # Regional blind-spot sources added 2026-10-02 (batch-coverage), each
+    # live-verified on that day through the repo's own fetcher and parser.
+    # NOTE this set has never been perfectly in sync with the registry (it
+    # already listed chicagotribune.com, which the registry has disabled), and
+    # scmp.com below is deliberately in that state: its FEED is verified working
+    # (200, 50 items) but every article page 403s, so the registry disables it
+    # while this set keeps the tier classification an article would earn if it
+    # ever arrived. Membership here is a claim about the outlet, enabled=False
+    # there is a claim about what we can actually ingest.
     "allafrica.com",
     "un.org",
     "scmp.com",
@@ -165,6 +170,10 @@ TIER2_DOMAINS = {
     "trend.az",
     "premiumtimesng.com",
     "nation.africa",
+    "reliefweb.int",
+    # thenewhumanitarian.org is deliberately NOT here: its only feed is stale
+    # (newest item 2026-07-01 on 2026-10-02), so it is not a "verified working
+    # feed" and TIER2_DOMAINS documents that set. See source_registry.py.
     # Disabled (2026-09-28): 0 ok articles across 2-3 runs; circuit breaker trips every run
     # "nytimes.com",
     # "washingtonpost.com",

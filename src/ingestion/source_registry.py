@@ -104,7 +104,15 @@ TIER1_SOURCES = {
         category=SourceCategory.BROADCASTER,
         rss_urls=[
             "https://rss.dw.com/rdf/rss-en-all",
-            "https://rss.dw.com/rdf/rss-en-europe",
+            # Was rss-en-europe, which is dead in the exact shape this batch
+            # exists to catch: HTTP 200, 28-byte body, "Error: no feed by that
+            # name." Verified 2026-10-02 by probing 9 DW variants: -europe, -eco,
+            # -sci, -de, -allsects, -europa and -pol all return that identical
+            # error body, and rss.dw.com/xml/rss-en-all is a byte-identical feed
+            # to rss-en-all above, so this entry contributed one error and one
+            # duplicate. rss-en-world is the same desk's live feed: HTTP 200, RDF
+            # 1.0, 11 items, 11 dated, 11 within 48h, newest 2026-10-02T16:39Z.
+            "https://rss.dw.com/rdf/rss-en-world",
         ],
         geographic_focus="Global",
         language="en",
@@ -791,7 +799,71 @@ TIER2_SOURCES = {
         bias_rating="center",
         owner_group="Nation Media Group",
         fetch_priority=1,
-        notes="Kenya national desk. 25 items, all within 48h on 2026-10-02.",
+        notes="Kenya national desk. 25 items, all within 48h on 2026-10-02. The feed mixes the /news/ desk with /blogs-opinion/ and the opinion items extract 0 chars of body (checked 3 live on 2026-10-02: 2 opinion items empty, the /news/ item 3920 chars), so those get skipped by MIN_BODY_CHARS rather than stored empty. Not a reason to disable: the news desk ingests.",
+    ),
+
+    # ReliefWeb (UN OCHA). The humanitarian wire the AID topic group is about,
+    # and the only door to per-crisis situation reports: every item is an OCHA
+    # or partner update on a named emergency, which is exactly the shape the
+    # corroboration gate wants (two owners, same crisis) and exactly what the
+    # general-interest wires do not produce.
+    # Verified 2026-10-02: HTTP 200, RSS 2.0, 20 items, 20 dated, 20 within
+    # 48h, newest 2026-10-02T20:09Z (6h old at the time of checking). Served
+    # with RFC-822 dates, not ISO, so the freshness math needs parsedate.
+    # /updates/rss?view=headlines is 404 and the api.reliefweb.int RSS route is
+    # 410 Gone; /updates/rss.xml is the live one.
+    # First three headlines: "DR Congo: Humanitarian Dashboard (July 2026)",
+    # "Mexico: Latin America & The Caribbean Weekly Situation Update as of
+    # 2 October 2026", plus a Nigeria item.
+    "reliefweb.int": SourceConfig(
+        domain="reliefweb.int",
+        name="ReliefWeb (UN OCHA)",
+        tier=SourceTier.TIER2,
+        # OTHER, not WIRE_SERVICE: WIRE_SERVICE is load-bearing in
+        # src/verification/corroboration.py (wire items collapse to one owner so
+        # one agency cannot corroborate itself), and every item here comes from
+        # OCHA or a named partner, so marking it a wire would make the whole feed
+        # one owner. Keeping it OTHER leaves that judgement to the evidence.
+        category=SourceCategory.OTHER,
+        geographic_focus="Global",
+        language="en",
+        rss_urls=[
+            "https://reliefweb.int/updates/rss.xml",
+        ],
+        reliability_score=0.93,
+        bias_rating="center",
+        owner_group="United Nations OCHA",
+        fetch_priority=1,
+        notes="UN OCHA humanitarian updates wire. 20 items, all within 48h on 2026-10-02. Situation reports rather than news, so expect documents as well as articles.",
+    ),
+
+    # The New Humanitarian. Left in the registry, disabled, because the only feed
+    # it publishes is stale and the alternative URLs are refused. Recorded rather
+    # than deleted so the next person does not re-run the search.
+    # Verified 2026-10-02: /rss.xml answers HTTP 200, RSS 2.0, 10 items, 10
+    # dated - but the NEWEST item is 2026-07-01T14:50Z, 2243h (93 days) old, and
+    # 0 of 10 are within 48h. /rss, /news/rss, /news/rss.xml and /atom.xml all
+    # 403, /rss/latest 404s, and ?page=1 / ?pagesize=20 return the identical
+    # stale 12438-byte body, so there is no fresher feed behind it. Enabling it
+    # would inject quarter-old articles into a pipeline that treats feed items
+    # as news, so it stays off until the publisher revives it. Re-verify before
+    # ever re-enabling: the test is the newest item's age, not the item count.
+    "thenewhumanitarian.org": SourceConfig(
+        domain="thenewhumanitarian.org",
+        name="The New Humanitarian",
+        tier=SourceTier.TIER2,
+        category=SourceCategory.OTHER,
+        rss_urls=[
+            "https://www.thenewhumanitarian.org/rss.xml",
+        ],
+        geographic_focus="Global",
+        language="en",
+        reliability_score=0.88,
+        bias_rating="center-left",
+        owner_group="The New Humanitarian",
+        fetch_priority=2,
+        enabled=False,
+        notes="Disabled 2026-10-02: the only published feed is stale (200, 10 items, newest 2026-07-01, 93 days old, 0 within 48h); /rss, /news/rss, /atom.xml 403 and /rss/latest 404s. Article bodies are unreachable too: 3 of 3 sampled items extracted 0 chars.",
     ),
 }
 
