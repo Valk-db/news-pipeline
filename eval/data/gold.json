@@ -15,6 +15,11 @@
  ],
  "items": {
   "000413bd-fc2b-4977-991f-a1dac4b66049": {
+   "stratum": "en-short",
+   "detected_language": "en",
+   "source_domain": "theguardian.com",
+   "title": "Andy Burnham 'prepared' to deliver radical change despite economic challenges – video",
+   "body_chars": 399,
    "labeler_notes": "en-short; 399 chars. A Guardian video stub. The only two sentences that carry information are the who/what and the quoted stance.",
    "snippets": [
     {
@@ -42,6 +47,11 @@
    ]
   },
   "25c0a5d0-a51e-4f61-b06f-26b2c7399f2a": {
+   "stratum": "en-short",
+   "detected_language": "en",
+   "source_domain": "gdacs.org",
+   "title": "Green flood alert in Guinea",
+   "body_chars": 399,
    "labeler_notes": "en-short; templated GDACS bulletin. Highest-value fields are the event identity, the severity/alert level and the casualty/impact counts.",
    "snippets": [
     {
@@ -78,6 +88,11 @@
    ]
   },
   "8a5bb853-23e1-4993-aa94-5b6b6dab170b": {
+   "stratum": "en-short",
+   "detected_language": "en",
+   "source_domain": "aljazeera.com",
+   "title": "Lawyers for US inmate who survived lethal injections demand release",
+   "body_chars": 399,
    "labeler_notes": "en-short; 399 chars of Al Jazeera NewsFeed stub with a duplicated headline. Substance is the lawyer's quoted condition and the commutation request.",
    "snippets": [
     {
@@ -103,6 +118,11 @@
    ]
   },
   "f661e434-303d-4941-bb3e-58a94ddbe9ee": {
+   "stratum": "en-medium",
+   "detected_language": "en",
+   "source_domain": "npr.org",
+   "title": "Trade tensions mean fewer Canadians flocking to South Florida",
+   "body_chars": 2997,
    "labeler_notes": "en-medium; NPR reported feature. Every load-bearing sentence is a number, so the gold is stat-heavy with two quotes for the human texture.",
    "snippets": [
     {
@@ -163,6 +183,11 @@
    ]
   },
   "6d83ad82-5821-47d8-a8b9-b5f193fb0cb4": {
+   "stratum": "en-medium",
+   "detected_language": "en",
+   "source_domain": "reddit.com",
+   "title": "Japan forms first national intelligence agency, eyes its own CIA",
+   "body_chars": 2995,
    "labeler_notes": "en-medium; UGC submission reporting a Japanese policy announcement. Mix of one hard fact (the agency), one quote, one named-official detail and one unverified espionage allegation.",
    "snippets": [
     {
@@ -224,6 +249,11 @@
    ]
   },
   "4e060fae-4189-4441-bc64-49e9a3e8f0df": {
+   "stratum": "en-medium",
+   "detected_language": "en",
+   "source_domain": "bbc.com",
+   "title": "NY's governor appoints special prosecutor in Cornell frat rape investigation",
+   "body_chars": 2993,
    "labeler_notes": "en-medium; BBC. Classic quote/stat/claim mix around a named prosecutor. The seven-men allegation is the load-bearing claim.",
    "snippets": [
     {
@@ -285,6 +315,11 @@
    ]
   },
   "2df23db2-6b1b-4577-a131-b801e20c4d16": {
+   "stratum": "en-long",
+   "detected_language": "en",
+   "source_domain": "npr.org",
+   "title": "How Ukrainians are coping with new, more deadly Russian attacks",
+   "body_chars": 46967,
    "labeler_notes": "en-long; NPR Fresh Air transcript, 46967 chars total, only the first 8000 labeled because that is the whole window the model gets. Transcript dialogue, so quotes dominate.",
    "snippets": [
     {
@@ -348,6 +383,11 @@
    ]
   },
   "494e050b-4843-4b4c-95cb-690b4000590b": {
+   "stratum": "en-long",
+   "detected_language": "en",
+   "source_domain": "foreignpolicy.com",
+   "title": "The Case for Trump’s Global Strategy",
+   "body_chars": 33209,
    "labeler_notes": "en-long; Foreign Policy interview transcript, 33209 chars, first 8000 labeled. Contains the passage the fetcher duplicated (lines repeat verbatim in the raw body) -- a real data defect worth noting, but the labels are unaffected.",
    "snippets": [
     {
@@ -1463,6 +1503,769 @@
       348
      ],
      "note": "China's position on sharing versus concentration of AI."
+    }
+   ]
+  },
+  "495ef9d1-68b4-469b-ac58-fd06a2855b64": {
+   "stratum": "en-long",
+   "detected_language": "en",
+   "source_domain": "reddit.com",
+   "title": "Who’s the Shadow President?",
+   "body_chars": 32177,
+   "sheet_block": 22,
+   "labeler_notes": "32177-char podcast transcript on Russell Vought. Only the first 8000 chars are labeled. Transcript with speaker tags and ARCHIVAL TAPE lines; the pulldown-quote lines (631, 649 in other blocks) are repeated excerpts of earlier lines, not new information, so they are not labeled here even when they fall inside the window.",
+   "snippets": [
+    {
+     "text": "Reporter Andy Kroll got his hands on secret tapes of a low-profile bureaucrat named Russell Vought. Turns out, as director of the Office of Management and Budget, he’s been quietly reshaping the federal government and commanding many of the second Trump administration’s biggest moves.",
+     "type": "fact",
+     "entities": [
+      "Andy Kroll",
+      "Russell Vought",
+      "Office of Management and Budget"
+     ],
+     "confidence": 90,
+     "position": 0.0015,
+     "sheet_lines": [
+      497,
+      497
+     ],
+     "note": "The show description states the entire thesis in one sentence."
+    },
+    {
+     "text": "In more ways than I can keep track of, the federal government has changed dramatically. The White House has ignored Congress, carried out its agenda both at home and around the world without much regard for the norms of checks and balances. Agencies like USAID have been dismantled.",
+     "type": "fact",
+     "entities": [
+      "USAID",
+      "ICE",
+      "Andy Kroll"
+     ],
+     "confidence": 85,
+     "position": 0.1412,
+     "sheet_lines": [
+      "at",
+      504,
+      "In more ways than I can keep track",
+      300
+     ],
+     "note": "The named agencies said to have been dismantled or expanded; the concrete institutional content of the setup."
+    },
+    {
+     "text": "ARCHIVAL TAPE, 2024 Vought speech: The stark reality in America is that we are in the late stages of a complete Marxist takeover of the country.",
+     "type": "quote",
+     "entities": [
+      "Russell Vought"
+     ],
+     "confidence": 90,
+     "position": 0.4442,
+     "sheet_lines": [
+      523,
+      523
+     ],
+     "note": "The most striking verbatim line from the secret tapes; the single most quotable thing in the window."
+    },
+    {
+     "text": "ARCHIVAL TAPE, 2023 Vought speech: We want the bureaucrats to be traumatically affected. We want— when they wake up in the morning, we want them to not wanna go to work.",
+     "type": "quote",
+     "entities": [
+      "Russell Vought"
+     ],
+     "confidence": 90,
+     "position": 0.5583,
+     "sheet_lines": [
+      531,
+      531
+     ],
+     "note": "The remark the reporter says hit him like a bag of bricks."
+    },
+    {
+     "text": "Vought’s official title is director of the Office of Management and Budget. But Andy says there’s an easier way to think about him: the shadow president.",
+     "type": "fact",
+     "entities": [
+      "Russell Vought",
+      "Office of Management and Budget"
+     ],
+     "confidence": 85,
+     "position": 0.7594,
+     "sheet_lines": [
+      537,
+      537
+     ],
+     "note": "The framing device of the whole series, stated plainly."
+    }
+   ]
+  },
+  "7d949a9b-191f-41b3-9a23-0fe55bf227bc": {
+   "stratum": "wire-cable",
+   "detected_language": "en",
+   "source_domain": "allafrica.com",
+   "title": "Ethiopia: Who Gets to Author Ethiopia's Political Order? Why the Crisis Is About More Than Identity Politics",
+   "body_chars": 21211,
+   "sheet_block": 23,
+   "labeler_notes": "21211-char essay wire-carried on allafrica.com; the model sees the first 8000. It is an argument, not reported news, so claim/stat dominate over quote: there is no named human source with a direct quote in the window.",
+   "snippets": [
+    {
+     "text": "The thesis here is that Ethiopia's crisis is better understood as an unresolved foundational bargain: the basic settlement that determines membership, territory, land and resources, authority, and protection.",
+     "type": "claim",
+     "entities": [
+      "Oromo"
+     ],
+     "confidence": 90,
+     "position": 0.1079,
+     "sheet_lines": [
+      "at",
+      557,
+      "The thesis here is that",
+      300
+     ],
+     "note": "The thesis sentence, verbatim. This IS the article."
+    },
+    {
+     "text": "This is an interpretive historical argument based on scholarship, Oromo historiography, constitutional texts, human-rights documentation, and institutional reports rather than new field data.",
+     "type": "fact",
+     "entities": [
+      "Oromo"
+     ],
+     "confidence": 85,
+     "position": 0.2249,
+     "sheet_lines": [
+      "at",
+      560,
+      "This is an interpretive",
+      300
+     ],
+     "note": "The author's own disclosure of method and standpoint; a careful editor keeps the caveat with the argument."
+    },
+    {
+     "text": "Asmarom Legesse documents Gadaa as an internally generated political order with deliberative assemblies, rotating leadership, checks on power, and public accountability. Its marginalization was therefore a loss of recognized political authority, not merely cultural loss.",
+     "type": "fact",
+     "entities": [
+      "Asmarom Legesse",
+      "Gadaa"
+     ],
+     "confidence": 85,
+     "position": 0.4895,
+     "sheet_lines": [
+      "at",
+      565,
+      "Asmarom Legesse",
+      300
+     ],
+     "note": "The named scholarly source and the institution at stake."
+    },
+    {
+     "text": "The 1974 revolution abolished the monarchy, nationalized land, and proclaimed equality, but the Derg remained centralized and militarized.",
+     "type": "stat",
+     "entities": [
+      "Derg"
+     ],
+     "confidence": 80,
+     "position": 0.6904,
+     "sheet_lines": [
+      "at",
+      568,
+      "The 1974 revolution",
+      300
+     ],
+     "note": "1974 revolution as a dated historical reference point."
+    },
+    {
+     "text": "The 1995 Constitution made those commitments explicit.",
+     "type": "fact",
+     "entities": [
+      "1995 Constitution",
+      "Oromo",
+      "Sidama",
+      "Wolaita",
+      "Anuak"
+     ],
+     "confidence": 85,
+     "position": 0.8415,
+     "sheet_lines": [
+      "at",
+      570,
+      "The 1995 Constitution",
+      300
+     ],
+     "note": "The constitutional commitments and the named nations; the load-bearing legal reference in the window."
+    }
+   ]
+  },
+  "5fb896b1-0aad-44a6-977d-8d3e9ddf1f80": {
+   "stratum": "wire-cable",
+   "detected_language": "en",
+   "source_domain": "middleeasteye.net",
+   "title": "Inside Somaliland: The Israel-Turkey clash coming to the Horn of Africa",
+   "body_chars": 15327,
+   "sheet_block": 24,
+   "labeler_notes": "15327-char Middle East Eye reported feature on Somaliland. Named interviewees with direct quotes, which is what the prompt's first criterion is for. Note the newsletter promo line (584/585) and the scene-setting paragraphs are not labeled.",
+   "snippets": [
+    {
+     "text": "Israel’s recognition of Somaliland has been framed as giving it a launchpad to strike Yemen’s Houthis across the Red Sea, but Israel could also be on a collision course with an even more strategic foe and US ally in the Horn of Africa: Turkey.",
+     "type": "fact",
+     "entities": [
+      "Somaliland",
+      "Israel",
+      "Houthis",
+      "Turkey"
+     ],
+     "confidence": 90,
+     "position": 0.009,
+     "sheet_lines": [
+      579,
+      579
+     ],
+     "note": "The nut graf: the thesis about Turkey, not the Houthis."
+    },
+    {
+     "text": "“We need air defence systems,” Mohamed Osman Fadal, a senior foreign affairs advisor to Somaliland’s president, said in an interview. “Turkey has F-16s in Mogadishu, and it wants to build a drone base in Somalia.”",
+     "type": "quote",
+     "entities": [
+      "Mohamed Osman Fadal",
+      "Turkey"
+     ],
+     "confidence": 90,
+     "position": 0.0983,
+     "sheet_lines": [
+      582,
+      582
+     ],
+     "note": "Named senior advisor, direct quote, with the specific military facts (F-16s, drone base) inside it."
+    },
+    {
+     "text": "“We have been too good,” he said. “We had been reaching out to Arab and Muslim countries for recognition since 1991. We had to move on. Israel recognised a gap here. We are proud to partner with the Israelis.\"",
+     "type": "quote",
+     "entities": [
+      "Mohamed Abdirahman Hassan"
+     ],
+     "confidence": 90,
+     "position": 0.2589,
+     "sheet_lines": [
+      590,
+      590
+     ],
+     "note": "The foreign minister's own account of why they moved; the most quotable line in the piece."
+    },
+    {
+     "text": "“The Houthis are not terrorists like al-Shabab. We reject that label. We are against confrontation in Yemen. The Houthis need to be engaged,” Hassan said.",
+     "type": "quote",
+     "entities": [
+      "Mohamed Abdirahman Hassan",
+      "Houthis"
+     ],
+     "confidence": 85,
+     "position": 0.4853,
+     "sheet_lines": [
+      598,
+      598
+     ],
+     "note": "Direct quote that contradicts the conventional framing, so a reader needs it verbatim."
+    },
+    {
+     "text": "A lot of people think Israel and Turkey are gearing up for a fight, but there are too many eyes on Syria. The Horn could be where they test each other because it’s so out of the way.",
+     "type": "quote",
+     "entities": [
+      "Israel",
+      "Turkey",
+      "Syria"
+     ],
+     "confidence": 85,
+     "position": 0.5725,
+     "sheet_lines": [
+      "at",
+      603,
+      "A lot of people think Israel and Turkey",
+      300
+     ],
+     "note": "The attributed assessment that supplies the analysis."
+    }
+   ]
+  },
+  "ecc42ead-d7fa-4b6f-8f60-e2eadf881ba9": {
+   "stratum": "institutional",
+   "detected_language": "en",
+   "source_domain": "foreignaffairs.com",
+   "title": "The Trouble With the Nuclear-AI Analogy",
+   "body_chars": 28174,
+   "sheet_block": 25,
+   "labeler_notes": "28174-char Foreign Affairs argument about the nuclear-AI analogy. Dense with named executive quotes and hard historical numbers. The model sees the first 8000 chars only.",
+   "snippets": [
+    {
+     "text": "In humanity’s quest to constrain the dangers from fast-advancing artificial intelligence, many have looked to the most revolutionary technology that preceded it: nuclear weapons. SpaceX CEO Elon Musk has called artificial intelligence “far more dangerous than nukes.",
+     "type": "quote",
+     "entities": [
+      "Elon Musk",
+      "Dario Amodei",
+      "Sam Altman",
+      "John Ratcliffe"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      "at",
+      622,
+      "In humanity’s quest",
+      300
+     ],
+     "note": "Four named executives making the analogy the article examines. Highest-value quote block in the piece."
+    },
+    {
+     "text": "Recent disclosures by OpenAI, Anthropic, Google, and Meta that their advanced models escaped testing environments and gained unauthorized access to the Internet have raised alarm in Washington about the risks of frontier AI. But the implications of these incidents remain ambiguous.",
+     "type": "fact",
+     "entities": [
+      "OpenAI",
+      "Anthropic",
+      "Google",
+      "Meta"
+     ],
+     "confidence": 90,
+     "position": 0.2665,
+     "sheet_lines": [
+      "at",
+      625,
+      "Recent disclosures by OpenAI",
+      300
+     ],
+     "note": "The concrete recent incident the abstract-risk argument rests on, with four named companies."
+    },
+    {
+     "text": "In a 1953 speech to the United Nations, then U.S.",
+     "type": "stat",
+     "entities": [
+      "Dwight Eisenhower",
+      "United Nations"
+     ],
+     "confidence": 85,
+     "position": 0.5159,
+     "sheet_lines": [
+      "at",
+      628,
+      "In a 1953 speech",
+      300
+     ],
+     "note": "1953 'Atoms for Peace'; the dated precedent the author treats as the success story."
+    },
+    {
+     "text": "In 1963, President John F. Kennedy predicted that 15 to 25 states would become nuclear powers in the following decade, and many senior U.S. leaders believed a nuclear war was inevitable.",
+     "type": "stat",
+     "entities": [
+      "John F. Kennedy",
+      "NPT",
+      "IAEA"
+     ],
+     "confidence": 90,
+     "position": 0.5605,
+     "sheet_lines": [
+      "at",
+      629,
+      "In 1963, President John F. Kennedy",
+      300
+     ],
+     "note": "15 to 25 predicted nuclear powers, then nine actual. The sharpest quantified claim in the window."
+    },
+    {
+     "text": " That no frontier AI model has yet caused a catastrophe may well be luck.",
+     "type": "claim",
+     "entities": [],
+     "confidence": 90,
+     "position": 0.7788,
+     "sheet_lines": [
+      631,
+      631
+     ],
+     "note": "The article's one-line thesis as a standalone pull quote: that the absence of catastrophe is luck, not design."
+    }
+   ]
+  },
+  "e3460dc7-1957-4e17-846f-1bd8f0e75ea9": {
+   "stratum": "institutional",
+   "detected_language": "en",
+   "source_domain": "foreignaffairs.com",
+   "title": "Rewiring the Arsenal of Democracy",
+   "body_chars": 24277,
+   "sheet_block": 26,
+   "labeler_notes": "24277-char Foreign Affairs argument on defense interoperability. Long paragraphs, so most snippets are partial lines. The repeated pull quote at line 649 is a duplicate of line 646 and is deliberately NOT labeled, which is a useful adversarial case for the matcher.",
+   "snippets": [
+    {
+     "text": "The post–Cold War international order slowly withered for decades, but it reached a clear inflection point on June 1, 2025. On that day, Ukraine deployed less than a million dollars’ worth of hobby-shop technology to destroy Russian strategic bombers worth billions. Russia’s exquisite air defenses a",
+     "type": "fact",
+     "entities": [
+      "Operation Spider's Web",
+      "Ukraine",
+      "Russia"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      "head",
+      639,
+      300
+     ],
+     "note": "Dated inflection point with the cost asymmetry (under a million dollars vs billions); the article's trigger event."
+    },
+    {
+     "text": "This model generally involves U.S. defense companies creating small batches of exquisite equipment that is operated with proprietary, siloed software. Allies would purchase this equipment and combine it with their own nation’s military offerings, wherever possible.",
+     "type": "fact",
+     "entities": [],
+     "confidence": 80,
+     "position": 0.3609,
+     "sheet_lines": [
+      "at",
+      644,
+      "This model generally involves",
+      300
+     ],
+     "note": "The description of the Cold War industrial model being described, i.e. the status quo being argued against."
+    },
+    {
+     "text": "This complacency led to the level of unpreparedness that U.S. President Donald Trump inherited last year. The U.S.-led defense architecture had successfully deterred large-scale conflict for decades, but the U.S. Army in 2025 looked shockingly similar to that of 1975.",
+     "type": "fact",
+     "entities": [
+      "Donald Trump",
+      "U.S. Army"
+     ],
+     "confidence": 85,
+     "position": 0.4718,
+     "sheet_lines": [
+      "at",
+      646,
+      "This complacency led to",
+      300
+     ],
+     "note": "The unpreparedness diagnosis, attributed and dated."
+    },
+    {
+     "text": " The U.S. Army in 2025 looked shockingly similar to that of 1975.",
+     "type": "quote",
+     "entities": [
+      "U.S. Army"
+     ],
+     "confidence": 80,
+     "position": 0.6893,
+     "sheet_lines": [
+      649,
+      649
+     ],
+     "note": "The pull-quote line, kept as its own gold item precisely because it duplicates text inside snippet 3 above: a correct extractor should not be penalised for finding it, and a matching bug would show up here."
+    },
+    {
+     "text": "The Ukrainian soldiers, by contrast, were able to monitor threats and activate offensive and defensive capabilities from one system, on one screen, and with just a few keystrokes.",
+     "type": "fact",
+     "entities": [
+      "Ukraine",
+      "Russia"
+     ],
+     "confidence": 85,
+     "position": 0.7914,
+     "sheet_lines": [
+      "at",
+      651,
+      "The Ukrainian soldiers",
+      300
+     ],
+     "note": "The first-hand observation contrast between Ukrainian and allied systems; the author's own reporting."
+    }
+   ]
+  },
+  "91f5f5a3-6cd4-45ab-acfd-e5f921a6c2e9": {
+   "stratum": "ugc-reddit",
+   "detected_language": "en",
+   "source_domain": "reddit.com",
+   "title": "Palestinians Want a Two-State Solution",
+   "body_chars": 21787,
+   "sheet_block": 27,
+   "labeler_notes": "21787-char survey write-up (Arab Barometer) carried on reddit.com. This is the most number-dense article in the corpus, so the gold is almost entirely stat. The pull quote at 669 duplicates 663/671 and is not labeled.",
+   "snippets": [
+    {
+     "text": "In September 2025, U.S. President Donald Trump unveiled a peace plan to end the war in Gaza, vowing it would not only rebuild the devastated territory but also usher in “eternal peace in the Middle East.” A year later, the plan has stalled. Hamas has not disarmed.",
+     "type": "fact",
+     "entities": [
+      "Donald Trump",
+      "Hamas",
+      "Israel",
+      "Benjamin Netanyahu"
+     ],
+     "confidence": 85,
+     "position": 0.0,
+     "sheet_lines": [
+      "at",
+      660,
+      "In September 2025, U.S. President Donald Trump",
+      300
+     ],
+     "note": "The situation summary with the specific stalemate claims."
+    },
+    {
+     "text": "Seventy-two percent said they believed Palestinians were “moderately or very opposed” to any peace negotiations, and over 80 percent said they believed Palestinians thought no peace with Israel was achievable.",
+     "type": "stat",
+     "entities": [
+      "Tel Aviv University"
+     ],
+     "confidence": 90,
+     "position": 0.1807,
+     "sheet_lines": [
+      "at",
+      661,
+      "Seventy-two percent",
+      300
+     ],
+     "note": "72 percent and 80 percent poll figures; the perception gap the whole piece rests on."
+    },
+    {
+     "text": "Our most recent broad survey, conducted in October 2025, showed that a majority of Palestinians regard diplomatic negotiations, not armed resistance, as the best way to resolve the Israeli-Palestinian conflict for good;",
+     "type": "stat",
+     "entities": [
+      "Arab Barometer",
+      "PCPSR"
+     ],
+     "confidence": 90,
+     "position": 0.2401,
+     "sheet_lines": [
+      "at",
+      662,
+      "Our most recent broad survey",
+      300
+     ],
+     "note": "Method plus finding: October 2025 survey, cross-checked by PCPSR. Both the number and its provenance."
+    },
+    {
+     "text": "The survey polled 855 people in Gaza face-to-face in the respondents’ homes, shelters, or camps, and 800 in the West Bank face-to-face in the respondents’ homes.",
+     "type": "stat",
+     "entities": [
+      "Arab Barometer",
+      "Gaza",
+      "West Bank"
+     ],
+     "confidence": 90,
+     "position": 0.5299,
+     "sheet_lines": [
+      "at",
+      666,
+      "The survey polled 855 people",
+      300
+     ],
+     "note": "Sample sizes 855 and 800; the most checkable methodological number in the article."
+    },
+    {
+     "text": "In our survey, 85 percent of Gazans indicated that they had been displaced at least once since early October 2023. Among those who had been displaced, 70 percent had been uprooted three or more times.",
+     "type": "stat",
+     "entities": [
+      "Gaza",
+      "OCHA"
+     ],
+     "confidence": 90,
+     "position": 0.6438,
+     "sheet_lines": [
+      "at",
+      667,
+      "In our survey, 85 percent",
+      300
+     ],
+     "note": "The dense humanitarian-statistics paragraph: displacement, employment, food, electricity, fuel. The single most useful snippet in the article."
+    }
+   ]
+  },
+  "b487581e-fc63-4ba1-ab75-7f570e3c986c": {
+   "stratum": "ugc-reddit",
+   "detected_language": "en",
+   "source_domain": "reddit.com",
+   "title": "Amnesty urges Iran to halt flogging of female singer Parastoo Ahmadi",
+   "body_chars": 21166,
+   "sheet_block": 28,
+   "labeler_notes": "21166-char rolling-news digest on reddit.com covering three unrelated stories (Amnesty/Iran, Trump on the war, Houthi resupply) plus a fourth on the Basij. Headline is only the first story. This is the hardest gold in the set: a correct extractor should concentrate on the story the headline names, and the harness will show whether it does.",
+   "snippets": [
+    {
+     "text": "Amnesty International on Thursday called on Iranian authorities to immediately halt plans to flog singer Parastoo Ahmadi and eight others over a livestreamed 2024 concert in which she performed without a hijab and sang in public despite Iran’s ban on solo performances by women.",
+     "type": "fact",
+     "entities": [
+      "Amnesty International",
+      "Parastoo Ahmadi",
+      "Iran"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      676,
+      676
+     ],
+     "note": "The headline story, stated completely: who Amnesty called on, over what, and why."
+    },
+    {
+     "text": "The rights group said Ahmadi and the others were each sentenced in June to 74 lashes, a two-year travel ban and a two-year ban on artistic activities. An appeals court in Qom upheld the convictions and sentences on Sept. 25, making the rulings final and enforceable.",
+     "type": "stat",
+     "entities": [
+      "Parastoo Ahmadi",
+      "Qom"
+     ],
+     "confidence": 90,
+     "position": 0.0349,
+     "sheet_lines": [
+      677,
+      677
+     ],
+     "note": "74 lashes, two-year travel ban, two-year artistic ban, upheld on a specific date. The hard numbers of the lead story."
+    },
+    {
+     "text": "Amnesty described flogging as “cruel, inhuman and degrading punishment” that violates the absolute prohibition on torture and other ill-treatment.",
+     "type": "quote",
+     "entities": [
+      "Amnesty International"
+     ],
+     "confidence": 85,
+     "position": 0.0683,
+     "sheet_lines": [
+      678,
+      678
+     ],
+     "note": "Amnesty's own quoted characterization of the punishment."
+    },
+    {
+     "text": "\"I've destroyed their nuclear capability. I've destroyed their navy, 159 ships are at the bottom of the sea. I've destroyed their air force. All their planes are gone. I've destroyed their radar,\" he said.",
+     "type": "quote",
+     "entities": [
+      "Donald Trump"
+     ],
+     "confidence": 90,
+     "position": 0.3679,
+     "sheet_lines": [
+      696,
+      696
+     ],
+     "note": "The most quotable Trump line in the digest, with 159 ships, a concrete number inside the quote."
+    },
+    {
+     "text": "He said Iranian authorities had killed between 72,000 and 75,000 protesters in protests earlier this year.",
+     "type": "stat",
+     "entities": [
+      "Donald Trump",
+      "Iran"
+     ],
+     "confidence": 85,
+     "position": 0.4846,
+     "sheet_lines": [
+      703,
+      703
+     ],
+     "note": "72,000 to 75,000 protesters killed; the most consequential unverified figure in the article and therefore the one a careful editor must surface rather than bury."
+    }
+   ]
+  },
+  "43b9116f-6c44-4375-824f-e0b5d20a0f1c": {
+   "stratum": "sensor-alert",
+   "detected_language": "en",
+   "source_domain": "gdacs.org",
+   "title": "Green notification for tropical cyclone CHOI-WAN-26. Population affected by Category 1 (120 km/h) wind speeds or higher is 0 (0 in Tropical Storm).",
+   "body_chars": 647,
+   "sheet_block": 29,
+   "labeler_notes": "647-char GDACS templated bulletin, one line. A careful editor keeps the event identity and the impact numbers; the URL is boilerplate. Note the internal inconsistency in the source (title says Category 1 120 km/h, body says Tropical Storm maximum wind 194 km/h) -- recorded, not fixed.",
+   "snippets": [
+    {
+     "text": "GDACS reported a tropical cyclone event (TC1001332). Alert level: Green. Severity: Tropical Storm (maximum wind speed of 194 km/h). Country: Northern Mariana Islands (MNP). Coordinates 17.0000 latitude, 144.7000 longitude. Published at 2026-09-30T02:12:11+00:00.",
+     "type": "fact",
+     "entities": [
+      "GDACS",
+      "Northern Mariana Islands"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      "at",
+      734,
+      "GDACS reported a tropical cyclone event",
+      300
+     ],
+     "note": "Event id, alert level, severity, country: the identity of the event in one span."
+    },
+    {
+     "text": "From 30/09/2026 to 02/10/2026, a Tropical Storm (maximum wind speed of 194 km/h) CHOI-WAN-26 was active in NWPacific. The cyclone affects these countries: Northern Mariana Islands (vulnerability Medium).",
+     "type": "stat",
+     "entities": [
+      "CHOI-WAN-26"
+     ],
+     "confidence": 90,
+     "position": 0.4065,
+     "sheet_lines": [
+      "at",
+      734,
+      "From 30/09/2026 to 02/10/2026",
+      300
+     ],
+     "note": "Active window, wind speed, basin, affected country and vulnerability: the machine-readable payload."
+    },
+    {
+     "text": "Estimated population affected by category 1 (120 km/h) wind speeds or higher is 0 (0 in tropical storm). Detail page: https://www.gdacs.org/report.aspx?",
+     "type": "stat",
+     "entities": [
+      "Northern Mariana Islands"
+     ],
+     "confidence": 90,
+     "position": 0.7218,
+     "sheet_lines": [
+      "at",
+      734,
+      "Estimated population affected",
+      300
+     ],
+     "note": "The impact count. Zero, and that it is zero is the whole reason this Green alert is low value, so it must be kept."
+    }
+   ]
+  },
+  "848a40b0-f7fe-4881-aa3d-94c1820e7e52": {
+   "stratum": "sensor-alert",
+   "detected_language": "en",
+   "source_domain": "gdacs.org",
+   "title": "Drought is on going in Austria, Bosnia & Herzegovina, Belgium, Belarus, Switzerland, Czech Republic, Germany, Denmark, Spain, France, Croatia, Hungary, Ireland, Italy, Liechtenstein, Luxembourg, Moldova, Montenegro, Netherlands, Norway, Poland, Romania, Serbia, Sweden, Slovenia, Slovakia, San Marino, Ukraine,",
+   "body_chars": 640,
+   "sheet_block": 30,
+   "labeler_notes": "640-char GDACS templated drought bulletin, one line, 27 countries. Same template as block 29. The affected-area figure is the only real datum besides the alert level.",
+   "snippets": [
+    {
+     "text": "GDACS reported a drought event (DR1018332). Alert level: Orange. Severity: Medium impact for agricultural drought in 1717124 km2.",
+     "type": "fact",
+     "entities": [
+      "GDACS",
+      "Austria",
+      "Ukraine",
+      "France"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      "at",
+      739,
+      "GDACS reported a drought event",
+      300
+     ],
+     "note": "Event id, Orange alert level, severity, and the affected country list. Four named countries kept as representatives of 27."
+    },
+    {
+     "text": "Severity: Medium impact for agricultural drought in 1717124 km2.",
+     "type": "stat",
+     "entities": [],
+     "confidence": 90,
+     "position": 0.1016,
+     "sheet_lines": [
+      "at",
+      739,
+      "Severity: Medium impact for agricultural drought",
+      300
+     ],
+     "note": "The affected-area figure, 1717124 km2. The only number in the bulletin that carries magnitude."
+    },
+    {
+     "text": "Published at 2026-02-11T09:57:31+00:00. The Drought notification level is Orange. Detail page: https://www.gdacs.org/report.aspx?",
+     "type": "stat",
+     "entities": [
+      "GDACS"
+     ],
+     "confidence": 85,
+     "position": 0.7547,
+     "sheet_lines": [
+      "at",
+      739,
+      "Published at 2026-02-11",
+      300
+     ],
+     "note": "Publication timestamp plus the explicit restatement of the Orange level; a bulletin reader needs the as-of time."
     }
    ]
   }
