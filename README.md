@@ -206,21 +206,44 @@ Every schema change — **new tables**, new columns, column type changes, enum t
 
 ## Daily Budgets
 
-Two free quotas are spent against a row in `budget_counters` (`name`, `day`, `used`), not
-against anything held in memory or on disk: Groq requests (`groq_daily_request_budget`,
-900) and MyMemory translation characters (45,000, under the anonymous 50,000 limit).
+Free quotas are spent against a row in `budget_counters` (`name`, `day`, `used`), not
+against anything held in memory or on disk. Two units, because the providers enforce two
+different limits with two different numbers:
 
-Phase 2 is counted separately and in **tokens** (`groq_phase2_tokens`,
-`phase2_daily_token_cap` 40,000). Requests are the wrong unit: on 2026-10-03 dev held 16
-Groq requests against a fully spent 200,000-token day, so a request budget would have
-read 96% unspent while the quota was gone. See `DECISIONS.md`.
+- **Requests** — `groq_daily_request_budget` (900), `cerebras_daily_request_budget` (900),
+  `openrouter_{gemma,nemotron}_daily_request_budget` (200 each), and MyMemory translation
+  characters (45,000, under the anonymous 50,000 limit).
+- **Tokens** — one row per rung, named by deriving from its request row:
+  `groq_daily_token_cap` 120,000 (of Groq's published TPD 200,000, leaving 80,000 of
+  headroom for Phase 2's separate 40,000), `cerebras_daily_token_cap` 500,000,
+  `openrouter_{gemma,nemotron}_daily_token_cap` 200,000 each. Each call is charged the
+  `usage.total_tokens` the provider reported; a call whose usage could not be read is
+  charged a one-token floor and counted on a separate `<rung>_unpriced_calls` row, so a
+  figure that is a lower bound says so instead of looking exact.
+
+Phase 2 is counted separately and in tokens (`groq_phase2_tokens`,
+`phase2_daily_token_cap` 40,000) because it calls Groq through a different code path and
+must not be able to starve — or be starved by — the roster's calls. Requests are the wrong
+unit for any of this: on 2026-10-03 dev held 28 Groq requests against a fully spent
+200,000-token day, so a request budget read 97% unspent while the quota was gone. See
+`DECISIONS.md`.
 
 One statement reserves and counts, so the cap holds across processes — two ingest runs a
 day share one budget instead of each getting a full one, which is what an in-process
 counter or a file on an ephemeral runner meant in practice. A reservation is refused
 rather than allowed when the cap is reached **or** when the counter cannot be read: an
 unverifiable budget is treated as spent, because the quota is the thing that cannot be
-replenished. See `src/shared/budget.py`.
+replenished. Recording, by contrast, never refuses: a call that already happened and was
+already billed is always counted, or the day understates itself and the next gate sees
+allowance that is gone. See `src/shared/budget.py`.
+
+Ask what a day cost, per rung:
+
+```
+uv run python scripts/report_daily_cost.py            # today (UTC), exit 2 if unreadable
+uv run python scripts/report_daily_cost.py 2026-10-03
+uv run python scripts/report_daily_cost.py --json
+```
 
 ## Extending
 

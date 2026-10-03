@@ -152,3 +152,60 @@ already charged and the work was already done. Retrying the write costs nothing;
 retrying the call would have doubled the spend and, at the daily token cap, could not
 be afforded. The predicate is deliberately narrow: a duplicate key or a bad column
 must not be retried, because that would loop on a real defect.
+
+---
+
+## 2026-10-03 — Every rung is capped in tokens, and the cap is an upper bound
+
+**Decision.** Each rung in `llm_roster.ROSTER` gets a daily **token** cap alongside its
+request cap (`groq_daily_token_cap` 120,000; `cerebras_daily_token_cap` 500,000;
+`openrouter_{gemma,nemotron}_daily_token_cap` 200,000 each), enforced **both** before the
+call and after it: `ensure_headroom(upper_bound_tokens(messages, max_tokens))` refuses the
+call, and `record(usage.total_tokens)` charges what the provider actually reported. The
+token counter row name is *derived* from the rung's existing request counter
+(`token_counter_name()`), so two rungs cannot collide and one rung cannot grow a second
+name for the same spend. A call whose `usage` cannot be read is charged a one-token floor
+and counted on a separate `<rung>_unpriced_calls` row — never zero.
+
+**Evidence.** The gap was recorded in the entry above and measured live: on 2026-10-03
+dev's `groq_requests` stood at 28 while the day's 200,000 tokens were gone. The gate's
+estimate is an **upper bound**, not a guess, because `max_tokens` is the provider's own
+ceiling on the completion and the prompt side is estimated at characters/2 against
+English's ~4 chars/token; both terms over-estimate, so refusing when the bound does not
+fit is correct rather than pessimistic. Phase 2 keeps its own row (`groq_phase2_tokens`,
+40,000) because it calls Groq through a different path, and 120,000 + 40,000 = 160,000 of
+200,000 leaves 20% shared margin. Live on dev: a real call reported
+`total_tokens=115` and the row moved 0 → 115; with the day's row inflated to
+119,905/120,000 the next real call was refused **before the provider was contacted**
+(dispatch count unchanged, request row unchanged); restoring the row re-opened the gate
+for a fresh client.
+
+**Two things decided against the obvious alternative.** No reserve-and-refund: the
+statement that reserves a request has no refund primitive, so an estimate would be either
+the final charge (starving the job at half its granted budget) or a new shared decrement.
+And **recording never refuses**, which looks inconsistent with refusing on an unreadable
+counter until you follow it: refusing to record a call that already happened and was
+already billed would understate the day and make the *next* gate believe there is
+allowance left. Unreadable is "spent"; already-spent is "still counted".
+
+**Consequence for the coordinator.** If `phase2_daily_token_cap` is raised,
+`groq_daily_token_cap` has to come down, or the two rows sum past the provider's 200,000.
+That coupling is arithmetic, not a policy, so it is written down rather than enforced.
+
+## 2026-10-03 — Bind parameters that Postgres has to type, or the cap does not exist
+
+**Decision.** `budget.py`'s single spend statement declares `:amount` and `:cap` as
+`bindparam(..., type_=BigInteger)`.
+
+**Evidence.** Commit `bcff1e8` (04:08 UTC today) moved the insert path's cap predicate
+into `INSERT ... SELECT :name, :day, :amount WHERE :amount <= :cap` so that a day whose
+first spend exceeded the cap would be refused. On SQLite that is fine; on Postgres the
+statement does not parse at all — `ProgrammingError: inconsistent types deduced for
+parameter $3`, because `:amount` is typed as the target column (bigint) in the SELECT list
+and as integer in the comparison, and Postgres refuses a parameter whose two uses disagree.
+Measured live on dev through the pg tunnel against `postgresql+asyncpg`. `spend()` catches
+the error and returns `None`, which the module reads as "cap spent" and `RequestBudget`
+reads as "do not spend" — so for those two hours every daily budget on Postgres read as
+exhausted and every LLM call was refused, with the whole suite green, because the 2,000+
+budget tests all run against SQLite, which never asks the server to deduce a type. Nothing
+in the codebase is allowed to depend on a statement that only the test dialect can parse.
