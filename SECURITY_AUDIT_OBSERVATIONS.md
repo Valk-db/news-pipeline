@@ -128,7 +128,8 @@ Files this audit's fixes actually touched:
 One claim does not hold: `curation_ui/main.py` never gained the `slowapi` limiter this document
 describes — it has no such import or decorator. The dependency entry the audit says it added
 (`slowapi>=0.1`) *is* in `pyproject.toml`, and in `requirements.txt`, but nothing imports it, so
-both are dead weight awaiting removal (tracked in `AGENT_TASKS_v38.md` §3).
+both are dead weight awaiting removal. The batch task note that used to track this was scratch
+(`AGENT_TASKS_v38.md`) and is deleted; the dependency is still there, the removal is still owed.
 
 ---
 

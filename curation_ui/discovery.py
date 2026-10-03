@@ -43,8 +43,11 @@ MAP_EVENTS_MAX_LIMIT = 1000
 #
 # Everything below is read only and anonymous safe. The serializer deliberately
 # omits the curation queue's internal fields (Story.status, Story.gate_reason,
-# CuratedPost rows, claim evidence), so nothing here reports what a curator has
-# decided or is about to decide.
+# claim evidence), so nothing here reports what a curator has decided or is
+# about to decide. The retired curated_posts table used to be listed here by
+# name; it is gone from the sentence because nothing writes it any more, and a
+# reader checking this list against the models should not be sent looking for a
+# reader in code that has none.
 #
 # The story queries are filtered by the same rule the authenticated routes'
 # comments give for staying behind auth: only what a curator has approved is

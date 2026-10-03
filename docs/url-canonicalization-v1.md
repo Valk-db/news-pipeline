@@ -14,9 +14,10 @@ code path wrote the row:
      implementation is gone: the script is now a thin scheduler shim that runs
      `src.ingestion.run` as a subprocess and propagates its exit code
      (`scripts/ingest_gdelt_daily.py`, module docstring), so it has no URL code
-     at all. Its last version is kept for reference at
-     `.batch-refs/worker-ingest_gdelt_daily.REF.py`, and the comparison table
-     below is measured against that copy.
+     at all. Its last version was kept for a while as a batch scratch copy at
+     `.batch-refs/worker-ingest_gdelt_daily.REF.py` and has since been deleted;
+     the comparison table below was measured against that copy, and the copy is
+     still retrievable at commit `0d3b882` if the table ever needs re-measuring.
 
 What survives is the disagreement in the data: rows written before the shim
 replacement carry the old scheme, so the two schemes still have to be told apart
@@ -83,10 +84,10 @@ an old hash can still be answered and a lookup by a u1 hash can be traced back.
 ## Behavioral differences between the old worker scheme and u1
 
 Every row below was produced by running both implementations over the same input.
-The worker column is the reference copy at
-`.batch-refs/worker-ingest_gdelt_daily.REF.py`, the last version of a worker that
-had its own canonicalizer. It is kept as a reference for reading legacy rows; no
-code in the repository calls it.
+The worker column is the reference copy, the last version of a worker that had
+its own canonicalizer. It was deleted with the rest of `.batch-refs/`; no code in
+the repository called it, and the measured differences it produced are recorded
+above and in the table below. Fetch it at `0d3b882` to re-measure.
 
 | Behavior | Worker scheme today | Scheme u1 | Same article, different hash |
 | --- | --- | --- | --- |

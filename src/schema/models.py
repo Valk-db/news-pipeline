@@ -241,7 +241,27 @@ class GateDecision(DerivedStateMixin, Base):
 
 
 class CuratedPost(Base):
-    """Final post ready for publishing."""
+    """Retired. The table is still mapped because it is still in the schema.
+
+    Nothing in this repository writes to curated_posts any more. The approve
+    and reject flows that filled it are gone, `curation_ui/health.py` stopped
+    counting it, and `SELECT count(*)` returns 0 on the dev project. It is NOT
+    dropped, and the model is NOT deleted, for two reasons that are easy to
+    get wrong:
+
+      * Dropping the table is one-way. The zero above was measured on the dev
+        project only, and a production database is not something this repo can
+        measure. A DROP against the wrong environment cannot be undone.
+      * `curated_post_status` is a Postgres enum created by migration. Dropping
+        the table does not drop the type, so the "cleanup" would leave the type
+        behind anyway while breaking
+        `tests/test_recomputable_derived_state.py`, which pins
+        curated_posts.story_id as the one NO ACTION foreign key in the derived
+        graph.
+
+    DECISIONS.md records what has to be true before this is revisited. Any
+    future writer should read it first rather than re-deriving the argument.
+    """
     __tablename__ = "curated_posts"
     __table_args__ = (Index("ix_curated_posts_status", "status"),)
 

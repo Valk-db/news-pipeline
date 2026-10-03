@@ -487,3 +487,22 @@ def test_the_cli_exits_zero_on_a_sound_bundle_and_nonzero_on_a_broken_one() -> N
         assert "DEPLOY BUNDLE CHECK FAILED" in bad.stdout
     finally:
         shutil.rmtree(scratch_repo.parent, ignore_errors=True)
+
+
+def test_verbose_report_runs_and_prints_every_route(capsys) -> None:
+    """`--verbose` is the mode a reviewer runs to read the whole route table.
+
+    It used to die with KeyError('included') on the first directory it printed:
+    the caller read counts["included"]/["excluded"] while
+    DeployFileSet.summary_by_top_level() returns included_files /
+    excluded_files / excluded_dirs. No test touched the verbose branch, so a
+    green suite hid a crash in the one mode that prints what shipped.
+    """
+    from scripts import check_deploy_bundle as cdb
+
+    tree = pathlib.Path(__file__).resolve().parents[1]
+    ok, failures = cdb.report(tree, verbose=True)
+    out = capsys.readouterr().out
+    assert ok, failures
+    assert "in=" in out and "dirs_out=" in out
+    assert "/proof/{article_id}" in out

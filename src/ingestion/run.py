@@ -25,7 +25,6 @@ from src.ingestion.adapters.rss_adapter import RssAdapter
 from src.ingestion.adapters.gdelt_adapter import GDELTAdapter
 from src.ingestion.adapters.reddit_adapter import RedditAdapter
 from src.ingestion.adapters.sensor_adapter import SensorAdapter
-from src.ingestion.adapters.rss_evidence_adapter import RssEvidenceAdapter
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_dynamic_gate
@@ -42,6 +41,24 @@ from src.ingestion.feed_health import (
 )
 import json
 
+
+# NOTE: RssEvidenceAdapter is intentionally NOT imported at module level.
+#
+# src.ingestion.adapters.rss_evidence_adapter imports src.ingestion.rss_evidence,
+# which imports src.transparency.log at module level (rss_evidence.py:83). So a
+# top-level import here made every ingest run hostage to a module that only the
+# opt-in evidence locker uses: one broken import in the Merkle log took down the
+# entire pipeline, including the tiered runs that never touch the locker. Same
+# shape as the ner lazy-import hotfix (324c1d0), one layer further out.
+#
+# It is imported inside build_adapters() instead, and only when --sources
+# actually asks for it, so an unrelated --sources run never pays for it either.
+#
+# The import is deliberately NOT wrapped in try/except. If the locker cannot be
+# constructed, `--sources rss_evidence` must die loudly. The quiet alternative --
+# warn and carry on -- produces a run that ingests nothing and appends nothing
+# to merkle_log_entries while reporting success, and that is silent loss of
+# tamper evidence. A loud outage is recoverable; a silent one is not.
 
 logger = logging.getLogger(__name__)
 
@@ -281,8 +298,17 @@ def build_adapters(
 
     # Selected by name only, never by tier, so it is offered separately rather
     # than appended to candidates where --tiers would gate it.
-    opt_in = [RssEvidenceAdapter()]
-    candidates = candidates + opt_in
+    # The name gate is exact, not a guess: the selection loop below can only
+    # ever match this adapter through `adapter.name.lower() in wanted`, and its
+    # name is the literal "rss_evidence". So skipping the construction when
+    # "rss_evidence" is absent is behavior-identical to always building it, and
+    # it keeps the lazy import (see the NOTE at the top of this module) off the
+    # path of every other --sources run. If the import is broken, this line
+    # raises out of build_adapters, out of main(), and the run exits non-zero.
+    if "rss_evidence" in wanted:
+        from src.ingestion.adapters.rss_evidence_adapter import RssEvidenceAdapter
+
+        candidates = candidates + [RssEvidenceAdapter()]
 
     selected = []
     matched_entries = set()
