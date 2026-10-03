@@ -20,14 +20,14 @@ Weekly (Sun 02:23 UTC):
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | **Compute** | GitHub Actions | Scheduled runs (06:23 and 18:23 UTC daily; Sun 02:23 UTC weekly), zero cost |
-| **Database** | Supabase/Neon | PostgreSQL, free tier (no pgvector column in use) |
+| **Database** | Supabase/Neon | PostgreSQL, free tier. The `vector` extension is installed (2026-10-02, `20261002220200_pgvector_readiness.sql`), but no column uses it: embeddings are still JSON arrays |
 | **LLM Primary** | Groq (`openai/gpt-oss-20b`) | Caption generation, classification, fact-checking, viewpoint clustering |
 | **LLM Backup** | Cerebras (`gpt-oss-120b`) | 30-day trial fallback |
 | **Ingestion** | RSS tier-1 (8 sources) + tier-2 (4) + Reddit + sensors, GDELT disabled in the workflow | Tier-1 news, social, hazard feeds; AP/Reuters configured but disabled (no working feed) |
 | **Verification** | MinHash containment | Near-dup clustering → reporting units |
 | **Grouping** | Entity Jaccard (top-N, threshold 0.4) | Semantic story grouping |
 | **Gate** | ≥2 tier-1 articles from ≥2 distinct owner groups | Defamation-safe threshold |
-| **Curation UI** | FastAPI + HTMX | Keyboard-driven triage (A/R/E) |
+| **Curation UI** | FastAPI + HTMX | Read-only triage: queue index and story detail, behind auth |
 | **Enrichment** | Media, YouTube/Vimeo, Reddit/Twitter, LLM snippets, embeddings | Multimedia & semantic story enrichment |
 | **Reliability** | Fact-checking (LLM + ClaimBuster) + Consensus alignment | Source trust scoring over time |
 | **Map/Events** | Canonical entities with lat/lon → EventGeometry | Geospatial event data behind `/map` |
@@ -45,8 +45,16 @@ Weekly (Sun 02:23 UTC):
 
 1. Create a Supabase project (or Neon)
 2. Apply the schema: `uv run python -m scripts.migrate` (or paste `supabase/migrations/*.sql` into
-   the SQL editor). Nothing in the schema needs pgvector — embeddings are JSON array columns
+   the SQL editor)
 3. Copy connection string → GitHub secret `DATABASE_URL`
+
+On pgvector: `20261002220200_pgvector_readiness.sql` installs the `vector` extension, and nothing
+more. Embeddings are still `JSON` array columns (`article_embeddings.embedding`,
+`story_embeddings.embedding`) and there is no HNSW index and no `match_articles` RPC. That is
+deliberate, not unfinished: the migration is explicit that the vector column, the index and the
+RPC are later work to be measured against a real nearest-duplicate eval set, and that a column
+added before then would be a nullable column with no writer behind it. Do not read the extension's
+presence as a vector search feature.
 
 ### 3. Secrets (GitHub → Settings → Secrets → Actions)
 
@@ -130,7 +138,7 @@ See `src/ingestion/source_registry.py` for the complete, up-to-date source regis
 - The count is over articles, not reporting units: `tier1_owner_groups` is an article count per
   owner and `evaluate_tier1_gate` expands it, so one unit holding BBC and Guardian copies of the
   same wire story passes on its own. Whether that is the intended corroboration bar is an open
-  decision (`AGENT_TASKS_v38.md` §"Blocked on Tyler", item 1)
+  decision, still open: the batch note that recorded it was scratch and is deleted
 - Single-source cascades (one owner → many rewrites) blocked automatically
 - All decisions logged for audit trail
 
@@ -146,30 +154,40 @@ See `src/ingestion/source_registry.py` for the complete, up-to-date source regis
 
 ### Curation
 - FastAPI + HTMX UI at `localhost:8000`
-- Keyboard: **A**pprove, **R**eject, **E**dit
-- Draft captions via LLM (paraphrase-only constraint)
-- Approved → `curated_posts` table, ready for manual posting
+- Read-only: the queue index at `/` and the story detail page at `/story/{id}`, both behind auth.
+  There are no state-changing routes — `tests/test_curation_read_only_ui.py` pins that, including
+  that the markup names no approve/reject/edit/save control
+- What a public reader gets instead is decided in `DECISIONS.md`, not here. Stories reach the
+  public surfaces (`/map`, `/stories/{id}`, `/proof/{id}`) through
+  `PUBLIC_STORY_STATUSES` in `curation_ui/discovery.py` — `QUEUED` and `POSTED` — and not through
+  a human pressing a button
 
-## Two-Week Protocol
+## Two-Week Protocol (historical, no longer in the code)
 
-**Do not automate posting yet.**
+**This section describes a flow that was built and then removed. It is kept because the
+reasoning still constrains what may come back, not as a description of anything that runs.**
 
-1. Run pipeline → triage in UI → manually post to your channels
-2. Track engagement for 14 days
-3. If hand-curated posts don't land, automation won't fix it
-4. Then build scheduler + platform posters in week 3
+The original plan was: run the pipeline, triage in the UI, post to your channels by hand for
+14 days, and only then decide whether to automate posting. The reasoning — do not automate
+posting before you know hand-curated posts land — was sound and is still the reasoning. What
+changed is that the approve/reject/edit routes, the LLM caption step and the `curated_posts`
+table went away before the two weeks were measured. `curated_posts` still holds zero rows and is
+still in the schema; see `DECISIONS.md` for why dropping it is one-way and not yet.
+
+If the posting flow is ever rebuilt, it starts again at step 1, with the two-week measurement
+ahead of it. It does not start from the removed code.
 
 ## Key Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
 | GitHub Actions over VM | No idle-reclaim, no capacity queue, free minutes |
-| Supabase/Neon over self-hosted | pgvector available if a column ever needs it, no patching, 7-day pause cleared by cron |
+| Supabase/Neon over self-hosted | The `vector` extension is already installed, so a column needs no migration to become possible; no patching, 7-day pause cleared by cron |
 | Groq primary | No card, ongoing free tier, model deprecations handled via `.env` |
 | MinHash direct (no LSH) | Daily bucket <50 articles → O(n²) is fine, avoids `MinHashLSHEnsemble` bug |
 | Top-N entity Jaccard | Single top-1 fragments multi-actor stories |
 | Tier-1 gate ≥2 distinct owners | Survives wire syndication (AP → 300 domains = 1 owner) |
-| Paraphrase-only captions | Copyright compliance, not just defamation defense |
+| Paraphrase-only captions (flow removed) | Copyright compliance, not just defamation defense. The constraint outlived the captioner; see the historical protocol above |
 | Heartbeat commit | Keeps Actions schedule alive (60-day rule) |
 | Phase 2 enriches `PENDING`, never publishes | Public exposure stays human-gated; `DECISIONS.md` holds the evidence and the pre-registered exit criteria |
 
@@ -251,7 +269,8 @@ replenished. See `src/shared/budget.py`.
 - **Run summary**: Ingestion stats table (fetched/too_short/ok/failed per source) in workflow step summary
 - **Health**: `GET /healthz` on curation UI → `{"status", "database"}` only, always 200 (a DB blip
   reports `degraded` in the body rather than failing the probe). The diagnosis behind it —
-  Python version, which env vars are set, DB topology, stories by status, approved posts — is on
+  Python version, which env vars are set, DB topology, stories by status, and transparency
+  checkpoint freshness — is on
   `GET /healthz/details`, which requires the curator credentials
 - **Alerts**: exit code 1 if `total_fetched == 0`, if ≥50% of enabled tier-1 RSS sources are
   broken or none of them produced anything, or if `scripts/check_freshness.py` finds no tier-1
