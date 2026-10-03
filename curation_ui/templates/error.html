@@ -50,8 +50,11 @@
                 <a href="/" class="btn btn-primary" hx-get="/" hx-target="body" hx-swap="outerHTML">
                     Try Again
                 </a>
-                <a href="/posts" class="btn btn-secondary" hx-get="/posts" hx-target="body" hx-swap="outerHTML">
-                    View Posts
+                <!-- No hx-get here: /healthz answers JSON and must not be swapped
+                     into the body. The second button used to be /posts, which was
+                     removed with the approve/reject flow and 404'd. -->
+                <a href="/healthz" class="btn btn-secondary">
+                    Check Status
                 </a>
             </div>
         </div>

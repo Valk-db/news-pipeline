@@ -40,6 +40,14 @@ that:
               (False, False) pair here so a future refactor cannot quietly turn
               a token route into an open one, or an open one into a token route,
               without this file changing.
+
+  2026-10-03  /api/globe/stats removed. Its last caller was the /globe page's
+              Cesium script, deleted with the page in 73ffd28, so the route has
+              had no consumer since; /api/globe/events and /api/globe/layers
+              stay because map.js plots the first and GRAND_PLAN Phase 4 plans
+              the second. A path that stops being listed is a silent deletion, so
+              test_globe_stats_is_gone pins the ABSENCE here as well as the two
+              survivors' presence.
 """
 
 import curation_ui.main as main_module
@@ -52,7 +60,6 @@ EXPECTED_ROUTE_TABLE = [
     ("/api/cron/checkpoint/watchdog", ("GET",), False, False),
     ("/api/globe/events", ("GET",), False, False),
     ("/api/globe/layers", ("GET",), False, False),
-    ("/api/globe/stats", ("GET",), False, False),
     ("/api/map/freshness", ("GET",), False, False),
     ("/api/map/replay", ("GET",), False, False),
     ("/api/map/stories", ("GET",), False, False),
@@ -148,7 +155,6 @@ class TestRouteTableMatchesPreSplitApp:
         assert by_path["/api/stories/{story_id}/viewpoints"][2] is True
         assert by_path["/api/stories/{story_id}/sources"][2] is True
         assert by_path["/api/globe/events"][2] is False
-        assert by_path["/api/globe/stats"][2] is False
         assert by_path["/api/globe/layers"][2] is False
         assert by_path["/api/map/freshness"][2] is False
         assert by_path["/api/map/stories"][2] is False
@@ -225,8 +231,23 @@ class TestGlobeRemoved:
         """map.js plots /api/globe/events, so removing the page keeps the JSON."""
         paths = {row[0] for row in route_table(app)}
         assert "/api/globe/events" in paths
-        assert "/api/globe/stats" in paths
         assert "/api/globe/layers" in paths
+
+    def test_globe_stats_is_gone(self):
+        """/api/globe/stats is deleted, not merely unlisted.
+
+        An assertion that stops mentioning a path passes whether the route was
+        removed or left behind, so the deletion is pinned as an absence at both
+        levels: no route claims the path, and an anonymous GET is a 404 rather
+        than a 500 (a 500 would mean something still tries to serve it).
+        """
+        from fastapi.testclient import TestClient
+
+        assert "/api/globe/stats" not in {row[0] for row in route_table(app)}
+        assert "/api/globe/stats" not in app.openapi()["paths"]
+
+        response = TestClient(app).get("/api/globe/stats")
+        assert response.status_code == 404
 
     def test_no_surviving_route_renders_the_globe_template(self):
         """globe.html is deleted; a route reaching for it would 500 at request time."""

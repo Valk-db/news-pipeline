@@ -138,8 +138,6 @@ async def healthz_details(user: str = Depends(require_auth)):
         report["verdict"] = "Connected, but the tables are missing (run scripts/migrate.py against this database)"
         return report
 
-    # The home page and /posts filter curated_posts on 'APPROVED'; this fails if the column
-    # was created with the wrong enum type.
     # Transparency: how old the newest published checkpoint is, and any signer
     # refusals. This is the surface the dead man's switch reads from -- a cron
     # that stopped firing is invisible everywhere else.
@@ -148,16 +146,15 @@ async def healthz_details(user: str = Depends(require_auth)):
     except Exception as exc:
         report["transparency"] = f"FAILED: {type(exc).__name__}: {_scrub(str(exc), s.database_url)}"
 
-    try:
-        async with get_session() as session:
-            report["approved_posts"] = (
-                await session.execute(text("select count(*) from curated_posts where status = 'APPROVED'"))
-            ).scalar()
-        if isinstance(report.get("transparency"), dict) and report["transparency"].get("verdict") != "ok":
-            report["verdict"] = "App and database are fine, but transparency checkpoint signing is behind"
-        else:
-            report["verdict"] = "ok"
-    except Exception as exc:
-        report["curated_posts"] = f"FAILED: {type(exc).__name__}: {_scrub(str(exc), s.database_url)}"
-        report["verdict"] = "curated_posts.status has the wrong enum type: run the SQL migration"
+    # The verdict is derived from the transparency block and nothing else. It
+    # used to be set inside the try that counted curated_posts rows: the approve
+    # /reject/edit flow that wrote them was removed on 2026-10-02, so the count
+    # was never displayed and its query only ever ran to be able to overwrite
+    # this verdict with "run the SQL migration" -- an instruction about a flow
+    # that no longer exists, raised by a table the app never reads.
+    transparency = report.get("transparency")
+    if isinstance(transparency, dict) and transparency.get("verdict") != "ok":
+        report["verdict"] = "App and database are fine, but transparency checkpoint signing is behind"
+    else:
+        report["verdict"] = "ok"
     return report
