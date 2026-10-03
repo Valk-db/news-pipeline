@@ -328,6 +328,96 @@ def test_the_documentation_rules_are_written_once(file_set: db.DeployFileSet) ->
     assert "DECISIONS.md" not in file_set.included
 
 
+def test_tests_are_excluded_from_the_deploy_bundle(
+        file_set: db.DeployFileSet) -> None:
+    """`tests/` is not shipped. A decision, so it is pinned rather than implied.
+
+    Measured when the rule was added: tests/ was 114 of 259 shipped files and
+    1,657,238 of 3,439,447 shipped bytes. Excluding it cannot break the runtime --
+    nothing under `tests/` is imported by anything the entry point reaches, which
+    the boundary check below proves -- and it buys the cross-boundary check its
+    strongest property: with tests/ shipped, a shipped module that wrongly
+    imported a test helper would import cleanly and the edge would be invisible.
+
+    The honest cost, recorded here so nobody has to rediscover it: this removes
+    the ability to run the suite against the exact uploaded tree. That ability
+    does not exist today in any form -- Vercel does not publish the artifact, no
+    script here fetches one, and deploy-bundle.yml runs the check against `--tree
+    .`, the working tree. So the cost is of a capability nobody has, and the
+    benefit is not. If a future workflow genuinely downloads the uploaded bundle
+    to test it, this test is the thing that says the bundle no longer carries a
+    suite, and that is the moment to revisit the rule.
+    """
+    shipped_tests = [p for p in file_set.included
+                     if p == "tests" or p.startswith("tests/")]
+    assert shipped_tests == [], (
+        "tests/ is being shipped again: %s. Either the rule was dropped by accident "
+        "or something now needs it, in which case say so here rather than quietly "
+        "doubling the upload." % shipped_tests[:5]
+    )
+    # Not just "absent from included": the tracked tree still HAS them, so this
+    # cannot pass because the files stopped existing.
+    tracked_tests = [p for p in db.tracked_files(REPO)
+                     if p.startswith("tests/") and p.endswith(".py")]
+    assert len(tracked_tests) > 100, (
+        "only %d tracked test files; the exclusion is being asserted against an "
+        "almost-empty tests/ directory, which would make it vacuous"
+        % len(tracked_tests)
+    )
+    assert all(p in file_set.excluded for p in tracked_tests), (
+        "a tracked test file is neither shipped nor excluded: %s"
+        % [p for p in tracked_tests if p not in file_set.excluded][:5]
+    )
+    # And the deploy still has the code it needs: a bundle of 145 files whose
+    # largest single contributor is tests/ would be a sign the rule went too far.
+    assert "curation_ui/main.py" in file_set.included
+    assert "api/index.py" in file_set.included
+    assert "src/shared/database.py" in file_set.included
+
+
+def test_the_tests_rule_matches_a_module_under_tests(
+        file_set: db.DeployFileSet) -> None:
+    """The rule itself, against the matcher, not against its effect on the tree.
+
+    The effect is the assertion above; this is the mechanism. A rule that stopped
+    matching because the pattern or the matcher's directory handling changed would
+    still leave the file set looking right on a tree with no `tests/` directory in
+    it, which is not the tree Vercel sees.
+    """
+    from scripts import deploy_bundle
+
+    rules = db.load_rules(REPO)
+    assert db.is_ignored(rules, "tests/test_deploy_bundle.py") is True
+    assert db.is_ignored(rules, "tests/deep/nested/helper.py") is True
+    assert db.is_ignored(rules, "tests", is_dir=True) is True
+    # The prefix trap: a rule for `tests/` must not swallow a sibling that merely
+    # starts with the same characters.
+    assert db.is_ignored(rules, "tests_extra/thing.py") is False
+    assert db.is_ignored(rules, "contest/thing.py") is False
+    # And a real module under tests/ is genuinely absent from the shipped set,
+    # named rather than counted, so a re-include shows up as a name.
+    assert "tests/test_deploy_bundle.py" not in file_set.included
+    assert deploy_bundle.deploy_file_set is db.deploy_file_set  # sanity: same impl
+
+
+def test_no_shipped_module_imports_from_tests(
+        file_set: db.DeployFileSet,
+        import_check: db.ImportCheck) -> None:
+    """The thing that would make excluding tests/ wrong, asserted directly.
+
+    If a shipped module ever reaches into `tests/`, the upload 500s on Vercel and
+    nothing local notices, because the working tree still has the directory. The
+    matcher treats `tests` as a first-party root, so `from tests.helpers import x`
+    shows up as a boundary edge with `shipped=False`.
+    """
+    edges = [b for b in db.cross_boundary_imports(file_set, files=import_check.runtime_files)
+             if not b.shipped and b.target.split(".")[0] == "tests"]
+    assert edges == [], (
+        "shipped code imports a module under tests/, which the upload does not have: "
+        "%s" % ["%s:%d -> %s" % (b.source, b.lineno, b.target) for b in edges]
+    )
+
+
 def test_file_set_is_a_partition_of_the_tracked_tree(
         file_set: db.DeployFileSet) -> None:
     tracked = set(db.tracked_files(REPO))

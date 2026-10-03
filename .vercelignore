@@ -33,6 +33,25 @@ Thumbs.db
 test.db
 
 # Tests
+# Excluded, and the reason is worth writing down because the opposite is
+# arguable. Measured on this tree with scripts/deploy_bundle.py's own matcher,
+# immediately before this rule was added: tests/ was 114 of the 259 shipped files
+# and 1,657,238 of the 3,439,447 shipped bytes -- 44.0% of the files and 48.2% of
+# the upload, for code Vercel never executes. After it, 145 files and 1,782,228
+# bytes.
+#
+# The argument for shipping it is "the uploaded artifact is verifiable": you
+# could run the suite against exactly what was uploaded. That ability does not
+# exist today in any form. Vercel does not publish the artifact, no script in
+# this repo fetches one, and .github/workflows/deploy-bundle.yml runs the bundle
+# check with `--tree .` -- the working tree, not a downloaded upload. So keeping
+# tests/ buys a capability nobody has, at half the upload.
+#
+# It also costs the check its strongest property. With tests/ shipped, a shipped
+# module that wrongly imported something under tests/ would import cleanly, and
+# the cross-boundary check could not see the edge. tests/test_deploy_bundle.py
+# pins the decision so the next person does not flip it by accident.
+tests/
 pytest/
 .coverage
 htmlcov/
