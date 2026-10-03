@@ -33,15 +33,23 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASELINE = REPO_ROOT / "ci" / "baseline.json"
 
-# "Found 445 errors in 58 files (checked 87 source files)" (mypy >= 0.990)
+# "Found 445 errors in 58 files (checked 87 source files)" (mypy >= 0.990).
+# Anchored at the start of a line, and the LAST match is used: the summary is
+# the final line of the run, and anchoring plus last-match is what stops a
+# source line or a test id that happens to contain the words from being read as
+# the count. See parse_collected_count for the bug that motivated this.
 _MYPY_SUMMARY = re.compile(r"^Found (\d+) errors? in \d+ files?", re.MULTILINE)
 # "Success: no issues found in 87 source files"
 _MYPY_CLEAN = re.compile(r"^Success: no issues found in", re.MULTILINE)
 # Fallback for builds that print errors but no summary line: "path:line: error: ..."
 _MYPY_ERROR_LINE = re.compile(r": error: ")
 # "1899 tests collected in 6.41s" / "1 test collected in 0.01s" /
-# "1890 tests collected, 2 errors in 3.10s"
-_PYTEST_COLLECTED = re.compile(r"(\d+) tests? collected")
+# "1890 tests collected, 2 errors in 3.10s". Anchored, and `in <time>s`
+# required, so a collected node id that embeds one of those strings verbatim
+# cannot be mistaken for the summary: pytest prints one node id per line under
+# `--collect-only -q`, and a parametrised test whose parameter is a sample of
+# pytest output puts exactly that text in the tree.
+_PYTEST_COLLECTED = re.compile(r"^(\d+) tests? collected\b.*\bin [\d.]+s", re.MULTILINE)
 # "mypy 2.3.1 (compiled: yes)"
 _MYPY_VERSION = re.compile(r"\bmypy (\d+\.\d+\.\d+)")
 
@@ -66,9 +74,9 @@ def parse_mypy_error_count(output: str) -> int | None:
     not measured anything, and a gate that reads that as "fine" is the exact
     no-op this module replaced.
     """
-    summary = _MYPY_SUMMARY.search(output)
+    summary = _MYPY_SUMMARY.findall(output)
     if summary:
-        return int(summary.group(1))
+        return int(summary[-1])
     if _MYPY_CLEAN.search(output):
         return 0
     lines = [line for line in output.splitlines() if _MYPY_ERROR_LINE.search(line)]
@@ -123,9 +131,18 @@ def evaluate_mypy(
 
 
 def parse_collected_count(output: str) -> int | None:
-    """Tests collected per `pytest --collect-only -q`, or None if unparseable."""
-    match = _PYTEST_COLLECTED.search(output)
-    return int(match.group(1)) if match else None
+    """Tests collected per `pytest --collect-only -q`, or None if unparseable.
+
+    This parser shipped broken and the way it broke is worth keeping in mind.
+    `pytest --collect-only -q` prints one collected node id PER LINE before the
+    summary, so a test parametrised over sample pytest output puts the literal
+    text "1899 tests collected in 6.41s" into the tree - and an unanchored
+    regex took the first match in the stream, read a TEST NAME as the count, and
+    reported the floor as satisfied while the real count was 80 higher. The gate
+    was green for a reason that had nothing to do with the suite.
+    """
+    matches = _PYTEST_COLLECTED.findall(output)
+    return int(matches[-1]) if matches else None
 
 
 def evaluate_collected(output: str, floor: int) -> Verdict:

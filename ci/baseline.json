@@ -29,11 +29,18 @@
     "why_a_ratchet_and_not_a_pass_fail_gate": "445 pre-existing errors make a pass/fail gate unreachable, and `continue-on-error: true` with nothing comparing counts is not a soft gate, it is no gate. The ratchet fails when the count RISES and passes when it falls, which is enforceable today and gets stricter as the backlog clears."
   },
 
-  "pytest_collected_floor": 1899,
+  "pytest_collected_floor": 1983,
   "pytest_collect_paths": ["tests/"],
   "pytest_measurement": {
     "command": "python -m pytest tests/ --collect-only -q",
-    "raw_summary": "1899 tests collected in 6.41s",
+    "raw_summary_at_the_measured_commit": "1899 tests collected in 6.41s",
+    "raw_summary_on_this_branch": "1983 tests collected in 2.29s",
+    "floor_raised_by": {
+      "from": 1899,
+      "to": 1983,
+      "reason": "this branch adds 84 tests: tests/test_ci_gates.py 43, tests/test_batch_scratch_removed.py 27, tests/test_secret_scan.py 14. The gate tells you to raise the floor when the count rises so a later removal is measured against the real suite rather than against main's older, smaller one.",
+      "commit": "f80dfd0 (the 4 further tests are the parser regressions fixed after it)"
+    },
     "pytest_version": "9.1.1",
     "why_collected_and_not_executed": "The floor is on COLLECTED tests, not executed ones. `--collect-only` needs no database and returned the identical 1899 with and without DATABASE_URL set, so the number is environment-independent and a batch on this VM can reproduce it. An executed-count floor cannot be: on this VM main executes 1899 tests as 1851 passed / 14 failed / 34 skipped, and in CI with Postgres those 14 run and pass, so the executed count is a property of the machine, not of the suite. A floor on a number that changes with the environment is a flaky gate.",
     "executed_count_on_this_vm_at_the_measured_commit": "14 failed, 1851 passed, 34 skipped (all 14 failures are langdetect/translation tests, pre-existing on the measured commit)",

@@ -76,6 +76,28 @@ class TestParseMypyErrorCount:
         )
         assert parse_mypy_error_count(noisy) == 0
 
+    def test_a_summary_shaped_string_inside_an_error_message_is_not_the_summary(self) -> None:
+        # Same class of bug as the collected-count parser: a regex that matches
+        # the words rather than the line reads a string that merely LOOKS like
+        # the summary. This is anchored at the start of a line for that reason.
+        output = (
+            'src/a.py:3: error: cache said "Found 7 errors in 1 file" and was ignored\n'
+            'src/b.py:9: error: unrelated\n'
+            "Found 2 errors in 2 files (checked 87 source files)\n"
+        )
+        assert parse_mypy_error_count(output) == 2
+
+    def test_the_last_summary_line_wins(self) -> None:
+        # A run that prints an intermediate summary (mypy does this under
+        # --install-types and some plugins) must be read from the final line,
+        # which is the one covering the whole run.
+        output = (
+            "Found 7 errors in 1 file (checked 40 source files)\n"
+            "src/b.py:9: error: unrelated\n"
+            "Found 445 errors in 58 files (checked 87 source files)\n"
+        )
+        assert parse_mypy_error_count(output) == 445
+
 
 class TestParseMypyVersion:
     def test_reads_the_version(self) -> None:
@@ -159,6 +181,35 @@ class TestParseCollectedCount:
 
     def test_collection_errors_only_is_none(self) -> None:
         assert parse_collected_count("ERROR: 2 errors during collection\n") is None
+
+    def test_node_ids_carrying_the_summary_text_are_not_the_summary(self) -> None:
+        # The bug this parser actually shipped with. `pytest --collect-only -q`
+        # prints one collected node id per line, so a test parametrised over
+        # sample pytest output puts the summary text INSIDE a node id. An
+        # unanchored regex read the node id and reported the floor satisfied
+        # while the real count was 80 higher - a gate green for a reason that had
+        # nothing to do with the suite. The counts below are deliberately
+        # different from the real summary at the end.
+        output = (
+            "tests/test_ci_gates.py::TestParseCollectedCount::"
+            "test_reads_the_count[1899 tests collected in 6.41s\\n-1899]\n"
+            "tests/test_ci_gates.py::TestParseCollectedCount::"
+            "test_reads_the_count[1 test collected in 0.01s\\n-1]\n"
+            "tests/test_ci_gates.py::TestParseCollectedCount::"
+            "test_reads_the_count[1890 tests collected, 2 errors in 3.10s\\n-1890]\n"
+            "\n"
+            "1979 tests collected in 2.28s\n"
+        )
+        assert parse_collected_count(output) == 1979
+
+    def test_summary_after_a_warnings_block_is_still_found(self) -> None:
+        # pytest prints the warnings summary BEFORE the count line, so the count
+        # is genuinely last. Both a mid-stream decoy and the real thing appear.
+        output = (
+            "-- Docs: https://docs.py.nlm/en/stable/how-to/capture-warnings.html\n"
+            "1979 tests collected in 2.28s\n"
+        )
+        assert parse_collected_count(output) == 1979
 
 
 class TestEvaluateCollected:
