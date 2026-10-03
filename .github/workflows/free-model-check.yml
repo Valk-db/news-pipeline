@@ -1,0 +1,138 @@
+name: Free model staleness
+
+# `src/shared/llm_roster.py` pins two OpenRouter `:free` model ids. A `:free` id is
+# a perishable fact rather than a model name: OpenRouter withdraws free tiers, and
+# `openai/gpt-oss-20b:free` -- the id this roster was originally asked to wire up --
+# is gone from the catalogue while `openai/gpt-oss-20b` and `:batch` are both still
+# listed. The model was never retired; only its free tier was withdrawn, which is
+# exactly the case an "does the id resolve" check passes and a free-list membership
+# check catches.
+#
+# Without this workflow the failure is invisible. With a fallback chain in front of
+# it, a retired id produces a 404 on every request to that rung, which reads exactly
+# like "the free pool is busy today": the chain falls through, nobody is told why,
+# and the rung is demoted for the run for a reason that will still be true tomorrow.
+# `scripts/check_free_models.py` existed from a8255ef and was run by nobody.
+#
+# WHY THE THREE EXIT CODES GET THREE DIFFERENT TREATMENTS. The script is three-valued
+# on purpose: 0 = every configured free id is in the catalogue, 1 = at least one is
+# confirmed stale, 2 = the catalogue could not be read or no key is configured. A
+# single "warning on anything non-zero" would swallow exactly the case that needs a
+# human, and a single "fail on anything non-zero" would turn an OpenRouter 502 into
+# a red workflow nobody can act on. So:
+#
+#   1 (confirmed retired)  -> the job FAILS. One edit to llm_roster.py fixes it and
+#                            the failure names the ids. This is not a flake.
+#   2 (could not check)    -> the job does NOT fail, because it learned nothing, but
+#                            it emits a ::warning:: annotation and writes the same
+#                            report to the job summary and an artifact. A run that
+#                            could not check is visible, not silent.
+#
+# Scheduled, not on pull_request. This is the only check in the repo that depends on a
+# third party being up, and putting it in the PR path would make mergeability a
+# function of OpenRouter's uptime. It runs Mondays at 05:17 UTC, which is before the
+# 06:23 daily ingest that would consume a stale rung, so the roster gets fixed before
+# the day's runs rather than after them. workflow_dispatch is there for the other
+# direction: after changing a model id, check it immediately instead of waiting a week.
+
+on:
+  schedule:
+    # Mondays, 05:17 UTC. Deliberately not on the hour and not next to any other
+    # schedule: daily-ingest is `23 6,18 * * *`, transparency-stamp `47 4 * * *`,
+    # weekly-enrichment `23 2 * * 0`, cleanup `23 3 * * 0`, daily-phase2 `23 20 * * *`.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: free-model-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # `dev` is enough. The check reads the roster and makes one HTTP GET; it never
+      # imports the ingestion or enrichment extras and never touches a database.
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      # The catalogue is fetched exactly once and the output is captured, so the
+      # report below cannot describe a different run than the verdict does. `set +e`
+      # is the point of the step: the exit code is data here, not the verdict, and a
+      # step that exits 1 on a stale id would never reach the step that names the ids.
+      - name: Check the roster against the live catalogue
+        id: free_models
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set +e
+          uv run python -m scripts.check_free_models > /tmp/free-models.txt 2>&1
+          code=$?
+          set -e
+          cat /tmp/free-models.txt
+          {
+            echo '### Free model roster check'
+            echo
+            echo 'The roster pins OpenRouter `:free` ids. A `:free` id is a perishable'
+            echo 'capability, not a model name. Exit 1 means an id is confirmed retired'
+            echo 'from the catalogue and the roster needs editing; exit 2 means the'
+            echo 'catalogue could not be read, so this run established nothing.'
+            echo
+            echo '```'
+            cat /tmp/free-models.txt
+            echo '```'
+            echo
+            echo "script exit code: \`$code\` (0 = all present, 1 = stale, 2 = could not check)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+
+      # An artifact as well as the summary: the summary is what a human reads when
+      # they open the run, and the artifact is what survives long enough to compare
+      # two Mondays. Neither is a line in a scrollback nobody opens.
+      - name: Keep the catalogue read as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: free-model-check
+          path: /tmp/free-models.txt
+          retention-days: 30
+
+      - name: A confirmed-retired free id fails the job
+        if: steps.free_models.outputs.exit_code == '1'
+        run: |
+          echo "::error::One or more configured free model ids are no longer in the"
+          echo "::error::OpenRouter catalogue. Fix src/shared/llm_roster.py -- the ids"
+          echo "::error::are listed in the job summary above, and the roster's own"
+          echo "::error::comment names what was substituted last time."
+          exit 1
+
+      - name: A could-not-check run is loud, and is not a pass
+        if: steps.free_models.outputs.exit_code == '2'
+        run: |
+          echo "::warning title=Free model check could not run::The OpenRouter"
+          echo "::warning catalogue could not be read, or OPENROUTER_API_KEY is not"
+          echo "::warning configured. This run established nothing about the roster;"
+          echo "::warning it is NOT evidence that the free ids are present. Re-run"
+          echo "::warning from the Actions tab when OpenRouter is reachable."
+
+      # The two steps above both skip when the check step never ran, which is what a
+      # failed checkout or a cancelled run looks like from here. Green, having
+      # checked nothing, is the one outcome this must not allow.
+      - name: Fail when the check step published no verdict
+        if: always() && steps.free_models.outputs.exit_code == ''
+        run: |
+          echo "::error::the check step published no exit_code, so the roster was not"
+          echo "::error::checked at all and both verdict steps were skipped."
+          exit 1
