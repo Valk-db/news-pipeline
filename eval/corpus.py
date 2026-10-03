@@ -106,7 +106,6 @@ def body_hash(body: str) -> str:
 
 def select(conn, *, verbose: bool = True) -> list[CorpusItem]:
     """Run the selection rule against dev. Read-only SELECTs only."""
-    import psycopg
 
     chosen: list[CorpusItem] = []
     seen: set[str] = set()
