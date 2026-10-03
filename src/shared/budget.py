@@ -45,6 +45,24 @@ GROQ_REQUESTS = "groq_requests"
 GROQ_TRANSLATION_REQUESTS = "groq_translation_requests"
 MYMEMORY_CHARS = "mymemory_chars"
 
+# Phase 2 (claim extraction on gate-passed PENDING stories, src/verification/phase2.py)
+# counts TOKENS, not requests, and that is not a preference.
+#
+# Groq's free plan for the model this pipeline uses (openai/gpt-oss-20b) publishes
+# RPM 30 / RPD 1,000 / TPM 8,000 / TPD 200,000 (checked against
+# https://console.groq.com/docs/rate-limits on 2026-10-03). A request-count cap
+# cannot see the limit that actually binds: one claim extraction measured 4,962
+# total tokens against a 200,000/day allowance, so 40 such calls exhaust the day's
+# tokens while a 1,000-request cap would still read 96% unspent. The daily limiter
+# for this provider is its token allowance, so this counter is denominated in
+# tokens and the recorded amount is the `usage.total_tokens` the provider reported.
+#
+# Its own row for the same reason translation has one: Phase 2 is the largest
+# single consumer of the free tier in this pipeline, and sharing GROQ_REQUESTS
+# would make caption/classification work silently disappear on the day Phase 2
+# filled the shared counter.
+GROQ_PHASE2_TOKENS = "groq_phase2_tokens"
+
 _SPEND = text(
     """
     INSERT INTO budget_counters (name, day, used) VALUES (:name, :day, :amount)

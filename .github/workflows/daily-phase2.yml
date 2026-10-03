@@ -1,0 +1,112 @@
+name: Daily Phase 2 (gate-passed stories)
+
+# Phase 2 runs on gate-passed PENDING stories: topic groups, narrative arcs, and
+# claim extraction. Daily, not weekly, and deliberately AFTER the curation decision
+# rather than before it -- see DECISIONS.md. Ingest runs twice a day at
+# `23 6,18 * * *`; this runs at 20:23 so both of today's ingests have landed and
+# the run is not competing with them for the same provider allowance.
+#
+# It runs before the publish decision, not instead of one: nothing here sets a
+# story to QUEUED, writes a curated_posts row, or touches a public filter. Public
+# exposure stays a human call. tests/test_phase2_isolation.py is the test that
+# holds that line.
+
+on:
+  schedule:
+    # Daily at 20:23 UTC (off-peak minute, same convention as the other jobs)
+    - cron: '23 20 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-phase2
+  # Do not cancel: a cancelled run has already spent part of the day's token
+  # allowance, and the point of waiting is to finish within the cap rather than
+  # start a second run that spends it again.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  phase2:
+    runs-on: ubuntu-24.04
+    # 16 stories at a 25s pacing floor is ~7 minutes of calls, plus topic grouping,
+    # arc linking and connection setup. 45 is a ceiling, not an expectation.
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra pipeline --extra enrichment
+
+      - name: LLM preflight (fail fast on auth errors)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          uv run python -c "
+          import asyncio
+          from src.shared.llm_preflight import run_llm_preflight_or_fail
+          asyncio.run(run_llm_preflight_or_fail())
+          "
+
+      - name: Seed topic groups (idempotent)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: uv run python -m scripts.seed_topic_groups
+
+      - name: Run Phase 2
+        id: phase2
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+        run: uv run python -m scripts.run_phase2
+
+      - name: Report Phase 2 outcome
+        if: always()
+        env:
+          PHASE2_SUMMARY: ${{ steps.phase2.outputs.PHASE2_SUMMARY }}
+        run: |
+          if [[ -z "$PHASE2_SUMMARY" ]]; then
+            echo "::warning title=Phase 2 produced no summary::scripts/run_phase2.py wrote no PHASE2_SUMMARY output. The run exited before its summary line -- check the step log."
+            exit 0
+          fi
+          echo "$PHASE2_SUMMARY"
+
+          echo "$PHASE2_SUMMARY" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          # A skip is not a failure: budget_exhausted and rate_limited are the
+          # job working as designed. Silence about them is what let three stages
+          # run for months doing nothing and looking healthy.
+          for reason, count in sorted((d.get('skipped') or {}).items()):
+              if count:
+                  print(f'::notice title=Phase 2 skipped {count}::reason={reason}')
+          if d.get('processed', 0) == 0 and d.get('stories', 0) > 0:
+              print('::warning title=Phase 2 processed 0 stories::every selected story was skipped; the runs are worth reading before trusting the pipeline again.')
+          if d.get('errors', 0):
+              print(f\"::warning title=Phase 2 errors::{d['errors']} per-story errors recorded\")
+          print(
+              f\"Phase 2: {d.get('processed', 0)}/{d.get('stories', 0)} stories, \"
+              f\"{d.get('claims_created', 0)} claims, {d.get('evidence_created', 0)} evidence, \"
+              f\"{d.get('topics_created', 0)} topic groups, {d.get('arcs_created', 0)} arcs, \"
+              f\"{d.get('tokens_spent_today', '?')}/{d.get('token_cap', '?')} tokens today\"
+          )
+          "

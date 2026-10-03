@@ -1,11 +1,12 @@
 """LLM client with Groq primary, Cerebras fallback, and token accounting."""
 
 import logging
+import re
 from typing import Optional, List, Dict, Any, Tuple
 from src.shared.config import get_settings
 from src.shared.llm_budget import RequestBudget, BudgetExhausted
 from tenacity import retry, stop_after_attempt, wait_exponential
-from httpx import HTTPStatusError, TimeoutException, ConnectError
+from httpx import TimeoutException, ConnectError
 import json
 
 try:
@@ -147,23 +148,155 @@ class LLMClient:
         if self.settings.cerebras_api_key and AsyncCerebras:
             self.cerebras_client = AsyncCerebras(api_key=self.settings.cerebras_api_key)
 
+    @classmethod
+    def _status_code(cls, exception: BaseException) -> int:
+        """The HTTP status behind an SDK or httpx error, or 0 if there isn't one.
+
+        Written as a single lookup rather than two isinstance chains because the
+        provider SDKs do not raise httpx's HTTPStatusError: `groq.RateLimitError`
+        carries `.status_code` and is not an httpx class at all, so every
+        status-code predicate in this class silently returned False for it. That
+        is why a 429 from Groq reached the caller as a generic failure instead of
+        as the rate limit it was.
+        """
+        code = getattr(exception, "status_code", None)
+        if isinstance(code, int):
+            return code
+        response = getattr(exception, "response", None)
+        code = getattr(response, "status_code", None)
+        if isinstance(code, int):
+            return code
+        return cls._status_code_from_chain(exception)
+
+    @staticmethod
+    def _status_code_from_chain(exception: BaseException, _depth: int = 0) -> int:
+        """The status code of whatever a wrapper is wrapping, 0 if there is none.
+
+        Two wrappers stood between a provider's answer and the code that could read
+        it, and both had to be unwrapped before a rate limit was visible as one:
+
+        * `tenacity.RetryError`, which the @retry decorators raise once their
+          attempts run out. It carries the real error at `.last_attempt.exception()`.
+          Measured on dev 2026-10-03: a 429 that exhausted three internal attempts
+          reached the caller as `LLMError("No LLM provider available")` with no
+          status code at all, so the Phase 2 runner recorded a generic error and
+          never retried or classified it.
+        * `raise ... from` chains, because LLMError is raised from the provider
+          error it is reporting.
+
+        Bounded to six levels: an exception whose cause chain loops or is very
+        deep is a bug elsewhere, and an unbounded walk here would turn a
+        classification helper into a hang.
+        """
+        if _depth >= 6:
+            return 0
+        inner = getattr(exception, "last_attempt", None)
+        inner = getattr(inner, "exception", lambda: None)()
+        if inner is not None and inner is not exception:
+            code = LLMClient._status_code(inner)
+            if code:
+                return code
+        for linked in (exception.__cause__, exception.__context__):
+            if linked is not None and linked is not exception:
+                code = LLMClient._status_code(linked)
+                if code:
+                    return code
+        return 0
+
+    @classmethod
+    def is_rate_limited(cls, exception: BaseException) -> bool:
+        """HTTP 429 -- the provider's per-minute or per-day limit was reached.
+
+        Distinct from BudgetExhausted on purpose: this is the PROVIDER refusing us,
+        so the local cap did its job and the number in the database is still an
+        accurate account of what was spent. Handle it by waiting out the
+        retry-after the provider asked for, not by raising the cap.
+        """
+        return cls._status_code(exception) == 429
+
+    @classmethod
+    def is_out_of_credit(cls, exception: BaseException) -> bool:
+        """HTTP 402 -- the account cannot pay for this call.
+
+        Tyler's rule is $0 always, so this must never be "retried" or worked around:
+        a 402 means a paid tier is configured somewhere, which is a configuration
+        defect to report, not a condition to route around. Callers skip the story
+        and record it.
+        """
+        return cls._status_code(exception) == 402
+
+    @staticmethod
+    def _retry_after_seconds(exception: BaseException, default: float) -> float:
+        """The provider's own retry-after, in seconds, or `default` if absent.
+
+        Read from the exception first (the SDKs expose `.retry_after` / a headers
+        mapping) and only then from the message, because Groq's rate-limit body
+        spells it out in prose ("Please try again in 7.2375s") and a caller that
+        ignored it would either hammer the limit or sleep for a guessed interval.
+        """
+        # Walk the wrapper chain as well as the exception itself. A 429 that
+        # exhausted the client's internal retries arrives as tenacity's RetryError,
+        # whose own message is repr noise -- the provider's "try again in 7.2375s"
+        # is on the error it wraps, so a search that stopped at the top level would
+        # fall back to a guess every time it mattered most.
+        current = exception
+        for _level in range(6):
+            if current is None:
+                break
+            found = LLMClient._retry_after_from_one(current, default)
+            if found != default:
+                return found
+            current = LLMClient._inner_exception(current)
+        return default
+
+    @staticmethod
+    def _inner_exception(exception: BaseException):
+        """The exception `exception` wraps, or None."""
+        inner = getattr(exception, "last_attempt", None)
+        inner = getattr(inner, "exception", lambda: None)()
+        if inner is not None and inner is not exception:
+            return inner
+        for linked in (exception.__cause__, exception.__context__):
+            if linked is not None and linked is not exception:
+                return linked
+        return None
+
+    @staticmethod
+    def _retry_after_from_one(exception, default: float) -> float:
+        """The retry-after this one exception carries, or `default`."""
+        for attr in ("retry_after", "retry_after_seconds"):
+            value = getattr(exception, attr, None)
+            if isinstance(value, (int, float)) and value >= 0:
+                return float(value)
+        headers = getattr(exception, "headers", None)
+        if headers is not None:
+            try:
+                value = headers.get("retry-after")
+            except AttributeError:
+                value = None
+            if value is not None:
+                try:
+                    return max(0.0, float(value))
+                except (TypeError, ValueError):
+                    pass
+        match = re.search(r"try again in\s+([0-9.]+)\s*s", str(exception), re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+        return default
+
     @staticmethod
     def _is_transient_error(exception: BaseException) -> bool:
         """Check if error is transient (rate limit, 5xx, timeout, connection)."""
         if isinstance(exception, (TimeoutException, ConnectError)):
             return True
-        if isinstance(exception, HTTPStatusError):
-            # HTTPStatusError has response attribute with status_code
-            status_code = getattr(exception.response, "status_code", 0)
-            return status_code >= 500 or status_code == 429
-        return False
+        status_code = LLMClient._status_code(exception)
+        return status_code >= 500 or status_code == 429
 
     @staticmethod
     def _is_auth_error(exception: BaseException) -> bool:
         """Check if error is an auth failure (401/403)."""
-        if isinstance(exception, HTTPStatusError):
-            status_code = getattr(exception.response, "status_code", 0)
-            return status_code in (401, 403)
+        if LLMClient._status_code(exception) in (401, 403):
+            return True
         # Also check for auth error in exception message (Groq SDK may raise different types)
         error_msg = str(exception).lower()
         return "invalid api key" in error_msg or "unauthorized" in error_msg or "forbidden" in error_msg
@@ -184,6 +317,7 @@ class LLMClient:
         max_tokens: int = 500,
         temperature: float = 0.3,
         response_format: Optional[Dict[str, str]] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Make a chat completion request to Groq, routed through budget + coalescing."""
         if not self.groq_client:
@@ -193,9 +327,33 @@ class LLMClient:
             kwargs = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
             if response_format:
                 kwargs["response_format"] = response_format
+            # reasoning_effort is not a nicety on a reasoning model: without it
+            # gpt-oss spends max_tokens on its own reasoning and returns an EMPTY
+            # message content with finish_reason="length". Measured on a real
+            # claim-extraction prompt on 2026-10-03: max_tokens=1500 with no
+            # reasoning_effort returned 0 characters on one call and 1,054 on the
+            # next, with identical parameters -- an unusable stage that looks like
+            # it ran. max_tokens=4096 with reasoning_effort="low" returned
+            # finish_reason="stop" and complete JSON on every call. Groq rejects
+            # the literal "none", so "low" is the floor, not "off".
+            if reasoning_effort:
+                kwargs["reasoning_effort"] = reasoning_effort
             response = await self.groq_client.chat.completions.create(**kwargs)
+            message = response.choices[0].message
             return {
-                "choices": [{"message": {"content": response.choices[0].message.content}}]
+                "choices": [{"message": {"content": message.content}}],
+                # The provider's own accounting of what the call cost. Callers
+                # that cap a shared daily token allowance cannot measure it any
+                # other way; everything that ignores this key is unaffected.
+                "usage": {
+                    "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                    "completion_tokens": getattr(response.usage, "completion_tokens", 0),
+                    "total_tokens": getattr(response.usage, "total_tokens", 0),
+                },
+                # finish_reason is the only thing that distinguishes "the model
+                # answered" from "the model ran out of room", and the difference is
+                # invisible once the content is "".
+                "finish_reason": getattr(response.choices[0], "finish_reason", None),
             }
 
         # Route through budget + coalescing
@@ -440,13 +598,24 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
         messages: List[Dict[str, str]],
         max_tokens: int = 500,
         temperature: float = 0.3,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         General chat completion interface compatible with OpenAI API format.
 
         Returns:
-            Dict with "choices": [{"message": {"content": "..."}}]
+            Dict with "choices": [{"message": {"content": "..."}}], plus "usage"
+            and "finish_reason" from the provider when it reports them.
+
+        reasoning_effort is passed to Groq only. See _chat_completion_groq for why
+        a reasoning model needs it: without it the call can return an empty
+        message while still being counted against every budget.
         """
+        # The last provider failure, so the LLMError raised at the bottom is a report
+        # of what actually went wrong rather than a shrug. Without it a 429 that
+        # exhausted the internal retries is indistinguishable from a missing key.
+        last_error: Optional[BaseException] = None
+
         # Try Groq first
         if self.groq_client:
             try:
@@ -455,13 +624,26 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    reasoning_effort=reasoning_effort,
                 )
             except BudgetExhausted as e:
+                last_error = e
                 logger.warning(f"Groq budget exhausted: {e}")
             except Exception as e:
-                # If it's a transient error, re-raise (it will have been retried by decorator)
+                last_error = e
+                # Transient, and the decorator has already spent its three attempts.
+                # Raise LLMError rather than re-raising: what the decorator hands back
+                # is tenacity's RetryError, which says nothing a caller can act on, and
+                # summarize_story/classify_relevance already report this case this way.
+                # `from e` is what keeps the 429 legible -- a bare `raise` here loses it
+                # entirely, and is_rate_limited/is_out_of_credit/_retry_after_seconds all
+                # read the cause chain. This branch was unreachable before _status_code
+                # learned to unwrap RetryError (RetryError is not an httpx error, so the
+                # old isinstance check said "not transient" and it fell through to
+                # Cerebras); making it reachable is the point of the unwrap, and leaking
+                # RetryError out of a public method is the cost that has to be paid.
                 if self._is_transient_error(e):
-                    raise
+                    raise LLMError("No LLM provider available") from e
                 # P0-5: Handle auth failures uniformly - fall through to Cerebras
                 if self._is_auth_error(e) and not self._groq_auth_warned:
                     import os
@@ -480,9 +662,11 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     temperature=temperature,
                 )
             except Exception as e:
-                # If it's a transient error, re-raise
+                last_error = e
+                # Same reasoning as the Groq branch above: LLMError with the cause
+                # attached, never a bare re-raise of the retry wrapper.
                 if self._is_transient_error(e):
-                    raise
+                    raise LLMError("No LLM provider available") from e
                 if self._is_auth_error(e) and not self._cerebras_auth_warned:
                     import os
                     if os.getenv("GITHUB_ACTIONS"):
@@ -490,7 +674,7 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     self._cerebras_auth_warned = True
                 logger.warning(f"Cerebras chat completion failed: {e}")
 
-        raise LLMError("No LLM provider available")
+        raise LLMError("No LLM provider available") from last_error
 
 
 # Singleton instance
