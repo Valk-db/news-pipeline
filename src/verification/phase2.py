@@ -88,7 +88,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.schema.models import Story
 from src.shared.budget import GROQ_PHASE2_TOKENS, spend, used
@@ -140,6 +140,7 @@ async def select_phase2_stories(
     max_stories: int,
     statuses: Sequence[Story.Status] = PHASE2_STATUSES,
     exclude_viewpoint_children: bool = True,
+    min_units: int | None = None,
     now: datetime | None = None,
 ) -> list[Story]:
     """The gate-passed stories Phase 2 will consider, newest first.
@@ -153,6 +154,18 @@ async def select_phase2_stories(
 
     Viewpoint children are excluded here rather than at the call sites, so all
     three stages share one definition and cannot drift apart.
+
+    `min_units` restricts the pool to stories with at least that many units whose
+    representative article actually carries body text, which is the same
+    condition src/verification/claims.py applies before spending. It exists
+    because of a measured failure of the daily job: on dev 2026-10-03 all 20
+    newest PENDING stories had exactly one unit, so a newest-first run with
+    max_stories=16 spent the whole day's context on stories the extractor would
+    refuse to read, and never reached an analysable story at all. Only the
+    token-spending caller passes it -- grouping and arcs are worth doing on a
+    one-source story -- and the per-story too_few_units skip stays as the net
+    under it, because this filter counts units while the prompt is built from
+    the first max_units of them.
     """
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=hours_back)
     stmt = (
@@ -167,6 +180,23 @@ async def select_phase2_stories(
         # (src/verification/stories.py:325). Null means "not a child", which is
         # every ordinary story.
         stmt = stmt.where(Story.viewpoint_cluster_id.is_(None))
+    if min_units is not None:
+        # EXISTS over a subquery, not a join: the LIMIT applies to stories, and a
+        # join would multiply story rows until LIMIT meant units, not stories.
+        from src.schema.models import RawArticle, ReportingUnit, StoryUnitLink
+
+        text_bearing_units = (
+            select(func.count())
+            .select_from(StoryUnitLink)
+            .join(ReportingUnit, ReportingUnit.id == StoryUnitLink.unit_id)
+            .join(RawArticle, RawArticle.id == ReportingUnit.representative_article_id)
+            .where(StoryUnitLink.story_id == Story.id)
+            .where(RawArticle.body_text.is_not(None))
+            .where(RawArticle.body_text != "")
+            .scalar_subquery()
+            .correlate(Story)
+        )
+        stmt = stmt.where(text_bearing_units >= min_units)
     return list((await session.execute(stmt)).scalars().all())
 
 

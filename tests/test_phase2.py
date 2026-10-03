@@ -30,6 +30,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import InterfaceError
 
 from src.schema.models import (
     Claim,
@@ -267,6 +268,67 @@ class TestSelection:
         assert Story.Status.PENDING in PHASE2_STATUSES
         assert Story.Status.QUEUED in PHASE2_STATUSES
         assert Story.Status.BLOCKED not in PHASE2_STATUSES
+
+
+class TestMinUnits:
+    """Why the spending caller filters, and why the filter is not the skip."""
+
+    @pytest.mark.asyncio
+    async def test_a_one_unit_story_is_filtered_out_of_the_spending_pool(
+        self, db_session, story_factory
+    ):
+        """The measured daily-run failure this filter exists to fix.
+
+        On dev 2026-10-03 all 20 newest gate-passed stories had exactly one unit,
+        so a newest-first run with a 16-story ceiling spent its whole budget on
+        stories the extractor refuses to read and never reached an analysable one.
+        """
+        story_factory(status=Story.Status.PENDING, units=1)
+        thick = story_factory(status=Story.Status.PENDING, units=2)
+        await db_session.commit()
+
+        picked = await select_phase2_stories(
+            db_session, hours_back=48, max_stories=10, min_units=2
+        )
+        assert [s.id for s in picked] == [thick.id]
+
+    @pytest.mark.asyncio
+    async def test_units_without_article_text_do_not_count(self, db_session, story_factory):
+        """Two units exist, but only one has a body, so the prompt is one source.
+
+        The count is of units that carry text because that is what the prompt is
+        built from (src/verification/stories.py::_gather_unit_texts_for_story).
+        Counting links instead would let the filter promise evidence the extractor
+        will then refuse to read.
+        """
+        story = story_factory(status=Story.Status.PENDING, units=2)
+        await db_session.commit()
+        unit = (await db_session.execute(
+            select(ReportingUnit).join(StoryUnitLink, StoryUnitLink.unit_id == ReportingUnit.id)
+            .where(StoryUnitLink.story_id == story.id)
+        )).scalars().first()
+        article = await db_session.get(RawArticle, unit.representative_article_id)
+        article.body_text = ""
+        await db_session.commit()
+
+        assert await select_phase2_stories(
+            db_session, hours_back=48, max_stories=10, min_units=2
+        ) == []
+        # ...and it is still a candidate for the stages that cost nothing.
+        assert len(await select_phase2_stories(db_session, hours_back=48, max_stories=10)) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_limit_counts_stories_not_units(self, db_session, story_factory):
+        """A join here would multiply story rows and make LIMIT mean units."""
+        for _ in range(3):
+            story_factory(status=Story.Status.PENDING, units=3)
+        await db_session.commit()
+
+        picked = await select_phase2_stories(
+            db_session, hours_back=48, max_stories=2, min_units=2
+        )
+        assert len(picked) == 2
+        assert len({s.id for s in picked}) == 2
 
 
 class TestAlreadyAnalysed:
@@ -592,6 +654,102 @@ class TestRefusals:
 
         assert LLMClient.is_out_of_credit(caught.value)
         assert not LLMClient.is_rate_limited(caught.value)
+
+
+def _closed() -> InterfaceError:
+    """The error asyncpg raises for a connection the far end already closed."""
+    return InterfaceError("INSERT", {}, Exception("connection is closed"))
+
+
+class TestTheWriteSurvivesADeadConnection:
+    """Measured on dev 2026-10-03: a real LLM call, then the connection was gone.
+
+    The Phase 2 run paces calls 25s apart and each call takes tens of seconds, so
+    the connection a session is holding when the story starts can be closed by
+    the far end long before the insert. The first version of this stage lost a
+    paid-for answer that way: claims=0, errors=['InterfaceError: connection is
+    closed'], and tokens already charged. The retry has to be around the WRITE,
+    because a retry around the stage would spend a second call for the same
+    answer.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_lost_connection_is_reconnected_without_a_second_llm_call(
+        self, db_session, new_session, story_factory, llm_patched
+    ):
+        story = story_factory(status=Story.Status.PENDING, units=3)
+        story_id = story.id
+        await db_session.commit()
+        _with_real_evidence(llm_patched, await _unit_ids(db_session, story))
+
+        real_insert = claims_stage._insert_claim_rows
+        sessions_used = []
+
+        async def _write(session, rows, counts):
+            sessions_used.append(session)
+            if len(sessions_used) == 1:
+                raise _closed()
+            return await real_insert(session, rows, counts)
+
+        def maker():
+            return new_session()
+
+        with patch.object(claims_stage, "_insert_claim_rows", _write):
+            result = await claims_stage.extract_claims_for_story(
+                db_session, story_id, sessionmaker=maker
+            )
+
+        assert result["errors"] == [], result["errors"]
+        assert result["claims_created"] == 1
+        assert result["evidence_created"] == 1
+        assert len(sessions_used) == 2, "the write was not retried on a fresh connection"
+        assert sessions_used[0] is not sessions_used[1], "retried on the same dead session"
+        # The point of the whole split: one answer, one charge.
+        assert llm_patched.chat_completion.await_count == 1
+        # ...and the row really landed, on the retry's connection.
+        async with new_session() as verify:
+            assert (
+                await verify.execute(
+                    select(func.count())
+                    .select_from(Claim)
+                    .where(Claim.story_id == story_id)
+                )
+            ).scalar_one() == 1
+
+    @pytest.mark.asyncio
+    async def test_without_a_sessionmaker_the_error_is_not_swallowed(
+        self, db_session, story_factory, llm_patched
+    ):
+        """The pre-existing callers get one attempt, and see the real error."""
+        story = story_factory(status=Story.Status.PENDING, units=3)
+        story_id = story.id
+        await db_session.commit()
+        _with_real_evidence(llm_patched, await _unit_ids(db_session, story))
+
+        async def _write(session, rows, counts):
+            raise _closed()
+
+        with patch.object(claims_stage, "_insert_claim_rows", _write):
+            result = await claims_stage.extract_claims_for_story(db_session, story_id)
+        assert result["claims_created"] == 0
+        assert "connection is closed" in result["errors"][0]
+
+    @pytest.mark.asyncio
+    async def test_a_statement_error_is_not_retried_as_if_it_were_a_disconnect(self):
+        """A duplicate or a bad column fails the same way on a new connection.
+
+        Retrying it would hide the first error behind a second identical one, and
+        would look like the reconnect feature working.
+        """
+        from sqlalchemy.exc import IntegrityError
+
+        duplicate = IntegrityError("INSERT", {}, Exception("duplicate key"))
+
+        assert not claims_stage._is_disconnect(duplicate)
+        assert claims_stage._is_disconnect(_closed())
+        assert claims_stage._is_disconnect(
+            Exception("server closed the connection unexpectedly")
+        )
 
 
 class TestTheRunSpendsOnce:

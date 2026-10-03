@@ -96,7 +96,12 @@ async def _extract_claims(session_factory, story_id, *, budget, max_units, retri
         try:
             async with session_factory() as session:
                 return await claims_stage.extract_claims_for_story(
-                    session, story_id, max_units=max_units, budget=budget
+                    session, story_id, max_units=max_units, budget=budget,
+                    # The write outlives the LLM call, and the call is paced 25s
+                    # apart, so the connection this session holds can go stale
+                    # before the insert. Handing over the factory lets the write
+                    # reconnect instead of throwing away a paid-for answer.
+                    sessionmaker=session_factory,
                 )
         except Phase2BudgetRefused as exc:
             raise _Skip(SKIP_BUDGET, str(exc)) from exc
@@ -206,10 +211,21 @@ async def main(argv: list[str] | None = None) -> int:
 
     async with session_factory() as session:
         stories = await select_phase2_stories(
-            session, hours_back=args.hours_back, max_stories=args.max_stories
+            session,
+            hours_back=args.hours_back,
+            max_stories=args.max_stories,
+            # The day's token budget cannot buy a reading of a one-source story,
+            # so a story the extractor will refuse is not a slot worth spending.
+            # Measured on dev 2026-10-03: the 20 newest gate-passed stories all
+            # had one unit, so without this the daily run reported twenty skips
+            # and never reached a story it could analyse. Grouping and arcs still
+            # run on those stories, via the three stage entry points, which do
+            # not pass this.
+            min_units=claims_stage.MIN_CLAIM_UNITS,
         )
     print(
         f"Phase 2: {len(stories)} gate-passed stories in the last {args.hours_back}h "
+        f"with {claims_stage.MIN_CLAIM_UNITS}+ text-bearing units "
         f"(cap {budget.cap} tokens/day, "
         f"{'dry run' if args.dry_run else f'{await budget.remaining()} tokens remaining'})"
     )

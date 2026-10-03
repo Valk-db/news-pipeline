@@ -5,6 +5,7 @@ One LLM call per story (not per unit) -- see AGENT_TASKS.md P2-B for why.
 import logging
 import uuid
 from sqlalchemy import select
+from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import Story, Claim, ClaimEvidence, ClaimType, ClaimStance
 from src.verification.stories import _gather_unit_texts_for_story
@@ -152,12 +153,144 @@ async def story_unit_digest(
     return digest
 
 
+def _parse_claim_rows(
+    data: dict, *, story_id: uuid.UUID, unit_digest: str,
+) -> list[tuple[dict, list[dict]]]:
+    """The model's answer as plain dicts, with nothing sent to the database.
+
+    Split out of the writer so that a malformed evidence row, a bad claim_type, a
+    truncated JSON body -- everything that can go wrong between the provider's
+    answer and a commit -- is decided before the connection is touched, and so
+    that the write can be replayed on a new connection without a second LLM call.
+    The rows carry the input_hash each one needs so the digest computed from the
+    evidence is not recomputed per row and cannot drift between the two paths.
+    """
+    rows = []
+    for claim_data in data.get("claims", []):
+        claim_text = claim_data["text"]
+        claim = {
+            "story_id": story_id,
+            "text": claim_text,
+            "claim_type": ClaimType(claim_data.get("claim_type", "fact")),
+            # A claim's input is the story it was extracted from plus the claim text
+            # itself, normalized: the same claim re-worded only in whitespace or case is
+            # the same claim, and a re-run that returned it slightly differently must not
+            # look like new state.
+            "analyzer_version": CLAIM_VERSION,
+            "input_hash": claim_input_hash(story_id, unit_digest, claim_text),
+        }
+        evidence = []
+        for ev in claim_data.get("evidence", []):
+            try:
+                evidence.append({
+                    "unit_id": uuid.UUID(ev["unit_id"]),
+                    "stance": ClaimStance(ev.get("stance", "neutral")),
+                    "confidence": int(ev.get("confidence", 50)),
+                })
+            except (KeyError, ValueError, TypeError):
+                # A malformed evidence row shouldn't drop the whole claim, and
+                # saying which claim lost it is the difference between a debuggable
+                # log and "some evidence went missing".
+                logger.warning("Skipping malformed evidence for claim %r", claim_text[:80])
+        rows.append((claim, evidence))
+    return rows
+
+
+def _is_disconnect(error: BaseException) -> bool:
+    """Did the connection die, as opposed to the statement being wrong?
+
+    Narrow on purpose. A unique-violation or a bad column is a bug or a
+    duplicate, and retrying it on a new connection would fail identically while
+    hiding the first error. A closed connection, a dropped socket, or a server
+    that went away are the cases where the identical statement on a fresh
+    connection can succeed.
+    """
+    if isinstance(error, (InterfaceError, OperationalError)):
+        return True
+    text = str(error).lower()
+    # asyncpg's own wording when the socket dies mid-query is "server closed the
+    # connection unexpectedly", which arrives wrapped rather than as an
+    # InterfaceError when it happens outside SQLAlchemy's execution path.
+    return "connection is closed" in text or "closed the connection" in text
+
+
+async def _write_claim_rows(
+    session: AsyncSession,
+    rows: list[tuple[dict, list[dict]]],
+    *,
+    sessionmaker=None,
+) -> dict:
+    """Write parsed claim rows, reconnecting once if the connection died.
+
+    The retry is here, around the write only, and never around the LLM call.
+    That split is the whole reason the parse is a separate step: measured on dev
+    2026-10-03, a Phase 2 story spent a real LLM call and then lost the entire
+    result to `InterfaceError: connection is closed` at the flush, because the
+    call took long enough (the run paces calls 25s apart) for the connection
+    held open by the session to go stale underneath it. Retrying the stage would
+    have bought a second call's tokens for the same answer; retrying the write
+    buys the first call's answer for free.
+
+    Without a sessionmaker the write is attempted once and the error propagates,
+    which is what the pre-existing callers (scripts/run_claim_extraction.py, the
+    recompute path) get -- they open a session per story and have no reason to
+    hand one over.
+    """
+    counts = {"claims_created": 0, "evidence_created": 0}
+    try:
+        await _insert_claim_rows(session, rows, counts)
+    except Exception as first:
+        if sessionmaker is None or not _is_disconnect(first):
+            raise
+        logger.warning(
+            "Claim write lost its connection (%s); retrying once on a fresh one",
+            type(first).__name__,
+        )
+        await session.rollback()
+        async with sessionmaker() as fresh:
+            await _insert_claim_rows(fresh, rows, counts)
+    return counts
+
+
+async def _insert_claim_rows(
+    session: AsyncSession,
+    rows: list[tuple[dict, list[dict]]],
+    counts: dict,
+) -> None:
+    """Insert one story's claims and their evidence, and commit."""
+    for claim_row, evidence_rows in rows:
+        claim = Claim(**claim_row)
+        session.add(claim)
+        await session.flush()  # get claim.id before adding evidence rows
+        counts["claims_created"] += 1
+
+        for ev in evidence_rows:
+            session.add(ClaimEvidence(
+                claim_id=claim.id,
+                unit_id=ev["unit_id"],
+                stance=ev["stance"],
+                confidence=ev["confidence"],
+                # One evidence row is one (claim, unit) stance report -- the same key
+                # as uq_claim_unit -- plus the stance itself, which is the judgement
+                # the row records. The confidence is a number attached to that
+                # judgement, not an input to it.
+                analyzer_version=CLAIM_VERSION,
+                input_hash=compute_input_hash(
+                    CLAIM_VERSION, str(claim.id), str(ev["unit_id"]), ev["stance"].value
+                ),
+            ))
+            counts["evidence_created"] += 1
+
+    await session.commit()
+
+
 async def extract_claims_for_story(
     session: AsyncSession,
     story_id: uuid.UUID,
     *,
     max_units: int = CLAIM_MAX_UNITS,
     budget=None,
+    sessionmaker=None,
 ) -> dict:
     """Extract and persist the claim matrix for one story.
 
@@ -172,6 +305,10 @@ async def extract_claims_for_story(
     budget concern is visible in the signature of the one function that spends.
     A budget refusal is re-raised rather than recorded as an error: the caller
     needs to stop working through the queue, which an errors list cannot express.
+
+    `sessionmaker` is used for one thing only: re-establishing the database
+    connection if it dies between the LLM call and the insert. See
+    _write_claim_rows for why that costs the caller nothing to accept.
     """
     results = {"story_id": str(story_id), "claims_created": 0, "evidence_created": 0, "errors": []}
 
@@ -243,48 +380,12 @@ async def extract_claims_for_story(
         # fenced code blocks. cluster_viewpoints uses raw json.loads and is
         # fragile to this; don't repeat that in new code.
         data = llm._parse_json_response(content)
-
-        for claim_data in data.get("claims", []):
-            claim_text = claim_data["text"]
-            claim = Claim(
-                story_id=story_id,
-                text=claim_text,
-                claim_type=ClaimType(claim_data.get("claim_type", "fact")),
-                # A claim's input is the story it was extracted from plus the claim text
-                # itself, normalized: the same claim re-worded only in whitespace or case is
-                # the same claim, and a re-run that returned it slightly differently must not
-                # look like new state.
-                analyzer_version=CLAIM_VERSION,
-                input_hash=claim_input_hash(story_id, unit_digest, claim_text),
-            )
-            session.add(claim)
-            await session.flush()  # get claim.id before adding evidence rows
-            results["claims_created"] += 1
-
-            for ev in claim_data.get("evidence", []):
-                try:
-                    stance = ClaimStance(ev.get("stance", "neutral"))
-                    evidence = ClaimEvidence(
-                        claim_id=claim.id,
-                        unit_id=uuid.UUID(ev["unit_id"]),
-                        stance=stance,
-                        confidence=int(ev.get("confidence", 50)),
-                        # One evidence row is one (claim, unit) stance report -- the same key
-                        # as uq_claim_unit -- plus the stance itself, which is the judgement
-                        # the row records. The confidence is a number attached to that
-                        # judgement, not an input to it.
-                        analyzer_version=CLAIM_VERSION,
-                        input_hash=compute_input_hash(
-                            CLAIM_VERSION, str(claim.id), str(ev["unit_id"]), stance.value
-                        ),
-                    )
-                    session.add(evidence)
-                    results["evidence_created"] += 1
-                except (KeyError, ValueError) as e:
-                    # A malformed evidence row shouldn't drop the whole claim
-                    logger.warning(f"Skipping malformed evidence for claim {claim.id}: {e}")
-
-        await session.commit()
+        rows = _parse_claim_rows(data, story_id=story_id, unit_digest=unit_digest)
+        written = await _write_claim_rows(
+            session, rows, sessionmaker=sessionmaker,
+        )
+        results["claims_created"] = written["claims_created"]
+        results["evidence_created"] = written["evidence_created"]
     except Exception as e:
         if budget is not None:
             from src.verification.phase2 import Phase2BudgetRefused
