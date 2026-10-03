@@ -13,11 +13,19 @@ One statement does the whole job::
         WHERE budget_counters.used + :amount <= :cap
     RETURNING used
 
-A plain UPDATE would be atomic too, but there is no row to update until the day's first
-spend, so the insert path has to exist; putting both in one statement is what keeps the
-cap honest with two runners in flight. The WHERE on the update path is what makes the
-answer the caller gets *the* answer: no row returned means the increment would have passed
-the cap, so nothing was spent.
+    A plain UPDATE would be atomic too, but there is no row to update until the day's first
+    spend, so the insert path has to exist; putting both in one statement is what keeps the
+    cap honest with two runners in flight. The WHERE on the update path is what makes the
+    answer the caller gets *the* answer: no row returned means the increment would have passed
+    the cap, so nothing was spent.
+
+    The insert path needs its own WHERE for the same reason, and it is easy to leave off
+    because it looks redundant next to the one below it. Without it the cap is not applied
+    to the day's first spend at all: the row is created with `used = :amount` no matter
+    what :cap is. The visible consequences are a cap that can be exceeded by exactly one
+    request, and a cap of 0 that does not refuse -- which is not a cap of 0, it is no cap
+    at all until the second request of the day.
+
 
 Degradation is deliberately one-directional. If the database is unreachable, or the table
 is missing, or nothing is configured, spend() returns None -- the same answer as "over
@@ -44,10 +52,24 @@ GROQ_REQUESTS = "groq_requests"
 # caption/classification work that ran first (or the reverse).
 GROQ_TRANSLATION_REQUESTS = "groq_translation_requests"
 MYMEMORY_CHARS = "mymemory_chars"
+# Cerebras was the one rung with no counter at all: it fell through from Groq and spent
+# whatever the provider allowed, so a Cerebras-only day was uncountable. Same rule as
+# GROQ_REQUESTS vs GROQ_TRANSLATION_REQUESTS -- one row per rung, so a rung's exhaustion
+# is its own news.
+CEREBRAS_REQUESTS = "cerebras_requests"
+# One row per free MODEL, not per provider. OpenRouter's ":free" pool is shared across
+# every OpenRouter user, so google/gemma-4-26b-a4b-it:free and
+# nvidia/nemotron-3-super-120b-a12b:free get 429'd independently: on 2026-10-03 Gemma
+# returned 429 on 3/3 attempts while Nemotron returned 200 on the first. A single
+# openrouter_requests row would let that outage report itself as "the budget is spent"
+# and demote a working model.
+OPENROUTER_GEMMA_REQUESTS = "openrouter_gemma_requests"
+OPENROUTER_NEMOTRON_REQUESTS = "openrouter_nemotron_requests"
 
 _SPEND = text(
     """
-    INSERT INTO budget_counters (name, day, used) VALUES (:name, :day, :amount)
+    INSERT INTO budget_counters (name, day, used)
+    SELECT :name, :day, :amount WHERE :amount <= :cap
     ON CONFLICT (name, day) DO UPDATE
         SET used = budget_counters.used + :amount
         WHERE budget_counters.used + :amount <= :cap
