@@ -136,10 +136,35 @@ def report(tree: pathlib.Path, *, python: str | None = None,
             "%d shipped module(s) import a dropped module at import time: %s"
             % (len(live), _fmt_list(["%s -> %s" % (b.source, b.target) for b in live], 5)))
     if latent:
-        print("\nNOTE: the function-scope edges are latent, not live. They are "
-              "correct today\n      because no served code path reaches them, and "
-              "they break the first time one does.\n      They are reported, not "
-              "failed: making them fatal would fail on code that works.")
+        unack = db.unacknowledged_latent_edges(latent)
+        print("\nFUNCTION-SCOPE EDGES (latent: correct today, broken the first time a "
+              "served path reaches them)")
+        for edge in latent:
+            why = db.latent_edge_verdict(edge)
+            if why is None:
+                print("  UNINVESTIGATED  %s:%d -> %s"
+                      % (edge.source, edge.lineno, edge.target))
+            else:
+                print("  KNOWN, UNREACHABLE  %s:%d -> %s\n      %s"
+                      % (edge.source, edge.lineno, edge.target, why))
+        print("\n  These are reported, not failed: making them fatal would fail on "
+              "code that\n      works. A KNOWN edge has been traced to a call graph "
+              "that cannot reach it;\n      an UNINVESTIGATED one has not, and is "
+              "yours to classify.")
+        if unack:
+            failures.append(
+                "%d function-scope boundary edge(s) have not been investigated: %s. "
+                "Either they are unreachable (record the reason in "
+                "KNOWN_LATENT_BOUNDARY_EDGES) or they are a landmine."
+                % (len(unack),
+                   _fmt_list(["%s:%d -> %s" % (b.source, b.lineno, b.target)
+                              for b in unack], 5)))
+    stale = db.stale_acknowledgements(broken)
+    if stale:
+        print("\nSTALE ACKNOWLEDGEMENT: %s no longer appears as a boundary edge. "
+              "Delete the\n      entry; a record of an investigated edge that outlives "
+              "the edge is a false premise."
+              % _fmt_list(["%s -> %s" % k for k in stale], 5))
 
     _rule("6. Dependency closure vs requirements.txt")
     closure = db.dependency_closure(tree, check.loaded_third_party)

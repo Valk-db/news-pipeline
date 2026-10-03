@@ -780,6 +780,78 @@ class BoundaryImport:
     shipped: bool
 
 
+# The latent boundary edges that have been investigated, found unreachable, and are
+# therefore expected rather than outstanding. Keyed by (source, target) so the
+# acknowledgement survives a line moving, which it will: an unrelated edit above
+# the import shifts every lineno in the file.
+#
+# This exists because a reported finding that nobody has classified gets
+# re-investigated by every batch that sees it, and the answer is the same each
+# time. `event_identity.py:196` has been reported by the bundle check since the
+# check was written. Here is the answer, once, next to the finding.
+#
+# `why` is the call-graph argument, not a grep. `curation_ui` imports exactly four
+# names from that module -- IS_CANONICAL_EVENT, CANONICAL_EVENT_ID,
+# cluster_tier1_sources and cluster_corroboration -- and the first three are
+# SQLAlchemy expressions while the fourth is one grouped SELECT. The only entry
+# points to `event_entity_keys` are `same_event` (via `cluster_events`) and
+# `assign_canonical_events`, and the sole non-test caller of either is
+# `scripts/backfill_globe_events.py`, which `.vercelignore` drops. Nothing on a
+# served route can reach the import, so it cannot execute on Vercel.
+#
+# Deliberately NOT a suppression list. `latent_edge_verdict` only ever labels a
+# FUNCTION-scope edge; a module-scope edge, which is a live break, is never
+# labelled and never consults this table. `test_a_known_latent_edge_cannot_hide_a_live_break`
+# is the mutation that proves it.
+KNOWN_LATENT_BOUNDARY_EDGES: dict[tuple[str, str], str] = {
+    (
+        "src/verification/event_identity.py",
+        "src.utils.ner.canonical_surface",
+    ): (
+        "unreachable from every served route: the lazy import sits in "
+        "event_entity_keys(), whose only entry points are same_event() and "
+        "assign_canonical_events(), and the sole non-test caller of either is "
+        "scripts/backfill_globe_events.py, which .vercelignore drops. curation_ui "
+        "imports only IS_CANONICAL_EVENT, CANONICAL_EVENT_ID, cluster_tier1_sources "
+        "and cluster_corroboration from this module, none of which call it. It "
+        "breaks the first time a shipped code path reaches event_entity_keys(), and "
+        "cross_boundary_imports() will say so again if that happens."
+    ),
+}
+
+
+def latent_edge_verdict(edge: BoundaryImport) -> str | None:
+    """The reason this known edge is unreachable, or None if it is not a known one.
+
+    Returns None for anything at module scope, deliberately: an acknowledgement
+    recorded while an edge was function-scope must not be able to launder the same
+    import once someone hoists it to the top of the file, which would turn a
+    latent edge into a live one.
+    """
+    if edge.scope != "function":
+        return None
+    return KNOWN_LATENT_BOUNDARY_EDGES.get((edge.source, edge.target))
+
+
+def unacknowledged_latent_edges(edges: Sequence[BoundaryImport]) -> list[BoundaryImport]:
+    """Latent edges nobody has investigated. The ones that still need a human."""
+    return [e for e in edges
+            if e.scope == "function" and not e.shipped
+            and latent_edge_verdict(e) is None]
+
+
+def stale_acknowledgements(edges: Sequence[BoundaryImport]) -> list[tuple[str, str]]:
+    """Entries for edges that no longer exist, so the table cannot accumulate lies.
+
+    A record of "we checked this and it is fine" is only worth keeping while the
+    thing it describes exists. One that outlives its edge is a second false
+    premise, which is the exact failure this table was added to stop.
+    """
+    present = {(e.source, e.target) for e in edges
+               if e.scope == "function" and not e.shipped}
+    return sorted(key for key in KNOWN_LATENT_BOUNDARY_EDGES if key not in present)
+
+
 def _iter_import_nodes(tree: ast.Module):
     """Yield `(node, scope)` for every Import/ImportFrom, function bodies included.
 
