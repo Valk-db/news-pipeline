@@ -407,6 +407,502 @@
      "note": "A count with a superlative attached, attributed to the speaker."
     }
    ]
+  },
+  "773ebddb-8d38-4086-bc98-5d45f0c1b3a8": {
+   "stratum": "lang-fa",
+   "detected_language": "fa",
+   "source_domain": "bbc.com",
+   "title": "اعتراض شماری از خانوادههای جانباختگان اعتراضات دی به پزشکیان - BBC News فارسی",
+   "body_chars": 2314,
+   "sheet_block": 1,
+   "labeler_notes": "2314-char BBC Persian wire piece; the whole body fits in the 8000-char window, so positions are dense and near-zero-heavy.",
+   "snippets": [
+    {
+     "text": "شماری از خانوادههای جانباختگان کشتار دی ماه ۱۴۰۴ با انتشار ویدیوهایی به مسعود پزشکیان، رئیسجمهور ایران به خاطر «تروریست» خواندن معترضان دیماه در مصاحبه اخیرش با فاکسنیوز اعتراض کردند.",
+     "type": "fact",
+     "entities": [
+      "مسعود پزشکیان",
+      "فاکسنیوز"
+     ],
+     "confidence": 90,
+     "position": 0.0264,
+     "sheet_lines": [
+      5,
+      5
+     ],
+     "note": "The lead: who protested, whom, and over which words."
+    },
+    {
+     "text": "دونالد ترامپ خودش اعلام کرد که آمریکا این افراد را «تجهیز و مسلح» کرده است تا دولت ایران را سرنگون کنند و «افراد نتانیاهو اعلام کردند که نیروهایی از استانهای کردستان و بلوچستان وارد مراکز اصلی شهرها",
+     "type": "quote",
+     "entities": [
+      "مسعود پزشکیان",
+      "دونالد ترامپ"
+     ],
+     "confidence": 90,
+     "position": 0.1742,
+     "sheet_lines": [
+      "at",
+      6,
+      "دونالد ترامپ خودش اعلام کرد",
+      200
+     ],
+     "note": "The contested statement itself, in the president's words."
+    },
+    {
+     "text": "«من شهادت میدهم که برادرم هنگام کشته شدن به دست نیروهای جمهوری اسلامی ایران در تاریخ ۸ ژانویهٔ ۲۰۲۶، غیرمسلح بود. او به نمایندگی از هیچ دولت خارجی عمل نمیکرد.",
+     "type": "quote",
+     "entities": [
+      "سینا کاظمی",
+      "جمهوری اسلامی ایران"
+     ],
+     "confidence": 85,
+     "position": 0.3907,
+     "sheet_lines": [
+      "at",
+      9,
+      "«من شهادت",
+      250
+     ],
+     "note": "A named relative testifying; the human core of the story."
+    },
+    {
+     "text": "او فقط ۲۱ سال داشت؛ یک بسکتبالیست حرفهای با آیندهای روشن پیشِرو. او به نمایندگی از هیچ دولت خارجی عمل نمیکرد. آنها مستقیماً قلبش را هدف گرفتند.",
+     "type": "fact",
+     "entities": [
+      "احمد خسروانی"
+     ],
+     "confidence": 85,
+     "position": 0.5441,
+     "sheet_lines": [
+      "at",
+      11,
+      "او فقط",
+      200
+     ],
+     "note": "The specific victim, with the age that fixes the story."
+    },
+    {
+     "text": "حکومت ایران پیش از این بارها اعتراضات مسالمتآمیز مردم را با عنوان «اغتشاش» و معترضان را «اغتشاشگر» معرفی کرده است.",
+     "type": "fact",
+     "entities": [
+      "حکومت ایران"
+     ],
+     "confidence": 80,
+     "position": 0.9507,
+     "sheet_lines": [
+      14,
+      14
+     ],
+     "note": "Definitive closing framing claim about state language."
+    }
+   ]
+  },
+  "9aa7ef91-915a-44d2-82f8-0d1484702c49": {
+   "stratum": "lang-zh",
+   "detected_language": "zh-cn",
+   "source_domain": "epochtimes.com",
+   "title": "【独家】中国电池厂落户美国小镇 居民抗议",
+   "body_chars": 8223,
+   "sheet_block": 2,
+   "labeler_notes": "8223-char investigative feature. The model sees chars 0-8000, so the closing paragraphs sit outside the window and are NOT labeled.",
+   "snippets": [
+    {
+     "text": "在这种背景之下，伊利诺伊州是个例外——该州欢迎国轩高科电池工厂，将其视为该州历史上最大的电动车电池投资案，并已向国轩高科支付了1.65亿美元的现金。",
+     "type": "stat",
+     "entities": [
+      "伊利诺伊州",
+      "国轩高科"
+     ],
+     "confidence": 90,
+     "position": 0.0772,
+     "sheet_lines": [
+      24,
+      24
+     ],
+     "note": "Largest quantified claim in the piece, with its context."
+    },
+    {
+     "text": "电子邮件内容显示，从规划委员会提出建议到镇议会最终投票表决之间的这段时间里，这家公关公司协助起草了针对居民提问的答复文本，并提出了网站文案建议。派克透露，给该公司的报酬是分批支付的，每次约2万美元；由于每笔金额都太小，因此无需单独列项提交预算表决。",
+     "type": "stat",
+     "entities": [
+      "阿曼达·派克",
+      "贾斯库尔卡·特曼战略传播公司"
+     ],
+     "confidence": 90,
+     "position": 0.2635,
+     "sheet_lines": [
+      40,
+      40
+     ],
+     "note": "The payment mechanism that makes the PR allegation concrete."
+    },
+    {
+     "text": "这个居民们关切的项目，同时也令他们感到恐惧。他们担心，这家电池工厂有朝一日可能会引发锂电池火灾。马里兰大学（University of Maryland）杰出教授、先进生命周期工程中心（Center for Advanced Life Cycle Engineering）主任迈克尔‧佩希特（Michael Pecht）表示，一旦这种火灾蔓延开来，就很难扑灭。佩希特经常受邀调查电池起火的原因。",
+     "type": "quote",
+     "entities": [
+      "迈克尔·佩希特",
+      "马里兰大学"
+     ],
+     "confidence": 85,
+     "position": 0.4159,
+     "sheet_lines": [
+      "head",
+      56,
+      197
+     ],
+     "note": "Named expert attribution on the hazard residents fear."
+    },
+    {
+     "text": "2025年5月14日，林赛‧帕克赫斯特（Lindsay Parkhurst）法官在一份裁决中写道，一个城镇不能先隐瞒了一项决定，然后又指责人们没有对此提出异议。被告“不能将行政救济手段既当作武器又当作盾牌”。",
+     "type": "quote",
+     "entities": [
+      "林赛·帕克赫斯特"
+     ],
+     "confidence": 90,
+     "position": 0.5114,
+     "sheet_lines": [
+      64,
+      64
+     ],
+     "note": "The ruling that decided the litigation."
+    },
+    {
+     "text": "“这意味着对中国供应的依赖性更强。”他说道，“这与人们通常的认知正好相反。”他还表示，组装环节属于“非常低端的领域”。",
+     "type": "quote",
+     "entities": [
+      "迈克尔·佩希特",
+      "中国"
+     ],
+     "confidence": 85,
+     "position": 0.6689,
+     "sheet_lines": [
+      "at",
+      77,
+      "“这意味着",
+      200
+     ],
+     "note": "The thesis quote, contradicting the intuitive reading."
+    }
+   ]
+  },
+  "e6fdb070-967a-400b-a8ae-04be535446e8": {
+   "stratum": "lang-ml",
+   "detected_language": "ml",
+   "source_domain": "thejasnews.com",
+   "title": "കെ എം ഷാജിയുടെ വാഹനം യുവമോര്ച്ചക്കാര് തടഞ്ഞു; മന്ത്രി കയറിയ ഓട്ടോയും തടഞ്ഞു, പിന്നാലെ മന്ത്രി നടന്നുപോയി",
+   "body_chars": 2025,
+   "sheet_block": 3,
+   "labeler_notes": "2025-char Malayalam political item, five paragraphs.",
+   "snippets": [
+    {
+     "text": "കെ എം ഷാജിയുടെ വാഹനം യുവമോര്ച്ചക്കാര് തടഞ്ഞു; മന്ത്രി കയറിയ ഓട്ടോയും തടഞ്ഞു, പിന്നാലെ മന്ത്രി നടന്നുപോയി",
+     "type": "fact",
+     "entities": [
+      "തിരുവനന്തപുരം",
+      "വാന് റോസ് ജങ്ഷൻ"
+     ],
+     "confidence": 85,
+     "position": 0.0,
+     "sheet_lines": [
+      113,
+      113
+     ],
+     "note": "Where it happened; the dateline's content."
+    },
+    {
+     "text": "തിരുവനന്തപുരം: തദ്ദേശ മന്ത്രി കെ എം ഷാജിയെ യുവമോര്ച്ച പ്രവര്ത്തകര് തടഞ്ഞു. തിരുവനന്തപുരം പാളയത്തിന് സമീപത്തെ വാന് റോസ് ജങ്ഷനിലായിരുന്നു സംഭവം. വാഹനം തടഞ്ഞതോടെ മന്ത്രി ഓട്ടോയില് കയറിയെങ്കിലും യുവമോര്ച്ച പ്രവര്ത്തകര് ഓട്ടോയും തടഞ്ഞു. പിന്നാലെ, ഒട്ടോയില് നിന്നും ഇറങ്ങി മന്ത്രി നടന്ന",
+     "type": "fact",
+     "entities": [
+      "യുവമോര്ച്ച"
+     ],
+     "confidence": 90,
+     "position": 0.0519,
+     "sheet_lines": [
+      "head",
+      114,
+      280
+     ],
+     "note": "The central event: the walk itself, in detail."
+    },
+    {
+     "text": "മന്ത്രിക്ക് പൈലറ്റും എസ്കോര്ട്ടും ഉണ്ടായിരുന്നില്ല. ഇത് ഗുരുതര സുരക്ഷാ വീഴ്ചയായി കണക്കാക്കുന്നു. തലസ്ഥാനത്ത് കോണ്ഗ്രസ്-ബിജെപി പ്രവര്ത്തകര് തമ്മിലെ സംഘര്ഷം കനക്കുകയാണ്.",
+     "type": "fact",
+     "entities": [],
+     "confidence": 85,
+     "position": 0.2237,
+     "sheet_lines": [
+      "at",
+      114,
+      "മന്ത്രിക്ക് പൈലറ്റും",
+      200
+     ],
+     "note": "The security failure, stated flatly as a finding."
+    },
+    {
+     "text": "യുവമോര്ച്ച തിരുവനന്തപുരം നോര്ത്ത് ജില്ലാ അധ്യക്ഷന് സൂര്യകൃഷ്ണന്റെ നേതൃത്വത്തിലാണ് പ്രതിഷേധം ഉണ്ടായത്. ബിജെപി നേതാക്കള്ക്ക് നേരെയും പ്രതിഷേധം ഉണ്ടായി. നെയ്യാറ്റിന്കരയില് ബിജെപി ദേശീയ നിര്വാഹക സമിതി അംഗം പി കെ കൃഷ്ണദാസിന്റെ വാഹനത്തിന് നേരെയായിരുന്നു പ്രതിഷേധം.",
+     "type": "fact",
+     "entities": [
+      "യുവമോര്ച്ച",
+      "സൂര്യകൃഷ്ണൻ",
+      "ബിജെപി"
+     ],
+     "confidence": 85,
+     "position": 0.4746,
+     "sheet_lines": [
+      "at",
+      116,
+      "യുവമോര്ച്ച തിരുവനന്തപുരം",
+      260
+     ],
+     "note": "The organisers, named."
+    },
+    {
+     "text": "കോണ്ഗ്രസ് പ്രവര്ത്തകര് കരിങ്കൊടി കാണിച്ചതിന് പിന്നാലെയാണ് സംസ്ഥാനത്തെ യുഡിഎഫ് മന്ത്രിമാര്ക്കെതിരേ യുവമോര്ച്ച കരിങ്കൊടി പ്രതിഷേധം ആരംഭിച്ചത്.",
+     "type": "claim",
+     "entities": [
+      "യുഡിഎഫ്",
+      "യുവമോര്ച്ച"
+     ],
+     "confidence": 90,
+     "position": 0.6933,
+     "sheet_lines": [
+      "at",
+      117,
+      "കോണ്ഗ്രസ്",
+      260
+     ],
+     "note": "The asserted political causation; a claim, not an observed fact."
+    }
+   ]
+  },
+  "e2b4777c-41cd-46ae-b536-2aded708654e": {
+   "stratum": "lang-sq",
+   "detected_language": "sq",
+   "source_domain": "balkanweb.com",
+   "title": "“E vërteta s’ka nevojë për skenar”/ Mesazh Von der Leyen me pankarta: Ursula, lejo që Europa të dëgjojë për protestën",
+   "body_chars": 1117,
+   "sheet_block": 4,
+   "labeler_notes": "1117-char Albanian wire item; only four labels because the piece is short and largely one protest event.",
+   "snippets": [
+    {
+     "text": "Në ditën e 123-të të protestës qytetare kundër qeverisë, protestuesit kanë përcjellë një mesazh të drejtpërdrejtë për presidenten e Komisionit Europian, Ursula von der Leyen, e cila ndodhet në Tiranë për vizitë zyrtare.",
+     "type": "fact",
+     "entities": [
+      "Ursula von der Leyen",
+      "Komisioni Europian",
+      "Tiranë"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      123,
+      123
+     ],
+     "note": "Sets the scene: day 123, who is visiting, where."
+    },
+    {
+     "text": "Përmes pankartave të vendosura në protestë, qytetarët i kanë kërkuar drejtueses së Komisionit Europian që gjatë vizitës së saj të dëgjojë edhe zërin e atyre që prej muajsh protestojnë kundër qeverisë.",
+     "type": "fact",
+     "entities": [
+      "Komisioni Europian"
+     ],
+     "confidence": 85,
+     "position": 0.197,
+     "sheet_lines": [
+      124,
+      124
+     ],
+     "note": "What the protesters asked for, stated plainly."
+    },
+    {
+     "text": "“Shqipëria e do Europën, Ursula, lëre Europën të dëgjojë edhe Shqipërinë që proteston!”, shkruhet në një prej pankartave.",
+     "type": "quote",
+     "entities": [
+      "Ursula von der Leyen"
+     ],
+     "confidence": 85,
+     "position": 0.3769,
+     "sheet_lines": [
+      125,
+      125
+     ],
+     "note": "The postcard text itself, the quotable artefact."
+    },
+    {
+     "text": "Mesazhet për Von der Leyen vijnë në të njëjtën ditë kur presidentja e Komisionit Europian zhvilloi takim dhe konferencë të përbashkët me kryeministrin Edi Rama në Kryeministri. Gjatë qëndrimit të saj në godinë, jashtë saj vijoi protesta e qytetarëve, nën masa të shtuara sigurie.",
+     "type": "fact",
+     "entities": [
+      "Ursula von der Leyen",
+      "Edi Rama"
+     ],
+     "confidence": 90,
+     "position": 0.7502,
+     "sheet_lines": [
+      129,
+      129
+     ],
+     "note": "The same-day meeting that triggered the postcards."
+    }
+   ]
+  },
+  "e3314a2b-4ffa-4b3c-9a04-be33be2e1030": {
+   "stratum": "lang-uk",
+   "detected_language": "uk",
+   "source_domain": "tvoemisto.tv",
+   "title": "Пам’ять Героїв, прапори та виступ військового оркестру: що відбудеться у Львові 1 жовтня",
+   "body_chars": 1447,
+   "sheet_block": 5,
+   "labeler_notes": "1447-char Ukrainian civic-announcement piece; the article is a timetable, so the strongest snippets are the schedule items with times.",
+   "snippets": [
+    {
+     "text": "У Львові 1 жовтня відбудуться заходи з нагоди Дня захисників і захисниць України. У цей день вшанують пам’ять Героїв України та всіх борців за свободу й незалежність . Про це повідомила Львівська обласна рада.",
+     "type": "fact",
+     "entities": [
+      "Львівська обласна рада"
+     ],
+     "confidence": 85,
+     "position": 0.0,
+     "sheet_lines": [
+      134,
+      134
+     ],
+     "note": "Announcement of the event and its official source."
+    },
+    {
+     "text": "О 13:00 на флагштоці перед головним входом у Львівську обласну раду на площі Андрія Парубія, 1 відбудеться церемонія підняття Державного Прапора України та Прапора \"Між небом і землею\".",
+     "type": "fact",
+     "entities": [
+      "Державний Прапор України"
+     ],
+     "confidence": 85,
+     "position": 0.5363,
+     "sheet_lines": [
+      139,
+      139
+     ],
+     "note": "The flagship ceremony, with a specific time and place."
+    },
+    {
+     "text": "Вечірню програму розпочнуть о 18:00 на площі перед Львівською національною оперою. Там виступить військовий оркестр Національної академії сухопутних військ імені гетьмана Петра Сагайдачного.",
+     "type": "fact",
+     "entities": [
+      "Національна академія сухопутних військ"
+     ],
+     "confidence": 80,
+     "position": 0.6648,
+     "sheet_lines": [
+      140,
+      140
+     ],
+     "note": "The evening programme and its named performer."
+    },
+    {
+     "text": "Також заплановані показові виступи Кінологічного навчального центру Державної прикордонної служби України. Завершить програму показ повнометражного українського екшн-трилера \"Кіллхаус\".",
+     "type": "fact",
+     "entities": [
+      "Державна прикордонна служба України"
+     ],
+     "confidence": 75,
+     "position": 0.7968,
+     "sheet_lines": [
+      141,
+      141
+     ],
+     "note": "The closing item; lower confidence, it is filler."
+    }
+   ]
+  },
+  "e7b36b1a-47bf-4c2c-b6d0-94e3de6c6401": {
+   "stratum": "lang-tr",
+   "detected_language": "tr",
+   "source_domain": "malatyaguncel.com",
+   "title": "Doğu Türkistan işgalinin 77'nci yılında İstanbul'da Çin protestosu",
+   "body_chars": 9254,
+   "sheet_block": 6,
+   "labeler_notes": "9254-char Turkish statement-heavy wire piece; the model sees only chars 0-8000, and the last paragraphs are unrelated site boilerplate.",
+   "snippets": [
+    {
+     "text": "Direniş ruhunun baskılara boyun eğmeyeceği vurgulanan eylemde STK'lar adına basın açıklamasını okuyan Doğu Türkistan Maarif ve Dayanışma Derneği Başkanı Musacan Er, Çin'in bugüne kadar sayısız suç işlediğini, günümüzde ise toplama kamplarında milyonlarca insanın zorla çalıştırıldığını ifade etti.",
+     "type": "fact",
+     "entities": [
+      "Musacan Er",
+      "Doğu Türkistan Maarif ve Dayanışma Derneği"
+     ],
+     "confidence": 85,
+     "position": 0.032,
+     "sheet_lines": [
+      "head",
+      148,
+      297
+     ],
+     "note": "Who spoke, in what role, and the substance reported."
+    },
+    {
+     "text": "1 Ekim günü, Doğu Türkistan'ın faşist Çin tarafından işgal edildiği kara bir gündür. 1 Ekim, Uygurlar için yeni bir sömürge döneminin başlangıç günüdür.",
+     "type": "quote",
+     "entities": [
+      "Musacan Er"
+     ],
+     "confidence": 85,
+     "position": 0.0917,
+     "sheet_lines": [
+      "at",
+      150,
+      "1 Ekim günü",
+      200
+     ],
+     "note": "The central quotation of the speech."
+    },
+    {
+     "text": "2. Sincan İsmi: Çin tarafından topraklarımıza verilen ve Çince de “Yeni sınır” “Yeni İşgal Edilmiş Toprak” anlamına gelen “Sincan” adı bu toprakların sonradan koparıldığını ve işgal edildiğini kanıtlamaktadır.",
+     "type": "fact",
+     "entities": [
+      "Çin"
+     ],
+     "confidence": 75,
+     "position": 0.3718,
+     "sheet_lines": [
+      "head",
+      154,
+      209
+     ],
+     "note": "One of three numbered historical arguments; a claim."
+    },
+    {
+     "text": "1933. yılında Kaşgar'da kurulan (Doğu Türkistan İslam Cumhuriyeti) ve 1944. Yılın da Gulca'da ikinci kez ilan edilen (Doğu Türkistan Cumhuriyeti) devleti, bu milletin esareti asla kabul etmediğinin en somut göstergesidir.",
+     "type": "stat",
+     "entities": [
+      "Doğu Türkistan İslam Cumhuriyeti",
+      "Doğu Türkistan Cumhuriyeti"
+     ],
+     "confidence": 85,
+     "position": 0.4091,
+     "sheet_lines": [
+      "at",
+      155,
+      "1933. yılında",
+      250
+     ],
+     "note": "Dated historical claims, the most falsifiable content here."
+    },
+    {
+     "text": "Bütün bu vahşetin adı Çin'in iddia ettiği gibi \"terörle mücadele\" politikası değildir.",
+     "type": "quote",
+     "entities": [
+      "Musacan Er"
+     ],
+     "confidence": 85,
+     "position": 0.5334,
+     "sheet_lines": [
+      "at",
+      157,
+      "Bütün bu vahşetin",
+      250
+     ],
+     "note": "The genocide framing, attributed."
+    }
+   ]
   }
  }
 }
