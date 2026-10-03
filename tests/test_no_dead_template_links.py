@@ -34,8 +34,10 @@ STATIC_DIR = Path(BASE_DIR) / "static"
 # templates are hand-written and flat, and every interesting attribute value is
 # a quoted string.
 LINK_ATTR = re.compile(r'\b(href|hx-get|hx-post|hx-delete|action)\s*=\s*"([^"]*)"')
-# The first place a link stops being a fixed path.
-JINJA_START = re.compile(r"\{\{|\{%")
+# Jinja inside a link, e.g. `/story/{{ item.story.id }}{{ item.filter_query }}`.
+JINJA = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
+# The stand-in a Jinja expression is rewritten to before comparing segments.
+TOKEN = "\x00jinja"
 
 
 def _local_links() -> list[tuple[Path, str, str]]:
@@ -58,21 +60,35 @@ def _served() -> list[list[str]]:
     ]
 
 
-def _reachable(prefix: str, truncated: bool) -> bool:
-    """Is `prefix` a real destination, or the fixed head of one?
+def _reachable(value: str) -> bool:
+    """Does this link resolve to a registered route?
 
-    `truncated` says whether a Jinja expression was cut off the end, which is
-    the only case where stopping mid-path is legitimate: `/proof/` out of
-    `/proof/{{ article.id }}`. A link that is a whole literal path has to match
-    a route's segments exactly, so `/posts` matches nothing.
+    Each Jinja expression is rewritten to a single placeholder segment and the
+    result is compared segment by segment, so a route's `{param}` matches one
+    placeholder and nothing else. That is what catches
+    `/story/{{ id }}/edit`: the `edit` is a literal extra segment no route has.
+
+    The one thing that cannot be checked statically is a Jinja expression in the
+    final position, which is usually a query string (`/{{ back_query }}` out of
+    `/{{ '' if ... }}?sort=x`). A link is therefore allowed to have a Jinja tail
+    when its last segment is one, and nothing else.
     """
-    want = prefix.rstrip("/").split("/")
+    query_free = value.split("?", 1)[0]
+    segments = [JINJA.sub(TOKEN, s) for s in query_free.rstrip("/").split("/")]
+    jinja_tail = TOKEN in segments[-1]
+    if jinja_tail:
+        segments = segments[:-1]
+    if not segments or segments == [""]:
+        segments = [""]
+
     for have in _served():
-        if not truncated and len(want) != len(have):
+        if len(segments) > len(have):
             continue
-        if len(want) > len(have):
+        if not jinja_tail and len(segments) != len(have):
             continue
-        if all(w == h or (h.startswith("{") and h.endswith("}")) for w, h in zip(want, have)):
+        if all(
+            w == h or (h.startswith("{") and h.endswith("}") and w == TOKEN) for w, h in zip(segments, have)
+        ):
             return True
     return False
 
@@ -83,14 +99,10 @@ def _check(path: Path, attr: str, value: str) -> None:
         assert (STATIC_DIR / relative).is_file(), f"{path.name} {attr}={value} -> missing file"
         return
 
-    cut = JINJA_START.search(value)
-    prefix = value[: cut.start()] if cut else value
-    truncated = cut is not None
-    assert prefix, f"{path.name} {attr}={value} is nothing but a Jinja expression"
-    if not _reachable(prefix, truncated):
+    if not _reachable(value):
         raise AssertionError(
-            f"{path.name} {attr}={value!r} (fixed prefix {prefix!r}) matches no registered "
-            f"route. Served paths: {sorted('/'.join(s) for s in _served())}"
+            f"{path.name} {attr}={value!r} matches no registered route. Served paths: "
+            f"{sorted('/'.join(s) for s in _served())}"
         )
 
 
