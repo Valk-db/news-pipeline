@@ -283,9 +283,13 @@ def reference_pairs(tables: Sequence[str]) -> list[tuple[str, str, str, str]]:
     ON DELETE CASCADE or SET NULL in supabase/migrations, so the database handles it.
 
     Across the derived tables that leaves exactly one: ``curated_posts.story_id`` (see
-    20260923000000_core_schema.sql). ``raw_articles.reporting_unit_id`` is the other NO ACTION
-    reference in the whole graph; it is excluded because ``clear_raw_pointers`` handles it
-    deliberately, under ``--reset-raw-pointers``, and counting it here would report every
+    20260923000000_core_schema.sql). That is still the correct answer -- the foreign key is
+    NO ACTION -- but note that nothing writes curated_posts any more and it holds zero rows
+    on the dev project, so in practice it blocks nothing. It is reported rather than special-cased
+    because the correct behaviour if a row ever does appear is to stop and ask, not to delete
+    somebody's curation work. See DECISIONS.md. ``raw_articles.reporting_unit_id`` is the other
+    NO ACTION reference in the whole graph; it is excluded because ``clear_raw_pointers`` handles
+    it deliberately, under ``--reset-raw-pointers``, and counting it here would report every
     unclustered article as a blocker.
     """
     wanted = set(tables)
