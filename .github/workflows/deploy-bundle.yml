@@ -1,0 +1,89 @@
+name: Deploy bundle
+
+# The Vercel bundle is a different artifact from the working tree, and no test in
+# `tests/` can see a break in it. Every file is present locally, so a module
+# `.vercelignore` drops is still importable in dev and the suite stays green while
+# the deploy fails. This workflow closes that gap: it derives the deploy file set
+# from the real `.vercelignore`, copies it where the dev checkout is not importable,
+# and imports the real entry point from that copy alone.
+#
+# Separate from `ci.yml` on purpose. `ci.yml` is being reworked on another branch
+# (drift-cleanup, commit 765922f "make the CI gate a gate"), and two branches
+# editing one workflow file is a merge conflict for no benefit. This file is
+# additive: it adds a check rather than changing an existing one.
+#
+# No database, no network, no credentials, no .env.local. Reads the repository and
+# nothing else, so a failure here is always about the bundle and never about the
+# environment.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Also run on the feature branches, so a break is visible before merge rather
+  # than after it. `ci.yml` only fires on main, which means a bundle break can sit
+  # on a branch for a week looking fine.
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-bundle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # The `dev` extra is enough: the check imports the entry point, compiles
+      # templates and resolves dependencies. It never touches a database, so no
+      # pgvector service and no DATABASE_URL, unlike the `test` job.
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Check the deploy bundle
+        run: uv run python -m scripts.check_deploy_bundle --tree .
+
+      # `ci.yml` runs `mypy src/ curation_ui/`, which never opens `api/index.py` --
+      # the one file Vercel actually executes as the entry point. It is three lines
+      # and imports the app, so a rename or a moved module in `curation_ui` would
+      # break the deploy with the type checker green. `continue-on-error` matches
+      # `ci.yml`'s own mypy step: the point is to catch new errors in this file,
+      # not to declare the existing 269 clean.
+      - name: Type check the serverless entry point
+        run: uv run mypy api/
+        continue-on-error: true
+
+      # Re-run the import check with an interpreter that has ONLY
+      # requirements.txt installed, which is what Vercel actually installs. The
+      # first run proves the file set is self-sufficient; this one proves
+      # requirements.txt is sufficient for it. Dev installs the full `pipeline`
+      # extra, so a bundle import satisfied only by feedparser or trafilatura
+      # passes every test in the repo and still 500s on Vercel.
+      #
+      # `pgvector` is stripped from the file: it is pinned to 0.2.6, which has
+      # never existed on PyPI (0.2.x stops at 0.2.5), nothing in the repo imports
+      # it, and `VERCEL_DEPLOY.md` states embeddings are JSON array columns. With
+      # the pin in place `pip install` cannot resolve at all. Fixing the pin is a
+      # separate change and out of scope for a CI gate; until then this step
+      # verifies everything the pin is not blocking.
+      - name: Install the deploy requirements into a clean venv
+        run: |
+          grep -v '^pgvector==' requirements.txt > /tmp/vercel-requirements.txt
+          uv venv /tmp/vercel-venv
+          VIRTUAL_ENV=/tmp/vercel-venv uv pip install -r /tmp/vercel-requirements.txt
+
+      - name: Re-check the bundle against the deploy requirements only
+        run: uv run python -m scripts.check_deploy_bundle --tree . --python /tmp/vercel-venv/bin/python
