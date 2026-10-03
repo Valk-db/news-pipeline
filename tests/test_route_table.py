@@ -17,6 +17,18 @@ not a recomputation, so the assertion is independent of the code it checks.
 Since then the table has grown deliberately, and this file is the record of
 that:
 
+  2026-10-02  /story/{story_id} added and six triage routes removed. Tyler
+              directed on 2026-10-02 that the curation page lose approve,
+              reject and edit ("remove the approve, reject, edit"), so
+              /story/{story_id}/approve, /story/{story_id}/reject,
+              /story/{story_id}/save, /story/{story_id}/edit, /posts and
+              /post/{post_id}/mark-posted are gone rather than unlinked, and
+              /story/{story_id} now serves the read-only detail view in the slot
+              the edit route used to occupy. It stays require_auth: story
+              internals are not public. With those routes gone nothing in the
+              app requires CSRF any more, which test_no_route_requires_csrf
+              below pins so a mutating route added later cannot skip it.
+
   2026-10-02  /api/cron/checkpoint, /api/cron/checkpoint/watchdog
               added with the v2 transparency signer (curation_ui/cron.py).
               Both are bearer-token routes, NOT require_auth and NOT CSRF:
@@ -52,15 +64,10 @@ EXPECTED_ROUTE_TABLE = [
     ("/healthz/details", ("GET",), True, False),
     ("/map", ("GET",), False, False),
     ("/openapi.json", ("GET",), False, False),
-    ("/post/{post_id}/mark-posted", ("POST",), True, True),
-    ("/posts", ("GET",), True, False),
     ("/proof/{article_id}", ("GET",), False, False),
     ("/redoc", ("GET",), False, False),
     ("/stories/{story_id}", ("GET",), False, False),
-    ("/story/{story_id}/approve", ("POST",), True, True),
-    ("/story/{story_id}/edit", ("GET",), True, False),
-    ("/story/{story_id}/reject", ("POST",), True, True),
-    ("/story/{story_id}/save", ("POST",), True, True),
+    ("/story/{story_id}", ("GET",), True, False),
 ]
 
 
@@ -137,7 +144,7 @@ class TestRouteTableMatchesPreSplitApp:
         """One route from each module the split created, so a missing router fails."""
         by_path = {row[0]: row for row in route_table(app)}
         assert by_path["/"][2] is True
-        assert by_path["/posts"][2] is True
+        assert by_path["/story/{story_id}"][2] is True
         assert by_path["/api/stories/{story_id}/viewpoints"][2] is True
         assert by_path["/api/stories/{story_id}/sources"][2] is True
         assert by_path["/api/globe/events"][2] is False
@@ -167,15 +174,34 @@ class TestRouteTableMatchesPreSplitApp:
             assert by_path[path][3] is False, path
             assert by_path[path][1] == ("GET",), "Vercel Cron can only issue GET"
 
-    def test_every_mutating_triage_route_needs_csrf(self):
-        csfr = {row[0]: row[3] for row in route_table(app)}
+    def test_the_triage_flows_are_gone_not_just_unlinked(self):
+        """Tyler's directive was to remove approve, reject and edit.
+
+        Hiding the buttons would have left the htmx endpoints live at a guessable
+        URL and made the directive false, so the routes are deleted and this pins
+        that. If a future batch reintroduces any of them, this fails on purpose.
+        """
+        paths = {row[0] for row in route_table(app)}
         for path in (
             "/story/{story_id}/approve",
             "/story/{story_id}/reject",
             "/story/{story_id}/save",
+            "/story/{story_id}/edit",
+            "/posts",
             "/post/{post_id}/mark-posted",
         ):
-            assert csfr[path] is True, path
+            assert path not in paths, path
+
+    def test_no_route_requires_csrf(self):
+        """The last CSRF-protected routes were the four triage mutations.
+
+        With them gone the app has no state-changing route at all. Pinning the
+        empty set means the next batch that adds one has to bring require_csrf
+        with it and update this file, rather than shipping a POST that any
+        cross-site form can fire.
+        """
+        guarded = {row[0] for row in route_table(app) if row[3]}
+        assert guarded == set()
 
     def test_app_is_the_one_main_exports(self):
         """api/index.py and the test suite both import curation_ui.main:app."""

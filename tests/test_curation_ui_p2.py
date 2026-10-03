@@ -1,18 +1,29 @@
-"""Tests for P2: CuratedPost media_urls and snippet integration."""
+"""Tests for P2: media assets and snippets reaching the curation surfaces.
+
+The original version of this file drove the approve flow and asserted
+`CuratedPost.media_urls` and the snippet text handed to the LLM as key facts.
+That flow is gone (see tests/test_route_table.py for the route table contract), so
+these tests now assert the same two pieces of data reaching the surfaces that
+replaced it: the lead image on the card, and the media list and snippets on the
+read-only detail view. The coverage of "media and snippets actually get loaded
+and rendered" is preserved; only the consumer changed.
+"""
+
+import re
 
 import pytest
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 
 from src.schema.models import (
     Story, RawArticle, ReportingUnit, StoryUnitLink,
-    MediaAsset, Snippet, CuratedPost, SourceTier
+    MediaAsset, Snippet, SourceTier
 )
 from src.shared.config import get_settings
 from src.shared import database as database_module
-from src.shared.llm import LLMClient
+
+AUTH = ("testuser", "testpass")
 
 
 @pytest.fixture
@@ -39,322 +50,195 @@ def app_with_db(test_settings, db_engine):
 
     main_module.settings = test_settings
 
-    # Replace the global LLMClient with a mock
     import src.shared.llm as llm_module
     llm_module._llm_client = None
 
     return app
 
 
-@pytest.fixture
-def mock_llm_client():
-    """Create a mock LLMClient."""
-    mock_llm = AsyncMock(spec=LLMClient)
-    mock_llm.generate_caption = AsyncMock(return_value="Test caption with key facts")
-    return mock_llm
+def _today() -> datetime:
+    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _link_story_to_article(db_session, *, title, domain, url, url_hash, body="Content here."):
+    """A minimal pending story with exactly one attributed source article."""
+    story = Story(
+        id=uuid.uuid4(),
+        day=_today(),
+        primary_entities=["11111111-1111-1111-1111-111111111111"],
+        tier1_unit_count=1,
+        distinct_owners=1,
+        status=Story.Status.PENDING,
+    )
+    unit = ReportingUnit(
+        id=uuid.uuid4(),
+        day=_today(),
+        representative_article_id=uuid.uuid4(),
+        article_count=1,
+        source_tiers={"tier1": 1},
+        owner_groups={"AP": 1},
+        tier1_owner_groups={"AP": 1},
+    )
+    article = RawArticle(
+        id=uuid.uuid4(),
+        url=url,
+        url_hash=url_hash,
+        title=title,
+        body_text=body,
+        source_domain=domain,
+        source_tier=SourceTier.TIER1,
+        published_at=datetime.now(timezone.utc),
+    )
+    unit.representative_article_id = article.id
+    db_session.add_all([story, unit, article, StoryUnitLink(story_id=story.id, unit_id=unit.id)])
+    await db_session.commit()
+    await db_session.refresh(story)
+    return story, article
 
 
 @pytest.fixture
 async def story_with_media_and_snippets(db_session):
-    """Create a story with media assets and snippets."""
-    # Create story
-    story = Story(
-        id=uuid.uuid4(),
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
-        primary_entities={"PERSON": ["John Doe"], "ORG": ["Acme Corp"]},
-        tier1_unit_count=1,
-        status=Story.Status.PENDING,
-    )
-    db_session.add(story)
-
-    # Create reporting unit
-    unit = ReportingUnit(
-        id=uuid.uuid4(),
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
-        representative_article_id=uuid.uuid4(),
-        article_count=1,
-        source_tiers={"tier1": 1},
-        owner_groups={"AP": 1},
-        tier1_owner_groups={"AP": 1},
-    )
-    db_session.add(unit)
-
-    # Create raw article
-    article = RawArticle(
-        id=uuid.uuid4(),
+    """A story carrying one image, one video and two snippets."""
+    story, article = await _link_story_to_article(
+        db_session,
+        title="Test Article About Politics",
+        domain="apnews.com",
         url="https://apnews.com/article/test-1",
         url_hash="abc123",
-        title="Test Article About Politics",
-        body_text="This is a test article about politics and government.",
-        summary="Test summary",
-        source_domain="apnews.com",
-        source_tier=SourceTier.TIER1,
-        published_at=datetime.now(timezone.utc),
-        entities={"PERSON": ["John Doe"], "ORG": ["Acme Corp"], "GPE": ["United States"]},
+        body="This is a test article about politics and government.",
     )
-    db_session.add(article)
 
-    # Update unit's representative article
-    unit.representative_article_id = article.id
-
-    # Link story to unit
-    link = StoryUnitLink(story_id=story.id, unit_id=unit.id)
-    db_session.add(link)
-
-    # Add media assets
-    image_asset = MediaAsset(
-        story_id=story.id,
-        article_id=article.id,
-        media_type=MediaAsset.MediaType.IMAGE,
-        url="https://example.com/image.jpg",
-        thumbnail_url="https://example.com/thumb.jpg",
-        alt_text="Test image",
-        source="article",
-    )
-    db_session.add(image_asset)
-
-    video_asset = MediaAsset(
-        story_id=story.id,
-        article_id=None,
-        media_type=MediaAsset.MediaType.VIDEO,
-        url="https://www.youtube.com/embed/dQw4w9WgXcQ",
-        thumbnail_url="https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
-        alt_text="Test YouTube Video",
-        source="youtube",
-        source_id="dQw4w9WgXcQ",
-    )
-    db_session.add(video_asset)
-
-    # Add snippets
-    snippet1 = Snippet(
-        story_id=story.id,
-        article_id=article.id,
-        snippet_type=Snippet.SnippetType.QUOTE,
-        text="This is a key quote from the article about the event.",
-        confidence=90,
-    )
-    db_session.add(snippet1)
-
-    snippet2 = Snippet(
-        story_id=story.id,
-        article_id=article.id,
-        snippet_type=Snippet.SnippetType.STAT,
-        text="The event affected over 1 million people according to officials.",
-        confidence=85,
-    )
-    db_session.add(snippet2)
+    db_session.add_all([
+        MediaAsset(
+            story_id=story.id,
+            article_id=article.id,
+            media_type=MediaAsset.MediaType.IMAGE,
+            url="https://example.com/image.jpg",
+            thumbnail_url="https://example.com/thumb.jpg",
+            alt_text="Test image",
+            source="article",
+        ),
+        MediaAsset(
+            story_id=story.id,
+            article_id=None,
+            media_type=MediaAsset.MediaType.VIDEO,
+            url="https://www.youtube.com/embed/dQw4w9WgXcQ",
+            thumbnail_url="https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+            alt_text="Test YouTube Video",
+            source="youtube",
+            source_id="dQw4w9WgXcQ",
+        ),
+        Snippet(
+            story_id=story.id,
+            article_id=article.id,
+            snippet_type=Snippet.SnippetType.QUOTE,
+            text="This is a key quote from the article about the event.",
+            confidence=90,
+        ),
+        Snippet(
+            story_id=story.id,
+            article_id=article.id,
+            snippet_type=Snippet.SnippetType.STAT,
+            text="The event affected over 1 million people according to officials.",
+            confidence=85,
+        ),
+    ])
 
     await db_session.commit()
     await db_session.refresh(story)
-
     return story, article
 
 
 @pytest.mark.asyncio
-async def test_approve_story_populates_media_urls(app_with_db, db_session, story_with_media_and_snippets, mock_llm_client, csrf_headers):
-    """Test that approve_story populates CuratedPost.media_urls from MediaAsset rows."""
-    story, article = story_with_media_and_snippets
+async def test_card_shows_the_lead_image(app_with_db, db_session, story_with_media_and_snippets):
+    """The card's top image is the story's first image asset."""
+    story, _ = story_with_media_and_snippets
 
-    # Set the global mock LLM client
-    import src.shared.llm as llm_module
-    llm_module._llm_client = mock_llm_client
+    html = TestClient(app_with_db).get("/", auth=AUTH).text
 
-    client = TestClient(app_with_db)
-    response = client.post(
-        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
-    )
-
-    assert response.status_code == 200
-
-    # Verify CuratedPost was created with media_urls
-    from sqlalchemy import select
-    stmt = select(CuratedPost).where(CuratedPost.story_id == story.id)
-    result = await db_session.execute(stmt)
-    post = result.scalar_one_or_none()
-
-    assert post is not None
-    assert post.media_urls is not None
-    assert len(post.media_urls) == 2  # 1 image + 1 video
-
-    # Check image entry
-    image_entry = next((m for m in post.media_urls if m["type"] == "image"), None)
-    assert image_entry is not None
-    assert image_entry["url"] == "https://example.com/image.jpg"
-    assert image_entry["alt"] == "Test image"
-
-    # Check video entry
-    video_entry = next((m for m in post.media_urls if m["type"] == "video"), None)
-    assert video_entry is not None
-    assert video_entry["url"] == "https://www.youtube.com/embed/dQw4w9WgXcQ"
-    assert video_entry["alt"] == "Test YouTube Video"
+    assert "https://example.com/image.jpg" in html
+    # Only the image leads the card; the video belongs to the detail page.
+    assert "https://www.youtube.com/embed/dQw4w9WgXcQ" not in html
 
 
 @pytest.mark.asyncio
-async def test_approve_story_feeds_snippets_into_caption(app_with_db, db_session, story_with_media_and_snippets, mock_llm_client, csrf_headers):
-    """Test that approve_story passes snippet texts to the LLM as key_facts."""
-    story, article = story_with_media_and_snippets
+async def test_detail_view_lists_every_media_type(app_with_db, db_session, story_with_media_and_snippets):
+    """The detail view keeps the full media list, one entry per media type."""
+    story, _ = story_with_media_and_snippets
 
-    # Set the global mock LLM client
-    import src.shared.llm as llm_module
-    llm_module._llm_client = mock_llm_client
-
-    client = TestClient(app_with_db)
-    response = client.post(
-        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
-    )
+    response = TestClient(app_with_db).get(f"/story/{story.id}", auth=AUTH)
 
     assert response.status_code == 200
-
-    # Verify LLM was called with snippet texts in key_facts
-    mock_llm_client.generate_caption.assert_called_once()
-    call_args = mock_llm_client.generate_caption.call_args
-    key_facts = call_args.kwargs.get("key_facts", [])
-
-    # Should include article titles AND snippet texts
-    assert len(key_facts) >= 3  # At least 1 title + 2 snippets
-    assert "Test Article About Politics" in key_facts
-    assert "This is a key quote from the article about the event." in key_facts
-    assert "The event affected over 1 million people according to officials." in key_facts
+    assert "https://example.com/image.jpg" in response.text
+    assert "https://www.youtube.com/embed/dQw4w9WgXcQ" in response.text
 
 
 @pytest.mark.asyncio
-async def test_approve_story_no_media_when_none_exists(app_with_db, db_session, mock_llm_client, csrf_headers):
-    """Test that approve_story works when no MediaAsset rows exist."""
-    # Create story without media
-    story = Story(
-        id=uuid.uuid4(),
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
-        primary_entities={"PERSON": ["Jane Smith"]},
-        tier1_unit_count=1,
-        status=Story.Status.PENDING,
-    )
-    db_session.add(story)
+async def test_detail_view_shows_snippets(app_with_db, db_session, story_with_media_and_snippets):
+    """Snippet text reaches the detail view, inside the technical details section."""
+    story, _ = story_with_media_and_snippets
 
-    unit = ReportingUnit(
-        id=uuid.uuid4(),
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
-        representative_article_id=uuid.uuid4(),
-        article_count=1,
-        source_tiers={"tier1": 1},
-        owner_groups={"AP": 1},
-        tier1_owner_groups={"AP": 1},
-    )
-    db_session.add(unit)
+    response = TestClient(app_with_db).get(f"/story/{story.id}", auth=AUTH)
 
-    article = RawArticle(
-        id=uuid.uuid4(),
+    assert response.status_code == 200
+    assert "This is a key quote from the article about the event." in response.text
+    assert "The event affected over 1 million people according to officials." in response.text
+
+
+@pytest.mark.asyncio
+async def test_detail_view_renders_with_no_media_at_all(app_with_db, db_session):
+    """A story with no MediaAsset rows renders the pages without a media block."""
+    story, _ = await _link_story_to_article(
+        db_session,
+        title="Another Test Article",
+        domain="reuters.com",
         url="https://reuters.com/article/test-2",
         url_hash="def456",
-        title="Another Test Article",
-        body_text="Content here.",
-        source_domain="reuters.com",
-        source_tier=SourceTier.TIER1,
-        published_at=datetime.now(timezone.utc),
     )
-    db_session.add(article)
-    unit.representative_article_id = article.id
-
-    link = StoryUnitLink(story_id=story.id, unit_id=unit.id)
-    db_session.add(link)
-
-    await db_session.commit()
-    await db_session.refresh(story)
-
-    # Set the global mock LLM client
-    import src.shared.llm as llm_module
-    llm_module._llm_client = mock_llm_client
 
     client = TestClient(app_with_db)
-    response = client.post(
-        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
-    )
+    detail = client.get(f"/story/{story.id}", auth=AUTH)
+    queue = client.get("/", auth=AUTH)
 
-    assert response.status_code == 200
-
-    # Verify CuratedPost was created with media_urls = None
-    from sqlalchemy import select
-    stmt = select(CuratedPost).where(CuratedPost.story_id == story.id)
-    result = await db_session.execute(stmt)
-    post = result.scalar_one_or_none()
-
-    assert post is not None
-    assert post.media_urls is None or post.media_urls == []
+    assert detail.status_code == 200
+    assert queue.status_code == 200
+    assert "story-media" not in detail.text
+    assert "story-media" not in queue.text
 
 
 @pytest.mark.asyncio
-async def test_approve_story_caps_media_urls_at_three(app_with_db, db_session, mock_llm_client, csrf_headers):
-    """Test that media_urls is capped at 3 entries."""
-    story = Story(
-        id=uuid.uuid4(),
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
-        primary_entities={"PERSON": ["Test Person"]},
-        tier1_unit_count=1,
-        status=Story.Status.PENDING,
-    )
-    db_session.add(story)
+async def test_media_of_the_same_type_is_deduplicated(app_with_db, db_session):
+    """Five renditions of one photo is one photo, not five entries in the strip.
 
-    unit = ReportingUnit(
-        id=uuid.uuid4(),
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
-        representative_article_id=uuid.uuid4(),
-        article_count=1,
-        source_tiers={"tier1": 1},
-        owner_groups={"AP": 1},
-        tier1_owner_groups={"AP": 1},
-    )
-    db_session.add(unit)
-
-    article = RawArticle(
-        id=uuid.uuid4(),
+    This is the read-only successor to the old `media_urls is capped at 3` test: the
+    cap is still there but it is now expressed as one asset per media type.
+    """
+    story, article = await _link_story_to_article(
+        db_session,
+        title="Test Article",
+        domain="example.com",
         url="https://example.com/article",
         url_hash="ghi789",
-        title="Test Article",
-        body_text="Content.",
-        source_domain="example.com",
-        source_tier=SourceTier.TIER1,
-        published_at=datetime.now(timezone.utc),
     )
-    db_session.add(article)
-    unit.representative_article_id = article.id
-
-    link = StoryUnitLink(story_id=story.id, unit_id=unit.id)
-    db_session.add(link)
-
-    # Add 5 media assets (more than the cap of 3)
-    for i in range(5):
-        asset = MediaAsset(
+    for index in range(5):
+        db_session.add(MediaAsset(
             story_id=story.id,
             article_id=article.id,
             media_type=MediaAsset.MediaType.IMAGE,
-            url=f"https://example.com/image{i}.jpg",
-            alt_text=f"Image {i}",
+            url=f"https://example.com/image{index}.jpg",
+            alt_text=f"Image {index}",
             source="article",
-        )
-        db_session.add(asset)
-
+        ))
     await db_session.commit()
     await db_session.refresh(story)
 
-    # Set the global mock LLM client
-    import src.shared.llm as llm_module
-    llm_module._llm_client = mock_llm_client
+    detail = TestClient(app_with_db).get(f"/story/{story.id}", auth=AUTH).text
 
-    client = TestClient(app_with_db)
-    response = client.post(
-        f"/story/{story.id}/approve", auth=("testuser", "testpass"), headers=csrf_headers
-    )
-
-    assert response.status_code == 200
-
-    # Verify media_urls is capped at 3
-    from sqlalchemy import select
-    stmt = select(CuratedPost).where(CuratedPost.story_id == story.id)
-    result = await db_session.execute(stmt)
-    post = result.scalar_one_or_none()
-
-    assert post is not None
-    assert post.media_urls is not None
-    assert len(post.media_urls) == 3
+    # Exactly one rendition survives the dedup, and it appears twice because the
+    # detail page shows the lead image at the top and then lists it with the rest.
+    survivors = set(re.findall(r"https://example\.com/image\d\.jpg", detail))
+    assert len(survivors) == 1, f"expected one rendition, got {survivors}"
+    assert detail.count('class="detail-media-item"') == 1
 
 
 if __name__ == "__main__":

@@ -3,17 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# Story internals are behind app auth and must never be indexed. #}
+    <meta name="robots" content="noindex, nofollow">
     <title>News Pipeline - Curation</title>
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <script src="/static/errors.js" defer></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/detail/detail.css">
 </head>
-<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+<body>
     <div class="container">
         <header>
-            <h1>News Pipeline Curation</h1>
+            <div class="header-heading">
+                <h1>News Pipeline Curation</h1>
+                <p class="header-sub">Every story the pipeline is carrying, with the outlets behind it.</p>
+            </div>
             <div class="header-actions">
-                <a href="/posts" class="btn btn-secondary">View Posts ({{ posts_count }})</a>
                 <button class="btn btn-ghost btn-sm" id="theme-toggle" aria-label="Toggle theme" title="Toggle theme (T)">
                     <svg id="theme-icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
                         <circle cx="12" cy="12" r="5"></circle>
@@ -30,17 +36,17 @@
                         <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
                     </svg>
                 </button>
-                <span class="keyboard-hint">Keys: A=Approve, R=Reject, E=Edit, T=Theme</span>
+                <span class="keyboard-hint">T = theme</span>
             </div>
         </header>
 
         <!-- ======================= DISCOVERY =======================
              Tier chips, date window, sort, and topic search, server-rendered
              in their initial state from the query string so first paint shows
-             the filtered queue. It sits outside #stories on purpose: the
-             approve/reject responses swap that fragment only, so the controls
-             a curator is holding survive the swap. -->
-        <form class="discovery-bar" id="discovery-bar" method="get" action="/" role="search" aria-label="Filter the triage queue">
+             the filtered queue and the page needs no JavaScript to be usable.
+             The chips carry the same tier words the cards do, so a filter and
+             the thing it filtered always describe a tier the same way. -->
+        <form class="discovery-bar" id="discovery-bar" method="get" action="/" role="search" aria-label="Filter the queue">
             <div class="discovery-field discovery-search">
                 <label class="discovery-label" for="discovery-q">Search topics</label>
                 <input type="search" id="discovery-q" name="q" class="discovery-input"
@@ -54,7 +60,7 @@
                     {% for t in [1, 2, 3, 4] %}
                     <button type="button" class="tier-chip{% if t in active_tiers %} is-on{% endif %}"
                             data-tier="{{ t }}" aria-pressed="{{ 'true' if t in active_tiers else 'false' }}"
-                            title="Show stories with tier {{ t }} sources">T{{ t }}</button>
+                            title="{{ {1: 'Tier 1 — verified editorial standards', 2: 'Tier 2 — national or regional outlet', 3: 'Tier 3 — social, forums, unverified', 4: 'Tier 4 — niche, hyperlocal, experimental'}[t] }}">T{{ t }}</button>
                     {% endfor %}
                 </div>
             </div>
@@ -131,19 +137,6 @@
             syncTiers();
         })();
 
-        // The keyboard shortcuts approve and reject through the same routes the
-        // buttons do, so they carry the toolbar's current filters too.
-        function activeFilterQuery() {
-            const form = document.getElementById('discovery-bar');
-            if (!form) return '';
-            const params = new URLSearchParams();
-            new FormData(form).forEach(function (value, key) {
-                if (String(value).trim() !== '') params.set(key, value);
-            });
-            const query = params.toString();
-            return query ? '?' + query : '';
-        }
-
         // Theme toggle
         const themeToggle = document.getElementById('theme-toggle');
         const sunIcon = document.getElementById('theme-icon-sun');
@@ -192,38 +185,6 @@
                 e.preventDefault();
                 themeToggle.click();
             }
-        });
-
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-
-            const key = e.key.toLowerCase();
-            const focused = document.querySelector('.story-card:focus-within') ||
-                           document.querySelector('.story-card:hover') ||
-                           document.querySelector('.story-card');
-
-            if (!focused) return;
-
-            const storyId = focused.dataset.storyId;
-            if (!storyId) return;
-
-            if (key === 'a') {
-                e.preventDefault();
-                htmx.ajax('POST', `/story/${storyId}/approve${activeFilterQuery()}`, { target: '#stories', swap: 'outerHTML' });
-            } else if (key === 'r') {
-                e.preventDefault();
-                htmx.ajax('POST', `/story/${storyId}/reject${activeFilterQuery()}`, { target: '#stories', swap: 'outerHTML' });
-            } else if (key === 'e') {
-                e.preventDefault();
-                window.location.href = `/story/${storyId}/edit`;
-            }
-        });
-
-        // Focus first card on load
-        document.addEventListener('DOMContentLoaded', () => {
-            const firstCard = document.querySelector('.story-card');
-            if (firstCard) firstCard.focus();
         });
     </script>
 </body>
