@@ -31,20 +31,22 @@
     "why_a_ratchet_and_not_a_pass_fail_gate": "445 pre-existing errors make a pass/fail gate unreachable, and `continue-on-error: true` with nothing comparing counts is not a soft gate, it is no gate. The ratchet fails when the count RISES and passes when it falls, which is enforceable today and gets stricter as the backlog clears.",
     "raw_summary_at_73789dc": "Found 445 errors in 58 files (checked 87 source files)"
   },
-  "pytest_collected_floor": 2026,
+  "pytest_collected_floor": 2090,
   "pytest_collect_paths": [
     "tests/"
   ],
   "pytest_measurement": {
     "command": "python -m pytest tests/ --collect-only -q",
     "raw_summary_at_the_measured_commit": "1942 tests collected in 6.62s",
-    "raw_summary_on_this_branch": "2026 tests collected in 2.36s",
+    "raw_summary_on_this_branch": "2090 tests collected in 2.90s (raised from 2026 by the coordinator after batch-costacct-tokens merged 64 tests; see raw_summary_after_costacct_merge)",
     "floor_raised_by": {
       "from_main_at_73789dc": 1899,
       "from_main_at_fc71887": 1942,
       "to": 2026,
       "reason": "main's count at fc71887 is 1942; this branch adds 84 tests (tests/test_ci_gates.py 43, tests/test_batch_scratch_removed.py 27, tests/test_secret_scan.py 14), and the merged tree collects 2026. The gate asks for the floor to be raised whenever the count rises, so a later removal is measured against the real suite rather than against main's older, smaller one.",
-      "commits": "f80dfd0 (the scanner and its tests), 7063f96 (the removal guard), 7b09cab (the ratchet), 34e6c16, 93770c7"
+      "commits": "f80dfd0 (the scanner and its tests), 7063f96 (the removal guard), 7b09cab (the ratchet), 34e6c16, 93770c7",
+      "raised_again_by_the_coordinator": "batch-costacct-tokens (merge c6f23e3) added 64 tests across tests/test_budget_tokens.py, tests/test_cost_accounting.py and tests/test_report_budget_usage.py, taking the merged tree from 2026 to 2090. Left at 2026 the gate would have gone red on its own -- which is it working, not a defect -- so the floor is re-measured here rather than by editing ci.yml.",
+      "raw_summary_after_costacct_merge": "2090 tests collected in 2.90s"
     },
     "pytest_version": "9.1.1",
     "why_collected_and_not_executed": "The floor is on COLLECTED tests, not executed ones. `--collect-only` needs no database and returned the identical 1899 with and without DATABASE_URL set, so the number is environment-independent and a batch on this VM can reproduce it. An executed-count floor cannot be: on this VM main executes 1899 tests as 1851 passed / 14 failed / 34 skipped, and in CI with Postgres those 14 run and pass, so the executed count is a property of the machine, not of the suite. A floor on a number that changes with the environment is a flaky gate.",
