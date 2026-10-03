@@ -20,14 +20,14 @@ Weekly (Sun 02:23 UTC):
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | **Compute** | GitHub Actions | Scheduled runs (06:23 and 18:23 UTC daily; Sun 02:23 UTC weekly), zero cost |
-| **Database** | Supabase/Neon | PostgreSQL, free tier (no pgvector column in use) |
-| **LLM Primary** | Groq (`openai/gpt-oss-20b`) | Caption generation, classification, fact-checking, viewpoint clustering |
+| **Database** | Supabase/Neon | PostgreSQL, free tier (pgvector installed; no vector column in use yet) |
+| **LLM Primary** | Groq (`openai/gpt-oss-20b`) | Claim extraction, fact-checking, viewpoint clustering, LLM snippets |
 | **LLM Backup** | Cerebras (`gpt-oss-120b`) | 30-day trial fallback |
-| **Ingestion** | RSS tier-1 (8 sources) + tier-2 (4) + Reddit + sensors, GDELT disabled in the workflow | Tier-1 news, social, hazard feeds; AP/Reuters configured but disabled (no working feed) |
+| **Ingestion** | RSS tier-1 (8 enabled of 10 configured) + tier-2 (13 enabled of 23) + Reddit + sensors, GDELT disabled in the workflow | Tier-1 news, social, hazard feeds; AP/Reuters configured but disabled (no working feed) |
 | **Verification** | MinHash containment | Near-dup clustering → reporting units |
 | **Grouping** | Entity Jaccard (top-N, threshold 0.4) | Semantic story grouping |
 | **Gate** | ≥2 tier-1 articles from ≥2 distinct owner groups | Defamation-safe threshold |
-| **Curation UI** | FastAPI + HTMX | Keyboard-driven triage (A/R/E) |
+| **Curation UI** | FastAPI + HTMX | Read-only queue: the filtered story list and a detail view per story |
 | **Enrichment** | Media, YouTube/Vimeo, Reddit/Twitter, LLM snippets, embeddings | Multimedia & semantic story enrichment |
 | **Reliability** | Fact-checking (LLM + ClaimBuster) + Consensus alignment | Source trust scoring over time |
 | **Map/Events** | Canonical entities with lat/lon → EventGeometry | Geospatial event data behind `/map` |
@@ -45,7 +45,9 @@ Weekly (Sun 02:23 UTC):
 
 1. Create a Supabase project (or Neon)
 2. Apply the schema: `uv run python -m scripts.migrate` (or paste `supabase/migrations/*.sql` into
-   the SQL editor). Nothing in the schema needs pgvector — embeddings are JSON array columns
+   the SQL editor). Embeddings are still JSON array columns, so nothing needs a vector column;
+   the pgvector extension itself is installed by `20261002220200_pgvector_readiness.sql` and
+   nothing queries it yet
 3. Copy connection string → GitHub secret `DATABASE_URL`
 
 ### 3. Secrets (GitHub → Settings → Secrets → Actions)
@@ -101,11 +103,12 @@ cloudflared tunnel --url http://localhost:8000
 ## Pipeline Flow
 
 ### Ingestion (Twice Daily)
-1. **Tier-1 RSS** (8 sources): BBC, Guardian, NPR (4 feeds), DW, France24, Al Jazeera, Euronews, PBS NewsHour
+1. **Tier-1 RSS** (8 enabled of 10 configured): BBC, Guardian, NPR (4 feeds), DW, France24, Al Jazeera, Euronews, PBS NewsHour
    - AP/Reuters configured but `enabled=False` (verified 2026-10-01: AP URLs are HTML hub pages, Reuters returns HTTP 401)
-2. **Tier-2 RSS** (4 enabled of 12 configured): Foreign Policy, Foreign Affairs, CSIS, WHO
-   - 8 disabled after live-run evidence: NYT, WaPo, WSJ, FT, Economist, LA Times, Chicago Tribune, Boston Globe
-   - Brookings, Chatham House, UN are commented out in the registry (no working feed)
+2. **Tier-2 RSS** (13 enabled of 23 configured): Foreign Policy, Foreign Affairs, CSIS, WHO, UN, AllAfrica, RTE, Middle East Eye, ReliefWeb, and others
+   - Disabled after live-run evidence: NYT, WaPo, WSJ, FT, Economist, LA Times, Chicago Tribune, Boston Globe
+   - Also disabled: SCMP, The New Humanitarian
+   - Brookings and Chatham House are commented out in the registry (no working feed)
 3. **GDELT DOC API**: Disabled (`GDELT_ENABLED=false`); code default enabled but redundant with RSS
 4. **Reddit** (Tier-3): Top posts from r/worldnews, r/geopolitics, etc. (public `.rss` feeds, no credentials — anon-rate-limited, throttled to 1 subreddit/3s)
 5. **Sensors** (Tier-3): USGS earthquakes (~290 features/day) + GDACS alerts (~223 items), fetched by `src/ingestion/sensors.py`; both have no RSS URLs and are kept out of the RSS sweep
@@ -146,15 +149,18 @@ See `src/ingestion/source_registry.py` for the complete, up-to-date source regis
 
 ### Curation
 - FastAPI + HTMX UI at `localhost:8000`
-- Keyboard: **A**pprove, **R**eject, **E**dit
-- Draft captions via LLM (paraphrase-only constraint)
-- Approved → `curated_posts` table, ready for manual posting
+- **Read-only.** The queue (`/`) and the per-story detail view (`/story/{story_id}`) are
+  both behind `require_auth` and neither mutates a row. Approve, reject, edit and save were
+  removed on 2026-10-02 (`tests/test_route_table.py` pins that they are gone, not just unlinked)
+- A story leaves `PENDING` through the gate and the cleanup job, never through a button
+- Nothing in the app writes a `curated_posts` row; the table and its model remain in the schema
+  but nothing reads or writes them, and `curation_ui/health.py` no longer counts them either
 
 ## Two-Week Protocol
 
 **Do not automate posting yet.**
 
-1. Run pipeline → triage in UI → manually post to your channels
+1. Run pipeline → read the queue and the map → post by hand, outside this app
 2. Track engagement for 14 days
 3. If hand-curated posts don't land, automation won't fix it
 4. Then build scheduler + platform posters in week 3
@@ -164,12 +170,12 @@ See `src/ingestion/source_registry.py` for the complete, up-to-date source regis
 | Decision | Rationale |
 |----------|-----------|
 | GitHub Actions over VM | No idle-reclaim, no capacity queue, free minutes |
-| Supabase/Neon over self-hosted | pgvector available if a column ever needs it, no patching, 7-day pause cleared by cron |
+| Supabase/Neon over self-hosted | pgvector installed and ready for the vector column a later batch may add, no patching, 7-day pause cleared by cron |
 | Groq primary | No card, ongoing free tier, model deprecations handled via `.env` |
 | MinHash direct (no LSH) | Daily bucket <50 articles → O(n²) is fine, avoids `MinHashLSHEnsemble` bug |
 | Top-N entity Jaccard | Single top-1 fragments multi-actor stories |
 | Tier-1 gate ≥2 distinct owners | Survives wire syndication (AP → 300 domains = 1 owner) |
-| Paraphrase-only captions | Copyright compliance, not just defamation defense |
+| Paraphrase-only captions | Copyright compliance, not just defamation defense. Historical: the caption path died with the approve/edit flow on 2026-10-02 and nothing calls `build_deterministic_caption` or `validate_caption` any more |
 | Heartbeat commit | Keeps Actions schedule alive (60-day rule) |
 | Phase 2 enriches `PENDING`, never publishes | Public exposure stays human-gated; `DECISIONS.md` holds the evidence and the pre-registered exit criteria |
 
@@ -202,7 +208,7 @@ scripts/                    # Migrate, schema/RLS/freshness/orphan checks, clean
 
 ## Database Schema Changes
 
-Every schema change — **new tables**, new columns, column type changes, enum type names and labels — is an idempotent SQL file in `supabase/migrations/`, and `supabase/migrations/` is the only thing that changes the schema. `Base.metadata.create_all` is gone: it used to run from `init_db()` on every ingest and weekly job, which is how dev ended up with SQLAlchemy's enum type names while the migration files declared different ones, and why five tables the models expect had never been created. Apply with `uv run python -m scripts.migrate` (or paste the files into the Supabase SQL editor, which is the production path). Run `uv run python scripts/check_schema.py` to detect drift, and `uv run python scripts/enable_rls.py` to (re-)assert row level security: the migrations already `ENABLE ROW LEVEL SECURITY` on all 31 tables and create no policies, and the script repeats that statement for the 29 tables the models declare, then warns if any of them has a policy — the condition that would reopen the anonymous REST path.
+Every schema change — **new tables**, new columns, column type changes, enum type names and labels — is an idempotent SQL file in `supabase/migrations/`, and `supabase/migrations/` is the only thing that changes the schema. `Base.metadata.create_all` is gone: it used to run from `init_db()` on every ingest and weekly job, which is how dev ended up with SQLAlchemy's enum type names while the migration files declared different ones, and why five tables the models expect had never been created. Apply with `uv run python -m scripts.migrate` (or paste the files into the Supabase SQL editor, which is the production path). Run `uv run python scripts/check_schema.py` to detect drift, and `uv run python scripts/enable_rls.py` to (re-)assert row level security: the migrations already `ENABLE ROW LEVEL SECURITY` on every table they create — 34 named in static statements, plus `20261002220000_row_level_security_backfill.sql`, which loops over anything still missing it — and create no policies, and the script repeats that statement for the 30 tables `Base.metadata` declares, then warns if any of them has a policy — the condition that would reopen the anonymous REST path.
 
 ## Daily Budgets
 
@@ -251,8 +257,9 @@ replenished. See `src/shared/budget.py`.
 - **Run summary**: Ingestion stats table (fetched/too_short/ok/failed per source) in workflow step summary
 - **Health**: `GET /healthz` on curation UI → `{"status", "database"}` only, always 200 (a DB blip
   reports `degraded` in the body rather than failing the probe). The diagnosis behind it —
-  Python version, which env vars are set, DB topology, stories by status, approved posts — is on
-  `GET /healthz/details`, which requires the curator credentials
+  Python version, which env vars are set, DB topology, stories by status and transparency
+  checkpoint freshness — is on `GET /healthz/details`, which requires the curator credentials.
+  Its verdict is derived from transparency alone (`curation_ui/health.py`)
 - **Alerts**: exit code 1 if `total_fetched == 0`, if ≥50% of enabled tier-1 RSS sources are
   broken or none of them produced anything, or if `scripts/check_freshness.py` finds no tier-1
   article in 30h. Each broken tier-1 source also gets an `::error` annotation, and
