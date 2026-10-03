@@ -16,8 +16,13 @@ from src.shared.llm_budget import (
     BudgetExhausted,
     MinuteLimiter,
     RequestBudget,
+    TokenBudget,
+    TokenBudgetExhausted,
+    extract_total_tokens,
+    _usage_int,
     llm_backoff,
     unwrap_retry,
+    upper_bound_tokens,
 )
 from src.shared.llm_roster import (
     ROSTER,
@@ -161,6 +166,11 @@ class LLMClient:
         # is keyed by rung name so a new rung cannot silently join without one.
         self._budgets: Dict[str, RequestBudget] = {}
         self._minute_limiters: Dict[str, MinuteLimiter] = {}
+        # One TOKEN budget per rung, same dict-per-rung discipline as _budgets.
+        # Separate from _budgets because a request cap and a token cap have
+        # different numbers and capping only one is not a budget: on 2026-10-03
+        # dev's groq_requests read 28 while the day's 200,000 tokens were spent.
+        self._token_budgets: Dict[str, TokenBudget] = {}
         # Rung that last produced a usable answer, and rungs ruled out for the rest of
         # the process. See _candidates for why that is worth the two fields.
         self._pinned: Optional[str] = None
@@ -213,6 +223,85 @@ class LLMClient:
                 limiter,
             )
         return budget
+
+    def _token_budget_for(self, rung: LLMRung) -> TokenBudget:
+        """The token budget for one rung, created on first use.
+
+        Built from `rung.budget_name` rather than from a second name on the rung,
+        so the token row is derived from the request row and the two cannot drift
+        apart or collide. `daily_token_cap_attr` defaults to 0, which means
+        "refuse everything" -- deliberately the same conservative direction as an
+        unreadable counter, so a rung added to ROSTER without a token cap spends no
+        tokens rather than unlimited ones.
+        """
+        budget = self._token_budgets.get(rung.name)
+        if budget is None:
+            budget = self._token_budgets[rung.name] = TokenBudget(
+                rung.budget_name,
+                self._cap(rung, rung.daily_token_cap_attr, 0) if rung.daily_token_cap_attr else 0,
+            )
+        return budget
+
+    async def _record_usage(self, rung: LLMRung, result: Any) -> None:
+        """Charge one completion's real token cost to its rung. Never raises.
+
+        Called from exactly one place -- _walk, immediately after _dispatch returns
+        -- so the accounting cannot be skipped by a new caller of the transports and
+        cannot be applied twice to one completion. The rung that answered is the
+        rung charged, which is the whole reason for recording here rather than
+        inside each transport: _dispatch's result dict does not carry which rung
+        produced it, and a transport that raised has no usage to record at all.
+
+        Every failure mode is contained, because a counter read must not be able to
+        take down a request the provider already answered and billed:
+
+        * no usable `usage` -> charged 1 token on an unknown row (llm_budget)
+        * the counter row unreachable -> spend() returns None and the call already
+          happened; logging it is all there is to do, and the walk carries on
+        * an exception anywhere in here -> logged, walk continues, and the request
+          is NOT recorded. A lost charge is bad; refusing to return the answer the
+          caller already paid for is worse, and Phase 2's own lesson (5) is that
+          the expensive non-repeatable step is the LLM call.
+        """
+        total = extract_total_tokens(result)
+        if total is None:
+            total = None  # named, because "unknown" and "0" are different facts
+        try:
+            budget = self._token_budget_for(rung)
+            charged = await budget.record(total)
+            if total is None:
+                logger.warning(
+                    "%s returned no usable usage; charged %s token as a floor and"
+                    " counted the call as unpriced", rung.name, charged,
+                )
+            else:
+                logger.debug("%s spent %s tokens", rung.name, charged)
+        except Exception as exc:  # noqa: BLE001 - accounting must not fail the call
+            logger.warning(
+                "could not record token usage for %s: %s: %s",
+                rung.name, type(exc).__name__, exc,
+            )
+
+    async def _check_token_headroom(self, rung: LLMRung, messages: List[Dict[str, str]],
+                                    max_tokens: int) -> None:
+        """Refuse this rung before the call if the day's tokens cannot cover it.
+
+        Raises TokenBudgetExhausted, which _walk already handles as a budget
+        refusal: demote the rung for the run and take the next one. The estimate is
+        an UPPER BOUND on this call (prompt at characters/2, plus the caller's own
+        max_tokens ceiling), so refusing when it does not fit is correct, and the
+        cap can only be crossed by a call whose real cost beat its own ceiling.
+
+        Silence here would be a defect, not a default: without this check the only
+        thing standing between a rung and its provider's 200,000-token day is the
+        provider noticing, and a 429 on a shared free pool takes the whole roster
+        down with it.
+        """
+        if not rung.daily_token_cap_attr:
+            return
+        await self._token_budget_for(rung).ensure_headroom(
+            upper_bound_tokens(messages, max_tokens)
+        )
 
     # ---------------------------------------------------------------- roster
 
@@ -454,10 +543,17 @@ class LLMClient:
                 # The provider's own accounting of what the call cost. Callers
                 # that cap a shared daily token allowance cannot measure it any
                 # other way; everything that ignores this key is unaffected.
+                #
+                # None, not 0, when the attribute is absent. This used to default to
+                # 0, which is the one value that cannot be allowed through: a zero
+                # asserts the call was free, and a caller that trusts it under-
+                # reports the day while believing it has a cap. `usage_int` rejects
+                # anything that is not a real non-negative count, so a malformed
+                # reading arrives as "unknown" and is recorded as unpriced.
                 "usage": {
-                    "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
-                    "completion_tokens": getattr(response.usage, "completion_tokens", 0),
-                    "total_tokens": getattr(response.usage, "total_tokens", 0),
+                    "prompt_tokens": _usage_int(getattr(response.usage, "prompt_tokens", None)),
+                    "completion_tokens": _usage_int(getattr(response.usage, "completion_tokens", None)),
+                    "total_tokens": _usage_int(getattr(response.usage, "total_tokens", None)),
                 },
                 # finish_reason is the only thing that distinguishes "the model
                 # answered" from "the model ran out of room", and the difference is
@@ -497,7 +593,17 @@ class LLMClient:
                 kwargs["response_format"] = response_format
             response = await self.cerebras_client.chat.completions.create(**kwargs)
             return {
-                "choices": [{"message": {"content": response.choices[0].message.content}}]
+                "choices": [{"message": {"content": response.choices[0].message.content}}],
+                # Same shape as Groq's, and for the same reason: this rung used to
+                # return no usage at all, so its spend was counted in requests only
+                # and its token cost was invisible in the database -- which is the
+                # exact hole this batch exists to close. `usage` may be absent on
+                # the SDK object; that arrives as unpriced, not as zero.
+                "usage": {
+                    "prompt_tokens": _usage_int(getattr(getattr(response, "usage", None), "prompt_tokens", None)),
+                    "completion_tokens": _usage_int(getattr(getattr(response, "usage", None), "completion_tokens", None)),
+                    "total_tokens": _usage_int(getattr(getattr(response, "usage", None), "total_tokens", None)),
+                },
             }
 
         return await self._budget_for(self._rung("cerebras")).run(_do_cerebras_call, messages, model)
@@ -556,7 +662,20 @@ class LLMClient:
                 # would hand the caller an empty caption and hide the rung; the free
                 # reasoning models do this reliably at small max_tokens.
                 raise LLMError(f"{rung.model} returned an empty completion")
-            return {"choices": [{"message": {"content": content}}]}
+            # The raw body's own usage, normalised to the same shape the other two
+            # transports return, so one reader handles all three. OpenRouter has
+            # been observed to send counts as strings, which is why this goes
+            # through _usage_int and not an int() cast. Absent usage -> all None ->
+            # recorded as unpriced.
+            usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+            return {
+                "choices": [{"message": {"content": content}}],
+                "usage": {
+                    "prompt_tokens": _usage_int(usage.get("prompt_tokens")),
+                    "completion_tokens": _usage_int(usage.get("completion_tokens")),
+                    "total_tokens": _usage_int(usage.get("total_tokens")),
+                },
+            }
 
         return await self._budget_for(rung).run(_do_openrouter_call, messages, rung.model)
 
@@ -644,6 +763,7 @@ class LLMClient:
 
         for rung in rungs:
             try:
+                await self._check_token_headroom(rung, messages, max_tokens)
                 result = await self._dispatch(
                     rung, messages,
                     max_tokens=max_tokens, temperature=temperature, response_format=response_format,
@@ -651,7 +771,17 @@ class LLMClient:
                 )
             except BudgetExhausted as e:
                 logger.warning("%s budget exhausted: %s", rung.name, e)
-                STATS.record(rung.name, "budget_skipped")
+                # Two different diagnoses under one key. "No requests left" and "no
+                # tokens left" look identical in a stat and mean opposite things:
+                # the first says the day's call count ran out, the second says the
+                # day's allowance ran out, which is the one that actually binds
+                # (28 requests against a spent 200,000 tokens, 2026-10-03). A single
+                # key hides the finding this batch exists to fix.
+                STATS.record(
+                    rung.name,
+                    "token_budget_skipped" if isinstance(e, TokenBudgetExhausted)
+                    else "budget_skipped",
+                )
                 self._demote(rung, f"budget exhausted ({e})")
                 continue
             except Exception as e:
@@ -682,6 +812,14 @@ class LLMClient:
                 continue
 
             content = result["choices"][0]["message"]["content"]
+            # The one place a completion is charged for its tokens. It sits after
+            # the retry wrapper, so a call that burned three attempts is charged
+            # once for the answer that came back -- which is the provider's own
+            # figure and therefore includes the tokens the failed attempts spent.
+            # It sits BEFORE the caller's `accept`, so a completion the caller then
+            # rejects (a caption that failed the paraphrase check) is still paid
+            # for, which it was: the tokens left the account.
+            await self._record_usage(rung, result)
             if accept is None:
                 self._pinned = rung.name
                 return rung.name, content

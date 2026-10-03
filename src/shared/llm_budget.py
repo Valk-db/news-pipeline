@@ -24,7 +24,13 @@ import hashlib
 import random
 import time
 
-from src.shared.budget import GROQ_REQUESTS, spend, used
+from src.shared.budget import (
+    GROQ_REQUESTS,
+    spend,
+    token_counter_name,
+    unpriced_calls_counter_name,
+    used,
+)
 
 
 # Bounds for the retry backoff. The multiplier is the same shape tenacity's
@@ -47,12 +53,205 @@ class BudgetStatus:
 
 
 class BudgetExhausted(Exception):
-    def __init__(self, status: BudgetStatus, name: str = GROQ_REQUESTS):
+    def __init__(self, status: BudgetStatus, name: str = GROQ_REQUESTS,
+                 message: str | None = None):
         super().__init__(
-            f"{name} daily budget exhausted: {status.used_today}/{status.limit}"
+            message or f"{name} daily budget exhausted: {status.used_today}/{status.limit}"
         )
         self.status = status
         self.name = name
+
+
+class TokenBudgetExhausted(BudgetExhausted):
+    """The day's token allowance is spent, or cannot be read.
+
+    A subclass of BudgetExhausted on purpose: LLMClient._walk already knows how to
+    demote a rung and move to the next one when a budget is exhausted, and a new
+    exception type that is NOT a BudgetExhausted would be caught by the generic
+    handler and reported as "failed, falling through" -- indistinguishable from a
+    provider error, so a rung with no tokens left would look broken rather than
+    capped, and the run would keep retrying it.
+    """
+
+    def __init__(self, message: str, name: str, used_today: int, limit: int):
+        super().__init__(
+            BudgetStatus(used_today=used_today, limit=limit, remaining=0, exhausted=True),
+            name,
+            message=message,
+        )
+
+
+def _usage_int(value: object) -> int | None:
+    """A non-negative token count from a provider's usage object, or None.
+
+    Strict on purpose. `isinstance(True, int)` is True in Python, so a bool
+    `total_tokens` would silently become 1 and a negative number would become a
+    negative spend -- and `budget_counters.used` is a plain BIGINT with no CHECK
+    constraint, so a negative write is accepted by the database and every later
+    read of that counter is wrong. A digit string is accepted because OpenRouter
+    has been observed to send counts that way; anything else is "unknown", which
+    is the answer this function exists to be able to give.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        return int(value) if value >= 0 and value.is_integer() else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            return int(text)
+    return None
+
+
+def extract_total_tokens(result: object) -> int | None:
+    """The tokens a completed request cost, or None if the provider did not say.
+
+    Reads a transport's completion dict rather than a provider SDK object, because
+    `_dispatch` hands one back whichever rung answered and the three transports
+    do not agree on shape (Groq builds the dict from SDK attributes; OpenRouter
+    passes the raw JSON body through).
+
+    Three cases, in order:
+
+    * `usage.total_tokens` present -> that, and the components are NOT added to it.
+      Adding them is the double count the brief names: a provider that sends all
+      three fields is not reporting the same tokens twice, and a request that
+      reports both is the one shape that would produce a number twice the bill.
+    * `total_tokens` absent but prompt/completion present -> their sum. A provider
+      that itemises without totalling is under-reporting, not free.
+    * nothing usable -> None. The caller records that as unknown. It is never 0:
+      0 asserts the call was free, which is a claim nothing in the response
+      supports, and it is the value that turns a cap into decoration.
+    """
+    if not isinstance(result, dict):
+        return None
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    total = _usage_int(usage.get("total_tokens"))
+    if total is not None:
+        return total
+    parts = [_usage_int(usage.get("prompt_tokens")), _usage_int(usage.get("completion_tokens"))]
+    known = [p for p in parts if p is not None]
+    return sum(known) if known else None
+
+
+# A recording is a statement about the past, not a gate on the future: the gate is
+# ensure_headroom(), before the call. Refusing to record a call that already
+# happened would leave today's spend understated, and an understated counter is
+# worse than an overshot one -- it makes the NEXT gate think there is allowance
+# left. So record() is given effectively no ceiling. The overshoot this permits is
+# bounded by the inaccuracy of the caller's estimate, not by unbounded growth,
+# because the pre-call gate stops the request after the one that overshot.
+_NO_GATE = 2 ** 62
+
+
+class TokenBudget:
+    """One rung's daily allowance in TOKENS, counted in the database.
+
+    The same two-step shape as src.verification.phase2.Phase2TokenBudget, made
+    general so the two cannot drift:
+
+    1. `ensure_headroom(estimate)` before the call, refusing if the call's upper
+       bound would not fit in what is left. This is the gate.
+    2. `record(usage)` after it, charging what the provider actually reported, so
+       the counter tracks real spend rather than an estimate.
+
+    **The cap decision, stated once so it is not re-litigated per caller: the
+    check is BOTH, and the estimate is an upper bound rather than a guess.**
+
+    `max_tokens` is a hard ceiling -- the provider will not bill more completion
+    tokens than it was asked for -- and the prompt side is estimated at
+    characters/2, which over-estimates English's ~4 characters per token. So the
+    estimate is the most the call can cost, and refusing when that does not fit
+    is *correct* rather than pessimistic. That is what bounds the overshoot: the
+    only way to exceed the cap is for the estimate to be too LOW, which a
+    deliberately pessimistic prompt estimate cannot be.
+
+    Why not reserve-and-refund the estimate the way `RequestBudget` reserves a
+    request: `src/shared/budget.py` has no refund primitive, so a reservation is
+    either the final charge (an over-estimate silently starves the job at half
+    its granted budget) or needs a decrement that is new shared-primitive risk.
+    Two Phase 2 runs could also each pass the gate on the same last request's
+    worth of headroom; that race is real, stated, and is why every token cap in
+    config.py sits far below its provider's published limit rather than at it.
+
+    An unreadable counter is treated as fully spent, the same direction
+    budget.py commits to everywhere else: a budget that cannot be verified must
+    not become an unlimited one.
+    """
+
+    def __init__(self, request_counter: str, daily_limit: int):
+        self.name = token_counter_name(request_counter)
+        self.request_counter = request_counter
+        self.daily_limit = daily_limit
+        self.unpriced_name = unpriced_calls_counter_name(self.name)
+
+    async def spent_today(self) -> int:
+        """Tokens charged to this rung today, or -1 when the counter is unreadable."""
+        value = await used(self.name)
+        return -1 if value is None else value
+
+    async def remaining(self) -> int:
+        spent = await self.spent_today()
+        return 0 if spent < 0 else max(0, self.daily_limit - spent)
+
+    async def ensure_headroom(self, estimate: int) -> int:
+        """Raise TokenBudgetExhausted unless `estimate` fits in what is left today."""
+        remaining = await self.remaining()
+        if estimate > remaining:
+            spent = await self.spent_today()
+            raise TokenBudgetExhausted(
+                f"estimated {estimate} tokens exceeds {remaining} remaining of the "
+                f"{self.daily_limit}/day {self.name} allowance",
+                self.name,
+                # -1 is "unreadable", which is not a spend figure; report the cap so
+                # the message cannot be read as a measured overspend.
+                self.daily_limit if spent < 0 else spent,
+                self.daily_limit,
+            )
+        return estimate
+
+    async def record(self, total_tokens: int | None) -> int:
+        """Charge what the call actually cost. Returns the amount charged.
+
+        `None` means the provider did not report usage. That records as 1 token
+        plus a call on the unpriced row, never 0: the call happened, the true
+        cost is somewhere above nothing, and the only honest floor available is
+        one token. The 1 makes today's figure a lower bound, which is safe --
+        a cap stops early rather than late -- and the unpriced row is what keeps
+        that from being invisible.
+        """
+        known = _usage_int(total_tokens) if total_tokens is not None else None
+        amount = known if known and known > 0 else 1
+        if known is None or known == 0:
+            await spend(self.unpriced_name, 1, _NO_GATE)
+        await spend(self.name, amount, _NO_GATE)
+        return amount
+
+    async def record_unknown(self) -> int:
+        """A completion arrived with no usable usage at all. See record()."""
+        return await self.record(None)
+
+
+def upper_bound_tokens(messages: object, max_tokens: int) -> int:
+    """The most tokens a call with this prompt and this ceiling can cost.
+
+    Deliberately pessimistic, and the pessimism is the feature: this number
+    gates a spend, so a low estimate lets a call through the cap and the caller
+    learns about it from the provider's 429 instead of from us. `max_tokens` is
+    the provider's own ceiling on the completion, so that term needs no fudge at
+    all; only the prompt side is estimated, at characters/2 against English's
+    ~4 characters per token. Reuses src.verification.phase2's estimator shape and
+    its reasoning; if that one moves, this should move with it.
+    """
+    try:
+        text = repr(messages)
+    except Exception:  # noqa: BLE001 - an unprintable prompt is still a prompt
+        text = ""
+    return len(text) // 2 + 1 + max(0, int(max_tokens))
 
 
 def unwrap_retry(exc: BaseException) -> BaseException:

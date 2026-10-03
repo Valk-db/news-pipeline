@@ -12,9 +12,13 @@ These are real spends against the autouse SQLite `budget_counter` fixture, becau
 bug is in the SQL and a mocked database cannot see SQL.
 """
 
-import pytest
+import re
 
-from src.shared.budget import GROQ_REQUESTS, today, spend, used
+import pytest
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import asyncpg
+
+from src.shared.budget import GROQ_REQUESTS, _SPEND, today, spend, used
 
 
 class TestCapOnFirstSpend:
@@ -56,3 +60,57 @@ class TestCapOnFirstSpend:
         await spend(GROQ_REQUESTS, 1, 0)
         status = await used(GROQ_REQUESTS, day=today())
         assert status == 0
+
+
+class TestTheStatementParsesOnTheDatabaseItActuallyRunsOn:
+    """The gap that let the statement above ship broken for two hours on 2026-10-03.
+
+    Everything else in this file runs the cap against SQLite, which is the one dialect
+    that cannot see this defect: aiosqlite hands the bound values to the driver as they
+    are and never asks the server to deduce a parameter's type. Postgres deduces each
+    parameter's type at parse time and refuses the statement when two uses disagree --
+    and in `INSERT ... SELECT :name, :day, :amount WHERE :amount <= :cap` they do, because
+    the SELECT list types `:amount` as the target column (bigint) and the comparison
+    types both of its operands as integer. The live error was
+
+        ProgrammingError: inconsistent types deduced for parameter $3
+
+    which `spend()` catches and reports as "cap spent", so the observable symptom was not
+    a crash at all: on Postgres every daily budget read as spent and every LLM call was
+    refused, with a green suite the whole way. Measured live on dev through the pg
+    tunnel, postgresql+asyncpg.
+
+    So the check here is the compiled SQL, not a mock: every numeric parameter must carry
+    an explicit type at every use site, on the dialect production runs.
+    """
+
+    def test_the_numeric_parameters_are_typed_for_postgres(self):
+        compiled = str(_SPEND.compile(dialect=postgresql.dialect()))
+        for param in ("amount", "cap"):
+            untyped = re.findall(rf"%\({param}\)s(?!::)", compiled)
+            assert untyped == [], (
+                f"{param} is used {len(untyped)} time(s) without a type in:\n{compiled}"
+            )
+
+    def test_the_numeric_parameters_are_typed_for_the_driver_production_uses(self):
+        """asyncpg renders bind parameters as $N, so the cast is the only thing carrying
+        a type, and this is the driver the app and dev both connect with. Compiling with
+        the generic dialect instead would miss a fix that only works for psycopg2.
+
+        Asserted as a property of the whole statement rather than as a search for a
+        parameter name: the cast is what matters, so every placeholder in the rendered
+        SQL must either carry one or be `:name`/`:day`, which are typed by the columns
+        they are compared against. Both casts have to be there on every use site, because
+        one uncasted comparison is the whole bug.
+        """
+        compiled = str(_SPEND.compile(dialect=asyncpg.dialect()))
+        uncast = set(re.findall(r"\$(\d+)(?!::)", compiled))
+        # $1 is :name and $2 is :day -- the only two parameters Postgres can type for
+        # itself. Everything numeric has to arrive already typed.
+        assert uncast <= {"1", "2"}, f"untyped bind parameters ${{{uncast}}} in:\n{compiled}"
+        # :amount is bound once and used four times (the SELECT list, the insert's own
+        # cap check, and twice in the ON CONFLICT arm); :cap is used twice. Counting
+        # the use sites catches a fix that casts one comparison and leaves the other,
+        # which parses on Postgres and is still wrong.
+        assert compiled.count("$3::BIGINT") == 4, compiled
+        assert compiled.count("$4::BIGINT") == 2, compiled
