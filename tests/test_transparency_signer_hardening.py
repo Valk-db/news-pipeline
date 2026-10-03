@@ -1054,3 +1054,59 @@ class TestHeadParsing:
     def test_uppercase_hex_digest_is_normalized(self):
         head = signing.parse_trusted_head(f"5:{'AB' * 32}")
         assert head is not None and head.digest == "ab" * 32
+
+@needs_cryptography
+class TestOriginKeyBinding:
+    """F8: a key may only sign for the log it is named after.
+
+    ADDED BY THE COORDINATOR, not by the batch worker. The worker fixed F8,
+    confirmed on live dev that an invented origin produces
+    ``origin_key_mismatch``, and then wrote in its own report that it could not
+    find a unit test that goes red when the check is reverted -- and declined to
+    claim coverage it did not have. That honesty is why this class exists: the
+    one unbacked claim in an otherwise mutation-verified report gets its test,
+    and the ceremony that is blocked on this branch gets an unblocked one.
+
+    ``checkpoint.sign_checkpoint`` and ``verify_checkpoint`` both refuse when
+    ``signer.key_name != checkpoint.origin`` (checkpoint.py:839 and :905). A key
+    published for a different log identity must not be able to extend this log's
+    chain: otherwise anyone holding a validly-published ProcMon key can also
+    write checkpoints into a mirror, and the head an operator trusts is a
+    head for the wrong log.
+    """
+
+    async def test_a_key_named_for_another_log_is_refused(self, db_session):
+        """The attack: a perfectly valid key, provisioned for another log."""
+        signer = generate_ed25519_signer(seed=_seed("f8-other-log"))
+        # generate_ed25519_signer() always names the key DEFAULT_ORIGIN and takes
+        # no name argument, so set it the way an operator's provisioning would:
+        # a key published for a DIFFERENT log identity. Nothing else about this
+        # signer is unusual -- same algorithm, real key, trusted, in bounds.
+        signer.key_name = "procmon.dev/transparency-mirror"
+
+        log = await _log_with(3)
+        result = await _sign(db_session, log, signer)
+
+        assert result.status == "refused"
+        assert result.reason == signing.REFUSAL_ORIGIN_KEY_MISMATCH
+        rows = await db_session.execute(select(TransparencyCheckpoint))
+        assert len(rows.scalars().all()) == 0, (
+            "a checkpoint signed by a key named for another log was stored"
+        )
+
+    async def test_the_same_key_named_for_this_log_signs(self, db_session):
+        """The control, and it is not optional.
+
+        Without this second test "refuse whenever a key_name is set" would satisfy
+        the test above and prove nothing about the check. Same seed shape, same
+        trust inputs, one difference: the name matches the log.
+        """
+        signer = generate_ed25519_signer(seed=_seed("f8-control"))
+        assert signer.key_name == ORIGIN, "fixture drift: the default name moved"
+
+        log = await _log_with(3)
+        result = await _sign(db_session, log, signer)
+
+        assert result.status == "signed"
+        rows = await db_session.execute(select(TransparencyCheckpoint))
+        assert len(rows.scalars().all()) == 1
