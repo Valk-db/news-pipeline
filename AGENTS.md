@@ -59,8 +59,9 @@ Each has cost real time. The citation is the evidence — check it, don't trust 
 
 2. **`/tmp` is a small tmpfs.** Large downloads and venvs do not go there. GDELT's disk
    work is routed under `TMPDIR` for this reason (`src/ingestion/gdelt_static.py:22-23`),
-   and `_tmp_root()` (`:550-554`) honours `TMPDIR`. Never build a venv in `/tmp`
-   (`BRIEF-canon-harden.md:8`).
+   and `_tmp_root()` (`:550-554`) honours `TMPDIR`. Never build a venv in `/tmp` —
+   the batch brief that first measured that tmpfs was removed from the tree on
+   2026-10-03 and lives in history at `e3549a9`.
 
 3. **iOS tile filter — the basemap darkening filter belongs on `.leaflet-tile`, never on
    `.leaflet-tile-pane`.** On the pane, iOS WebKit tries to rasterize one filtered surface as

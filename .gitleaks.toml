@@ -1,0 +1,48 @@
+# gitleaks configuration for the secret scan (.github/workflows/secret-scan.yml).
+#
+# Why the CLI and not gitleaks/gitleaks-action: action v2 requires a
+# GITLEAKS_LICENSE for any repository owned by a GitHub Organization
+# (gitleaks-action v2.md, "If you are scanning repos that belong to an
+# organization, you'll also have to acquire a GITLEAKS_LICENSE"). The brief for
+# this batch is free / no account / no API key, so the MIT-licensed CLI is
+# installed instead, pinned to an exact version AND a sha256 of the release
+# tarball, in the workflow.
+#
+# Why the default ruleset is extended rather than replaced: the ~180 default
+# rules are the teeth. Measured on main (73789dc) they catch the credential
+# shapes this repo actually uses - a Groq `gsk_...` key (via generic-api-key on
+# the GROQ_API_KEY keyword), a `ghp_` GitHub PAT, a Supabase service_role JWT,
+# and a bare `api_key = "<high entropy>"`. A hand-written pattern list would be
+# the "pattern scan was not exhaustive" thing this scan exists to replace.
+#
+# The allowlist below is the whole reason this file exists, so it is worth
+# stating exactly what it suppresses. On main (73789dc), with no config at all,
+# the default ruleset reports 300 findings and every single one is the
+# `generic-api-key` rule on the same shape: a JSON object whose field is
+# literally named `key` holding a 64-character lowercase hex sha256 content
+# hash, 30 per file across 10 files, all introduced by commit 2bab3eb. Measured:
+# `Counter({'key': 30, 'prompt_hash': 30, 'input_hash': 30})` per manifest,
+# 10 manifests, 300 findings, one commit, zero provider-specific rules hit.
+#
+# The ten files are listed BY NAME rather than as `eval/data/results/*.json`, on
+# purpose: a directory glob would also silence any file added there later,
+# which is exactly the shape of the hole the scan is supposed to close. With the
+# names pinned, a new file in that directory is still scanned.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "eval record-and-replay result manifests: 30 JSON objects each with a field literally named `key` holding a 64-char sha256 hex content hash, which generic-api-key reads as a credential (300 findings on main 73789dc, all from commit 2bab3eb). Listed by name so any NEW file in eval/data/results/ is still scanned."
+paths = [
+  '''^eval/data/results/baseline\.json$''',
+  '''^eval/data/results/mutate-collapse_type\.json$''',
+  '''^eval/data/results/mutate-cycle_type\.json$''',
+  '''^eval/data/results/mutate-drop_confidence\.json$''',
+  '''^eval/data/results/mutate-drop_entities\.json$''',
+  '''^eval/data/results/mutate-drop_position\.json$''',
+  '''^eval/data/results/mutate-first_only\.json$''',
+  '''^eval/data/results/mutate-shout_entities\.json$''',
+  '''^eval/data/results/mutate-truncate_text\.json$''',
+  '''^eval/data/results/replay-1\.json$''',
+]
