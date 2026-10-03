@@ -51,7 +51,11 @@ from src.transparency.signed_note import (
     verify_note_signature,
     verify_note_signatures,
 )
-from src.transparency.store import TransparencyCheckpoint, save_checkpoint
+from src.transparency.store import (
+    TransparencyCheckpoint,
+    TransparencyQuarantine,
+    save_checkpoint,
+)
 
 
 def _seed(label: str) -> bytes:
@@ -63,6 +67,24 @@ def _seed(label: str) -> bytes:
     satisfies the production constraint rather than bypassing it.
     """
     return hashlib.sha256(f"test-seed:{label}".encode()).digest()
+
+
+def _trusted(signer) -> dict:
+    """The published key set for this signer, derived from the signer itself.
+
+    F1/F3 make the trusted-key set a required trust input, so the pre-hardening
+    tests in this file have to supply one. Deriving it from the signer (rather
+    than hand-writing a TrustedKey) keeps the key_id consistent with the one the
+    signer produces, which is what the real configuration does.
+    """
+    return {
+        signer.key_id: TrustedKey(
+            key_id=signer.key_id,
+            algorithm=signer.algorithm,
+            public_key=signer.public_key_bytes(),
+        )
+    }
+
 
 
 needs_cryptography = pytest.mark.skipif(
@@ -564,7 +586,7 @@ class TestSignerRefusals:
         log = await _log_with(4)
         signer = generate_ed25519_signer(seed=_seed("signer-1"))
         result = await signing.sign_next_checkpoint(
-            db_session, log, signer, origin=ORIGIN, lock=False
+            db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True
         )
         assert result.status == "signed"
         assert result.tree_size == 4
@@ -579,7 +601,7 @@ class TestSignerRefusals:
         # Second run over new entries chains to the first.
         await log.append({"type": "test", "n": "4"})
         second = await signing.sign_next_checkpoint(
-            db_session, log, signer, origin=ORIGIN, lock=False
+            db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True
         )
         assert second.status == "signed"
         assert second.previous_digest == checkpoint_digest(result.signed)
@@ -589,8 +611,8 @@ class TestSignerRefusals:
     async def test_rerunning_with_no_new_entries_is_idempotent(self, db_session):
         log = await _log_with(3)
         signer = generate_ed25519_signer(seed=_seed("signer-2"))
-        first = await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False)
-        again = await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False)
+        first = await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True)
+        again = await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True)
         assert again.status == "already_signed"
         assert again.merkle_root == first.merkle_root
         # Exactly one row exists: idempotent means no second insert.
@@ -620,25 +642,51 @@ class TestSignerRefusals:
             timestamp=datetime(2026, 10, 1, 6, 0, tzinfo=timezone.utc),
         )
         v1_signed = sign_checkpoint(v1, HmacDevSigner(b"legacy-dev-secret", key_id="dev-hmac-legacy"))
-        await save_checkpoint(db_session, v1_signed)
+        v1_row = await save_checkpoint(db_session, v1_signed)
         v1_digest = checkpoint_digest(v1_signed)
 
+        # F1 CHANGED THIS TEST. An HMAC-signed v1 row cannot be authenticated
+        # by any public key -- keys.py refuses to admit an HMAC into the trusted
+        # set at all, because it would be verification theater on a proof page --
+        # so the signer now refuses to build on it, permanently, and the row is
+        # append-only so it cannot be removed. Quarantining it is the supported
+        # way forward: the row stays, the signer stops trusting it, and no weak
+        # verification path is kept alive for it.
+        unquarantined = await signing.sign_next_checkpoint(
+            db_session, log, signer, origin=ORIGIN, lock=False,
+            trusted_keys=_trusted(signer), genesis_confirmed=True,
+        )
+        assert unquarantined.status == "refused"
+        assert unquarantined.reason == signing.REFUSAL_PREVIOUS_KEY_UNKNOWN
+
+        db_session.add(
+            TransparencyQuarantine(checkpoint_id=str(v1_row.id), reason="pre-v2 HMAC row")
+        )
+        await db_session.flush()
+
         result = await signing.sign_next_checkpoint(
-            db_session, log, signer, origin=ORIGIN, lock=False
+            db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True
         )
         assert result.status == "signed", result.reason
         assert result.tree_size == 3
         assert result.signed is not None
         assert result.signed.checkpoint.format == FORMAT_C2SP_V2
         assert result.signed.checkpoint.merkle_root.hex() == v1.merkle_root.hex()
-        assert result.signed.checkpoint.previous_digest.hex() == v1_digest
+        # previous_digest is None, NOT the v1 digest, and that is the honest
+        # consequence of quarantining: a quarantined row is excluded from the
+        # chain entirely, so the first v2 checkpoint after it is the first
+        # checkpoint of the trusted chain. The operator then records THIS one as
+        # the external head. Chaining to a row we just declared untrustworthy
+        # would launder that declaration.
+        assert result.signed.checkpoint.previous_digest is None
+        assert v1_digest is not None  # the v1 digest was still computed above
         # Two rows at the same size, one per format: that is the design, not a bug.
         rows = await db_session.execute(__import__("sqlalchemy").select(TransparencyCheckpoint))
         assert len(rows.scalars().all()) == 2
 
         # And the second v2 run is a genuine no-op, not another row.
         again = await signing.sign_next_checkpoint(
-            db_session, log, signer, origin=ORIGIN, lock=False
+            db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True
         )
         assert again.status == signing.REFUSAL_ALREADY_SIGNED
         rows = await db_session.execute(__import__("sqlalchemy").select(TransparencyCheckpoint))
@@ -653,12 +701,12 @@ class TestSignerRefusals:
         """A log that shrank must not produce a valid-looking new checkpoint."""
         log = await _log_with(5)
         signer = generate_ed25519_signer(seed=_seed("signer-3"))
-        await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False)
+        await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True)
 
         # Rebuild the log with fewer entries, as a truncation would.
         shorter = await _log_with(3)
         result = await signing.sign_next_checkpoint(
-            db_session, shorter, signer, origin=ORIGIN, lock=False
+            db_session, shorter, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True
         )
         assert result.status == "refused"
         assert result.reason == signing.REFUSAL_LOG_SMALLER
@@ -676,7 +724,7 @@ class TestSignerRefusals:
         """
         signer = generate_ed25519_signer(seed=_seed("signer-4"))
         first = await _log_with(3)
-        await signing.sign_next_checkpoint(db_session, first, signer, origin=ORIGIN, lock=False)
+        await signing.sign_next_checkpoint(db_session, first, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True)
 
         # A different log of the same length: entry 1's payload differs, so the
         # root over the first 3 entries no longer matches what was published.
@@ -685,7 +733,7 @@ class TestSignerRefusals:
             await forged.append({"type": "test", "n": "forged" if i == 1 else str(i)})
 
         result = await signing.sign_next_checkpoint(
-            db_session, forged, signer, origin=ORIGIN, lock=False
+            db_session, forged, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True
         )
         assert result.status == "refused"
         assert result.reason in (signing.REFUSAL_EQUIVOCATION, signing.REFUSAL_INCONSISTENT_HISTORY)
@@ -693,33 +741,37 @@ class TestSignerRefusals:
 
     @needs_cryptography
     async def test_refuses_equivocation_at_a_published_tree_size(self, db_session):
-        """A second row at the same size with a different root is refused."""
-        signer = generate_ed25519_signer(seed=_seed("signer-5"))
-        log = await _log_with(2)
-        await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False)
+        """A second row at the same size with a different root is refused.
 
-        # Same tree_size, different root: write the divergent row directly, as a
-        # compromised signer or a rogue migration would.
+        The rogue row is signed by a SECOND PUBLISHED key, on purpose. An
+        unauthenticated row is caught earlier, by F1, with a different code --
+        which is correct, but it would mean this test no longer measured
+        equivocation at all. Signing it with a key the operator really did
+        publish isolates the check under test: two validly-signed checkpoints
+        claiming the same tree_size with different roots.
+        """
+        signer = generate_ed25519_signer(seed=_seed("signer-5"))
+        rogue = generate_ed25519_signer(seed=_seed("signer-5-rogue"))
+        log = await _log_with(2)
+        await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True)
+
+        # Same tree_size, different root, validly signed by a published key: a
+        # compromised second key or a rogue rotation, not a forger.
+        entries = await log.entries()
         bogus = Checkpoint(
             tree_size=2,
             merkle_root=b"\xaa" * 32,
-            chain_hash=b"\xbb" * 32,
+            chain_hash=entries[-1].chain_hash,
             timestamp=datetime.now(timezone.utc),
+            origin=ORIGIN,
+            format=FORMAT_C2SP_V2,
         )
-        row = TransparencyCheckpoint(
-            tree_size=2,
-            merkle_root=bogus.merkle_root.hex(),
-            chain_hash=bogus.chain_hash.hex(),
-            timestamp=bogus.timestamp,
-            signature="00" * 32,
-            algorithm="ed25519",
-            key_id="rogue",
-        )
-        db_session.add(row)
+        await save_checkpoint(db_session, sign_checkpoint(bogus, rogue))
         await db_session.flush()
 
         result = await signing.sign_next_checkpoint(
-            db_session, log, signer, origin=ORIGIN, lock=False
+            db_session, log, rogue, origin=ORIGIN, lock=False,
+            trusted_keys={**_trusted(signer), **_trusted(rogue)}, genesis_confirmed=True,
         )
         assert result.status == "refused"
         assert result.reason == signing.REFUSAL_EQUIVOCATION
@@ -728,7 +780,7 @@ class TestSignerRefusals:
     async def test_an_empty_log_is_refused(self, db_session):
         signer = generate_ed25519_signer(seed=_seed("signer-6"))
         result = await signing.sign_next_checkpoint(
-            db_session, InMemoryMerkleLog(), signer, origin=ORIGIN, lock=False
+            db_session, InMemoryMerkleLog(), signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True
         )
         assert result.status == "refused"
         assert result.reason == signing.REFUSAL_EMPTY_LOG
@@ -745,7 +797,7 @@ class TestSignerRefusals:
         # which is itself the point: the log gives no way to edit one in place.
         log._entries[1] = dataclasses.replace(log._entries[1], chain_hash=b"\xff" * 32)
         with pytest.raises(ValueError, match="intact chain"):
-            await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False)
+            await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True)
 
 
 class TestWatchdog:

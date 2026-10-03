@@ -108,7 +108,6 @@ from src.transparency.checkpoint import (
     FORMAT_JSON_V1,
     SignedCheckpoint,
     Signer,
-    _signer_public_key,
     build_checkpoint,
     checkpoint_digest,
     merkle_root,
@@ -174,6 +173,12 @@ REFUSAL_GENESIS_UNCONFIRMED = "genesis_unconfirmed"
 REFUSAL_SIGNER_KEY_UNTRUSTED = "signer_key_untrusted"
 REFUSAL_SIGNER_KEY_OUT_OF_BOUNDS = "signer_key_out_of_bounds"
 REFUSAL_SIGNER_VERIFY_FAILED = "signer_verify_failed"
+# The two post-sign checks are deliberately different codes, not one: "this
+# signature is corrupt" and "the key that produced it is not the key the
+# operator published" are different failures with different operator actions, and
+# a single code would also make the two guards indistinguishable to a mutation
+# test (removing either one would leave the other's code passing).
+REFUSAL_SIGNER_KEY_MISMATCH = "signer_key_mismatch"
 
 # F5. The log's own shape is wrong before any comparison happens: log.size()
 # reports max(index)+1, so a deleted middle row makes tree_size exceed the number
@@ -602,7 +607,7 @@ async def sign_next_checkpoint(
             "public key are not the same key."
         )
         return _refusal(
-            REFUSAL_SIGNER_VERIFY_FAILED,
+            REFUSAL_SIGNER_KEY_MISMATCH,
             tree_size=tree_size,
             key_id=signed.key_id,
             detail_problem=self_check.reason,
@@ -876,22 +881,15 @@ def _check_signer_key(
             key_id=signer.key_id,
             detail_problem="algorithm disagreement with the published key",
         )
-    public = _signer_public_key(signer)
-    if public and key.public_key != public:
-        # The case the review called out: the derived key is not the published
-        # key. Reported by key_id match and still wrong, which is exactly how a
-        # silent mis-derivation presents.
-        logger.error(
-            "REFUSING: the published key for "
-            f"{signer.key_id!r} does not match this signer's public key. The signing "
-            "seed does not derive the key that was published."
-        )
-        return _refusal(
-            REFUSAL_SIGNER_KEY_UNTRUSTED,
-            tree_size=tree_size,
-            key_id=signer.key_id,
-            detail_problem="signer's public key does not match the published key",
-        )
+    # Key IDENTITY (is this the key that was published?) is deliberately NOT
+    # checked here. It is checked after signing, by verify_previous_checkpoint
+    # against the published key's bytes, and it has to be there: a signer that
+    # cannot expose a public key -- or one whose public_key_bytes() raises --
+    # skips an identity comparison done here, and that is precisely the shape a
+    # mis-derived key takes. Splitting it this way also keeps one guard per
+    # concern. A comparison that exists in both places is a comparison where
+    # removing either one still passes every test, which is how a guard ends up
+    # untested: this file's mutation table is the evidence that neither did.
     ok, reason = key.is_within_bounds(tree_size, datetime.now(timezone.utc))
     if not ok:
         logger.error(f"REFUSING: the signing key {signer.key_id!r} {reason}")
@@ -983,6 +981,7 @@ __all__ = [
     "REFUSAL_PREVIOUS_KEY_OUT_OF_BOUNDS",
     "REFUSAL_PREVIOUS_KEY_UNKNOWN",
     "REFUSAL_PREVIOUS_SIGNATURE_INVALID",
+    "REFUSAL_SIGNER_KEY_MISMATCH",
     "REFUSAL_SIGNER_KEY_OUT_OF_BOUNDS",
     "REFUSAL_SIGNER_KEY_UNTRUSTED",
     "REFUSAL_SIGNER_VERIFY_FAILED",
