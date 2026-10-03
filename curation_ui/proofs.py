@@ -473,7 +473,17 @@ async def build_proof_view(session, article: RawArticle) -> ProofView:
         ))
         return view
 
-    proof = await inclusion_proof(log, entry.index, signed.checkpoint.tree_size)
+    # The scheme the operator actually signed with, never the legacy default.
+    # sign_next_checkpoint writes c2sp-tlog-checkpoint-v3, whose root is an
+    # RFC 6962 tree (domain-separated leaves, no odd-level duplication), so a
+    # path or fold built with the default n1-ct-dup-v1 scheme lands on a
+    # different root than the checkpoint signs and a genuine proof renders as
+    # "failed". verify_inclusion below already reads the scheme off the
+    # checkpoint; these three call sites have to agree with it.
+    scheme = signed.checkpoint.tree_scheme()
+    proof = await inclusion_proof(
+        log, entry.index, signed.checkpoint.tree_size, scheme=scheme
+    )
     math_ok = verify_inclusion(entry, proof, signed)
     bound, binding_detail = _binding_verdict(entry.payload, article)
     chain_ok = await _chain_reaches_head(session, entry, signed.checkpoint)
@@ -484,7 +494,10 @@ async def build_proof_view(session, article: RawArticle) -> ProofView:
         leaf_recomputed = hashlib.sha256(canonical_json(entry.payload)).digest() == entry.leaf_hash
     except TypeError:
         leaf_recomputed = False
-    root_recomputed = proof_root(entry.leaf_hash, proof.index, proof.siblings) == signed.checkpoint.merkle_root
+    root_recomputed = (
+        proof_root(entry.leaf_hash, proof.index, proof.siblings, scheme)
+        == signed.checkpoint.merkle_root
+    )
 
     intact = math_ok and chain_ok and bound is not False
     if intact and sig_ok:
@@ -527,7 +540,7 @@ async def build_proof_view(session, article: RawArticle) -> ProofView:
             "digest": step.digest.hex(),
             "note": _describe_step(step.level, step.position),
         }
-        for step in proof_steps(entry.leaf_hash, proof.index, proof.siblings)
+        for step in proof_steps(entry.leaf_hash, proof.index, proof.siblings, scheme)
     ]
 
     checkpoint = signed.checkpoint
