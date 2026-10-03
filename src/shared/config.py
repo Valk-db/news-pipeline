@@ -15,6 +15,20 @@ class Settings(BaseSettings):
     cerebras_api_key: str = ""
     cerebras_model: str = "gpt-oss-120b"
 
+    # OpenRouter. The free tiers are reached through the ordinary OpenRouter key: the
+    # ":free" suffix on the model id is what selects the free pool, and that pool is
+    # shared across every OpenRouter user, so it rate-limits independently of the key
+    # (see src/shared/llm_roster.py). Each free model is its own rung with its own
+    # daily counter, because one model being locked out must not consume another's
+    # budget. The per-model ids default to "" and then mean "use the pinned id in
+    # llm_roster.ROSTER", so a retired id can be swapped here without a code change --
+    # and scripts/check_free_models.py will say so instead of the run silently 404ing.
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_timeout: float = 60.0
+    openrouter_gemma_model: str = ""
+    openrouter_nemotron_model: str = ""
+
     # Reddit (public RSS, no API credentials needed)
     reddit_user_agent: str = "news-pipeline/0.1 (by /u/valk_db)"
 
@@ -43,7 +57,30 @@ class Settings(BaseSettings):
     # LLM budget (sized under provider's published cap for headroom). Counted in the
     # database (src/shared/budget.py), so this is a daily cap for the pipeline rather
     # than for one process: two ingest runs a day share one budget.
+    #
+    # The per-minute caps are the one asymmetric case, and the asymmetry is deliberate
+    # rather than an oversight: a daily cap has to survive the process (a run is 20
+    # minutes, a cap is a day) so it is a row in budget_counters, whereas a per-minute
+    # cap only has to hold inside one burst, so it is an in-process sliding window
+    # (llm_budget.MinuteLimiter). Two runners in the same minute can therefore jointly
+    # exceed a per-minute cap by up to 2x. That is accepted: the free tiers these
+    # protect are 429ing on a shared upstream pool anyway, and a window that needed its
+    # own database round trip per request would cost more than it saves.
     groq_daily_request_budget: int = 900
+    # Groq publishes 30 RPM (.env.example); 25 leaves headroom for the preflight ping.
+    groq_requests_per_minute: int = 25
+    # Cerebras was previously uncounted, so its cap is set generously: adding a counter
+    # to a rung that never had one should not be what breaks a run.
+    cerebras_daily_request_budget: int = 900
+    cerebras_requests_per_minute: int = 60
+    # The OpenRouter free pool allows ~20 RPM. 15 leaves room for the preflight probe and
+    # for a second free rung sharing the same account limit.
+    openrouter_requests_per_minute: int = 15
+    # A free model without credits is capped around 50 requests/day, and the pool itself
+    # 429s long before that. 200 is chosen to be reachable: a cap that is never hit
+    # records nothing, and one that is always hit is a disabled rung.
+    openrouter_gemma_daily_request_budget: int = 200
+    openrouter_nemotron_daily_request_budget: int = 200
 
     # Tiered ingestion schedules (cron expressions)
     tier1_schedule: str = "0 * * * *"      # Hourly
@@ -148,8 +185,12 @@ class Settings(BaseSettings):
         return bool(self.cerebras_api_key and self.cerebras_api_key.strip())
 
     @property
+    def has_openrouter(self) -> bool:
+        return bool(self.openrouter_api_key and self.openrouter_api_key.strip())
+
+    @property
     def has_llm(self) -> bool:
-        return self.has_groq or self.has_cerebras
+        return self.has_groq or self.has_cerebras or self.has_openrouter
 
     @property
     def has_youtube(self) -> bool:
@@ -172,7 +213,7 @@ class Settings(BaseSettings):
         if feature == "database" and not self.has_database:
             missing.append("DATABASE_URL")
         elif feature == "llm" and not self.has_llm:
-            missing.extend(["GROQ_API_KEY", "CEREBRAS_API_KEY"])
+            missing.extend(["GROQ_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY"])
         elif feature == "youtube" and not self.has_youtube:
             missing.append("YOUTUBE_API_KEY")
         elif feature == "supabase" and not self.has_supabase:
