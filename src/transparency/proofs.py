@@ -22,12 +22,17 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from src.transparency.checkpoint import (
+    LEAF_PREFIX,
     NODE_PREFIX,
+    TREE_SCHEME_CT_V1,
+    TREE_SCHEME_RFC6962,
     Checkpoint,
     SignedCheckpoint,
     Signer,
+    entry_timestamps_root,
     merkle_levels,
-    tree_depth,
+    proof_length_for_scheme,
+    rfc6962_path,
     verify_checkpoint,
 )
 from src.transparency.log import LogEntry, MerkleLog, canonical_json
@@ -41,16 +46,24 @@ class InclusionProof:
 
     Direction is implied by `index`, so it does not need to travel with the
     proof: at each level, an even position is the left child.
+
+    `scheme` says which tree the siblings came from. It is part of the proof
+    because the two schemes fold differently -- RFC 6962 prefixes the leaf and
+    does not duplicate the odd node, so an old path folded against a v3 root (or
+    the reverse) would silently produce a different root rather than an error.
+    It defaults to the legacy scheme so a proof published before v3 still reads.
     """
     index: int
     tree_size: int
     siblings: tuple[bytes, ...]
+    scheme: str = TREE_SCHEME_CT_V1
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "index": self.index,
             "siblings": [sibling.hex() for sibling in self.siblings],
             "tree_size": self.tree_size,
+            "scheme": self.scheme,
         }
 
     @classmethod
@@ -59,7 +72,9 @@ class InclusionProof:
             index=int(data["index"]),
             tree_size=int(data["tree_size"]),
             siblings=tuple(bytes.fromhex(str(s)) for s in data["siblings"]),
+            scheme=str(data.get("scheme") or TREE_SCHEME_CT_V1),
         )
+
 
 
 @dataclass(frozen=True)
@@ -74,16 +89,27 @@ class ProofStep:
     digest: bytes
 
 
-def proof_steps(leaf: bytes, index: int, siblings: Sequence[bytes]) -> list[ProofStep]:
+def proof_steps(
+    leaf: bytes,
+    index: int,
+    siblings: Sequence[bytes],
+    scheme: str = TREE_SCHEME_CT_V1,
+) -> list[ProofStep]:
     """Fold a leaf and its sibling path, recording each level.
 
     The even/odd ordering rule lives here and only here: an even position
     hashes as the left child (0x01 || node || sibling), an odd position as the
     right child (0x01 || sibling || node). proof_root() delegates to this so
     the page's displayed steps and the verified root can never disagree.
+
+    Under RFC 6962 the leaf is domain-separated first (0x00 || leaf) and the
+    odd-node duplication is gone, so the first step hashes a prefixed leaf and
+    the path is whatever length the position needs.
     """
+    if scheme not in (TREE_SCHEME_CT_V1, TREE_SCHEME_RFC6962):
+        raise ValueError(f"unknown tree scheme {scheme!r}")
     steps: list[ProofStep] = []
-    digest = leaf
+    digest = hashlib.sha256(LEAF_PREFIX + leaf).digest() if scheme == TREE_SCHEME_RFC6962 else leaf
     position = index
     for level, sibling in enumerate(siblings):
         if position % 2 == 0:
@@ -96,22 +122,40 @@ def proof_steps(leaf: bytes, index: int, siblings: Sequence[bytes]) -> list[Proo
     return steps
 
 
-def proof_root(leaf: bytes, index: int, siblings: Sequence[bytes]) -> bytes:
+def proof_root(
+    leaf: bytes,
+    index: int,
+    siblings: Sequence[bytes],
+    scheme: str = TREE_SCHEME_CT_V1,
+) -> bytes:
     """Fold a leaf and its sibling path up to a root.
 
     Implemented through proof_steps() so the permalink page can display the
     exact intermediate digests this fold produces.
     """
-    steps = proof_steps(leaf, index, siblings)
+    if scheme == TREE_SCHEME_RFC6962 and not siblings:
+        # A one-leaf tree: the root is the leaf hash, still domain-separated.
+        return hashlib.sha256(LEAF_PREFIX + leaf).digest()
+    steps = proof_steps(leaf, index, siblings, scheme)
     return steps[-1].digest if steps else leaf
 
 
-async def inclusion_proof(log: MerkleLog, index: int, checkpoint_size: int) -> InclusionProof:
+async def inclusion_proof(
+    log: MerkleLog,
+    index: int,
+    checkpoint_size: int,
+    *,
+    scheme: str = TREE_SCHEME_CT_V1,
+) -> InclusionProof:
     """Sibling path for `index` in a tree of the first `checkpoint_size` entries.
 
     `checkpoint_size` is the checkpoint's tree_size, not the log's length: a
     proof has to be against the exact tree that was signed, or the fold lands on
     a different root. `checkpoint_size` may therefore be less than the log.
+
+    `scheme` must be the scheme of the checkpoint the proof will be verified
+    against; it defaults to the legacy CT tree for callers that have not moved
+    yet.
     """
     if index < 0:
         raise ValueError(f"index must be >= 0, got {index}")
@@ -120,16 +164,25 @@ async def inclusion_proof(log: MerkleLog, index: int, checkpoint_size: int) -> I
     if index >= checkpoint_size:
         raise ValueError(f"index {index} is outside a tree of size {checkpoint_size}")
 
-    levels = merkle_levels((await log.leaf_hashes())[:checkpoint_size])
-    siblings: list[bytes] = []
-    position = index
-    for level in levels[:-1]:
-        sibling_position = position ^ 1
-        if sibling_position >= len(level):
-            sibling_position = position  # duplicated final node of an odd level
-        siblings.append(level[sibling_position])
-        position //= 2
-    return InclusionProof(index=index, tree_size=checkpoint_size, siblings=tuple(siblings))
+    leaves = list((await log.leaf_hashes())[:checkpoint_size])
+    if scheme == TREE_SCHEME_RFC6962:
+        siblings = rfc6962_path(leaves, index)
+    elif scheme == TREE_SCHEME_CT_V1:
+        levels = merkle_levels(leaves)
+        siblings = []
+        position = index
+        for level in levels[:-1]:
+            sibling_position = position ^ 1
+            if sibling_position >= len(level):
+                sibling_position = position  # duplicated final node of an odd level
+            siblings.append(level[sibling_position])
+            position //= 2
+    else:
+        raise ValueError(f"unknown tree scheme {scheme!r}")
+    return InclusionProof(
+        index=index, tree_size=checkpoint_size, siblings=tuple(siblings), scheme=scheme
+    )
+
 
 
 def verify_inclusion(
@@ -143,6 +196,15 @@ def verify_inclusion(
     """
     body: Checkpoint = checkpoint.checkpoint if isinstance(checkpoint, SignedCheckpoint) else checkpoint
 
+    try:
+        scheme = body.tree_scheme()
+    except ValueError:
+        logger.info(f"Checkpoint carries an unknown format: {body.format!r}")
+        return False
+    if proof.scheme != scheme:
+        # A path built for one tree must not be folded against another's root.
+        logger.info(f"Proof is for scheme {proof.scheme!r}, checkpoint is {scheme!r}")
+        return False
     if proof.tree_size != body.tree_size:
         logger.info(f"Proof is for tree_size {proof.tree_size}, checkpoint covers {body.tree_size}")
         return False
@@ -151,10 +213,13 @@ def verify_inclusion(
         return False
     if entry.index >= body.tree_size:
         return False
-    if len(proof.siblings) != tree_depth(body.tree_size):
+    # RFC 6962 paths are not a fixed depth: a promoted odd node has no sibling,
+    # so the expected length depends on the position, not just the size.
+    expected = proof_length_for_scheme(entry.index, body.tree_size, scheme)
+    if len(proof.siblings) != expected:
         logger.info(
-            f"Proof has {len(proof.siblings)} siblings, depth of size {body.tree_size} "
-            f"is {tree_depth(body.tree_size)}"
+            f"Proof has {len(proof.siblings)} siblings, {scheme} needs {expected} "
+            f"for index {entry.index} of {body.tree_size}"
         )
         return False
 
@@ -167,7 +232,8 @@ def verify_inclusion(
         logger.info(f"Entry {entry.index}: payload is not canonicalizable")
         return False
 
-    return proof_root(leaf, proof.index, proof.siblings) == body.merkle_root
+    return proof_root(leaf, proof.index, proof.siblings, scheme) == body.merkle_root
+
 
 
 async def verify_entry(
@@ -187,5 +253,38 @@ async def verify_entry(
     entry = await log.get(index)
     if entry is None:
         return False
-    proof = await inclusion_proof(log, index, signed.checkpoint.tree_size)
+    proof = await inclusion_proof(
+        log, index, signed.checkpoint.tree_size, scheme=signed.checkpoint.tree_scheme()
+    )
     return verify_inclusion(entry, proof, signed)
+
+def verify_entry_timestamps(
+    signed: SignedCheckpoint,
+    entries: Sequence[LogEntry],
+) -> bool:
+    """Check a v3 checkpoint's entry-timestamp commitment against the entries.
+
+    Returns True when the checkpoint does not claim a timestamp commitment (v1
+    and v2 rows, which cannot be checked this way -- that residual is exactly why
+    v3 exists). Otherwise it recomputes the root over the first
+    `checkpoint.tree_size` entries and compares. An entry whose timestamp was
+    edited after signing fails here even though its leaf hash, chain hash and
+    signature are all untouched, which is the hole F15 closes.
+
+    This needs the covered prefix, not a single leaf: an audit path proves
+    inclusion of a leaf hash, and the timestamp commitment is over the whole
+    prefix. Callers that only have one entry must treat the timestamp claim as
+    unchecked rather than as verified.
+    """
+    body = signed.checkpoint
+    claimed = body.entry_timestamps
+    if claimed is None:
+        return True
+    covered = list(entries)[: body.tree_size]
+    if len(covered) < body.tree_size:
+        logger.info(
+            f"Cannot check the entry-timestamp commitment: got {len(covered)} entries "
+            f"for a checkpoint covering {body.tree_size}"
+        )
+        return False
+    return entry_timestamps_root(covered) == claimed
