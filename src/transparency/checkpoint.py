@@ -19,9 +19,34 @@ package is absent. HmacDevSigner exists so the pipeline stays runnable and
 testable without it, and it is NOT a substitute for a signature: the operator
 holds the key, so it proves nothing to anybody else. It is marked
 NOT FOR PRODUCTION in the class docstring and in scripts/run_transparency_demo.py.
+
+Two signed formats live here, and a checkpoint carries the name of the one it
+was signed with:
+
+    FORMAT_JSON_V1 = "n1-json-v1"          this project's original envelope
+    FORMAT_C2SP_V2 = "c2sp-tlog-checkpoint-v2"   a C2SP signed note
+
+v1 is a JSON object behind the domain separator CHECKPOINT_DOMAIN. It is
+project-specific: nothing outside this repo knows how to read it, so a
+third-party verifier has to take our word for the parser. v2 is
+https://c2sp.org/tlog-checkpoint: three mandatory lines (origin, tree size,
+root hash) plus signature lines in the signed-note format, which any auditor
+can check without a library. New checkpoints are v2; v1 stays byte-for-byte
+readable because rows signed under it are already published and re-verifying
+them must keep working.
+
+The one deviation from tlog-checkpoint v1.0.0: that format has no timestamp and
+no link to the previous checkpoint, and both matter here (a checkpoint without
+a time cannot be aged by a watchdog, and one without a previous-digest link
+cannot be chained by a reader). So v2 appends exactly ONE extension line
+carrying them. The spec permits extension lines but says they are NOT
+RECOMMENDED because log monitors cannot audit them, so the three mandatory
+lines carry the whole verifiable claim and the extension is additive: a monitor
+that ignores it still gets origin, size and root.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import logging
@@ -30,12 +55,35 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from src.transparency.log import GENESIS_CHAIN_HASH, MerkleLog, canonical_json, verify_chain
+from src.transparency.signed_note import (
+    ED25519_NOTE_SIG_TYPE,
+    KEY_ID_BYTES,
+    NoteSignature,
+    SignedNoteError,
+    encode_signed_note,
+    note_key_id,
+)
 
 logger = logging.getLogger(__name__)
 
 # Domain separator so a checkpoint signature can never be replayed as a
 # signature over some other document this project might start signing.
 CHECKPOINT_DOMAIN = b"n1:merkle-checkpoint:v1"
+
+# The two signed formats a Checkpoint can carry. See the module docstring.
+FORMAT_JSON_V1 = "n1-json-v1"
+FORMAT_C2SP_V2 = "c2sp-tlog-checkpoint-v2"
+CHECKPOINT_FORMATS = (FORMAT_JSON_V1, FORMAT_C2SP_V2)
+
+# Origin written into a v2 checkpoint when the caller does not name one. The
+# spec wants a unique log identity, schema-less, no spaces and no '+'; this is
+# that for this log. It is also the default signer key name, since the spec
+# says a key name SHOULD match the origin.
+DEFAULT_ORIGIN = "procmon.dev/transparency"
+
+# Marks the extension line inside a v2 note text, so a reader can find it
+# without guessing at the line's shape.
+EXTENSION_PREFIX = "x-news-pipeline "
 
 # Internal Merkle nodes are prefixed; leaves are not, because log.py fixes
 # leaf_hash = sha256(canonical payload) with no prefix.
@@ -147,7 +195,13 @@ class Ed25519Signer:
 
     algorithm = ED25519_ALGORITHM
 
-    def __init__(self, private_key: bytes, *, key_id: str | None = None) -> None:
+    def __init__(
+        self,
+        private_key: bytes,
+        *,
+        key_id: str | None = None,
+        key_name: str = DEFAULT_ORIGIN,
+    ) -> None:
         if not _ED25519_AVAILABLE:
             raise RuntimeError(
                 "Ed25519Signer needs the 'cryptography' package. "
@@ -158,6 +212,9 @@ class Ed25519Signer:
         public_bytes = bytes(self._public_key.public_bytes_raw())
         self.key_id = key_id or f"ed25519:{hashlib.sha256(public_bytes).hexdigest()[:16]}"
         self._public_key_bytes = public_bytes
+        # The C2SP key name is the log's identity, so it also binds a v2
+        # signature to the origin in the note (see verify_checkpoint).
+        self.key_name = key_name
 
     def sign(self, message: bytes) -> bytes:
         return bytes(self._private_key.sign(message))
@@ -179,11 +236,12 @@ class Ed25519Verifier:
 
     algorithm = ED25519_ALGORITHM
 
-    def __init__(self, public_key: bytes, *, key_id: str = "ed25519") -> None:
+    def __init__(self, public_key: bytes, *, key_id: str = "ed25519", key_name: str | None = None) -> None:
         if not _ED25519_AVAILABLE:
             raise RuntimeError("Ed25519Verifier needs the 'cryptography' package.")
         self._public_key = Ed25519PublicKey.from_public_bytes(public_key)
         self.key_id = key_id
+        self.key_name = key_name
 
     def sign(self, message: bytes) -> bytes:
         raise PermissionError("Ed25519Verifier holds no private key and cannot sign.")
@@ -194,6 +252,10 @@ class Ed25519Verifier:
         except Exception:  # InvalidSignature and malformed input both mean "no"
             return False
         return True
+
+    def public_key_bytes(self) -> bytes:
+        """Raw public key, for deriving a C2SP note key id."""
+        return bytes(self._public_key.public_bytes_raw())
 
 
 def generate_ed25519_signer(seed: bytes | None = None) -> Ed25519Signer:
@@ -216,18 +278,36 @@ def generate_ed25519_signer(seed: bytes | None = None) -> Ed25519Signer:
 
 @dataclass(frozen=True)
 class Checkpoint:
-    """The signed body. Frozen: nothing may change between signing and anchoring."""
+    """The signed body. Frozen: nothing may change between signing and anchoring.
+
+    tree_size, merkle_root, chain_hash and timestamp are the v1 payload and
+    keep their meaning in v2. The three v2 additions default to values that
+    reproduce v1 exactly, so every existing caller and every published row is
+    unaffected by their presence:
+
+    origin            the log's identity, the first mandatory line of a v2 note
+    previous_digest   sha256 over the previous signed checkpoint (see
+                      checkpoint_digest), hex, or None for the first one
+    format            which of the two signed formats signing_bytes() produces
+    """
     tree_size: int
     merkle_root: bytes
     chain_hash: bytes
     timestamp: datetime
+    origin: str = DEFAULT_ORIGIN
+    previous_digest: bytes | None = None
+    format: str = FORMAT_JSON_V1
 
     def signing_bytes(self) -> bytes:
-        """Domain-separated canonical bytes that get signed.
+        """The exact bytes that get signed, per this checkpoint's format.
 
-        Independent of the signature format, so any verifier can reproduce it
+        Independent of the signature itself, so any verifier can reproduce them
         from the published fields.
         """
+        if self.format == FORMAT_C2SP_V2:
+            return self.note_text().encode("utf-8")
+        if self.format != FORMAT_JSON_V1:
+            raise ValueError(f"unknown checkpoint format {self.format!r}")
         body = {
             "chain_hash": self.chain_hash.hex(),
             "hash_scheme": "n1:sha256",
@@ -237,21 +317,69 @@ class Checkpoint:
         }
         return CHECKPOINT_DOMAIN + b" " + canonical_json(body)
 
+    def extension_line(self) -> str:
+        """The one opaque extension line a v2 note carries.
+
+        canonical_json is single-line by construction, so this cannot break the
+        note's line structure. `prev` is "-" for the first checkpoint, which is
+        the only value that is not hex.
+        """
+        return EXTENSION_PREFIX + canonical_json(
+            {
+                "chain_hash": self.chain_hash.hex(),
+                "prev": self.previous_digest.hex() if self.previous_digest else "-",
+                "timestamp": self.timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            }
+        ).decode("utf-8")
+
+    def note_text(self) -> str:
+        """The C2SP signed-note text: origin, tree size, root, then the extension.
+
+        The three mandatory lines are exactly what tlog-checkpoint v1.0.0
+        specifies: a non-empty origin with no spaces or '+', the tree size as
+        ASCII decimal with no leading zeroes, and the root as standard RFC 4648
+        base64. The trailing newline is part of the text and part of what gets
+        signed.
+        """
+        if not self.origin:
+            raise ValueError("a v2 checkpoint needs a non-empty origin")
+        if any(ch.isspace() for ch in self.origin) or "+" in self.origin:
+            raise ValueError(f"origin {self.origin!r} may not contain whitespace or '+'")
+        if self.tree_size < 0:
+            raise ValueError(f"tree_size must be >= 0, got {self.tree_size}")
+        lines = [
+            self.origin,
+            str(self.tree_size),
+            base64.b64encode(self.merkle_root).decode("ascii"),
+            self.extension_line(),
+        ]
+        return "\n".join(lines) + "\n"
+
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "chain_hash": self.chain_hash.hex(),
             "merkle_root": self.merkle_root.hex(),
             "timestamp": self.timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
             "tree_size": self.tree_size,
         }
+        if self.format != FORMAT_JSON_V1:
+            # v1's dict is left alone: it is what already-published rows carry.
+            data["origin"] = self.origin
+            data["previous_digest"] = self.previous_digest.hex() if self.previous_digest else None
+            data["format"] = self.format
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Checkpoint:
+        previous = data.get("previous_digest")
         return cls(
             tree_size=int(data["tree_size"]),
             merkle_root=bytes.fromhex(str(data["merkle_root"])),
             chain_hash=bytes.fromhex(str(data["chain_hash"])),
             timestamp=datetime.fromisoformat(str(data["timestamp"]).replace("Z", "+00:00")),
+            origin=str(data.get("origin") or DEFAULT_ORIGIN),
+            previous_digest=bytes.fromhex(str(previous)) if previous else None,
+            format=str(data.get("format") or FORMAT_JSON_V1),
         )
 
     def describe(self) -> str:
@@ -265,26 +393,68 @@ class SignedCheckpoint:
     signature: bytes
     algorithm: str
     key_id: str
+    key_name: str | None = None
 
     def signing_bytes(self) -> bytes:
         return self.checkpoint.signing_bytes()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             **self.checkpoint.to_dict(),
             "algorithm": self.algorithm,
             "key_id": self.key_id,
             "signature": self.signature.hex(),
         }
+        if self.checkpoint.format == FORMAT_C2SP_V2:
+            # The note's key name travels with the signature: it is the name a
+            # verifier looks the public key up under.
+            data["key_name"] = self.key_name or self.checkpoint.origin
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SignedCheckpoint:
+        checkpoint = Checkpoint.from_dict(data)
         return cls(
-            checkpoint=Checkpoint.from_dict(data),
+            checkpoint=checkpoint,
             signature=bytes.fromhex(str(data["signature"])),
             algorithm=str(data["algorithm"]),
             key_id=str(data["key_id"]),
+            key_name=(str(data["key_name"]) if data.get("key_name") else None),
         )
+
+    def note_signature(self) -> NoteSignature | None:
+        """The signature as a signed-note line: 4-byte key id || raw signature.
+
+        None for a v1 checkpoint, which has no note form.
+        """
+        if self.checkpoint.format != FORMAT_C2SP_V2:
+            return None
+        if len(self.signature) <= KEY_ID_BYTES:
+            logger.info("v2 checkpoint signature is too short to hold a note key id")
+            return None
+        try:
+            return NoteSignature.decode(
+                self.key_name or self.checkpoint.origin, self.signature
+            )
+        except SignedNoteError as exc:
+            logger.info("v2 checkpoint signature is not a note signature: %s", exc)
+            return None
+
+    def signed_note_document(self) -> str | None:
+        """The publishable C2SP signed-note document, or None for a v1 checkpoint.
+
+        This is the artifact a third party needs: note text, blank line, then
+        one signature line they can check against a public key they were given
+        out of band.
+        """
+        signature = self.note_signature()
+        if signature is None:
+            return None
+        try:
+            return encode_signed_note(self.checkpoint.note_text(), [signature])
+        except SignedNoteError as exc:
+            logger.info("Cannot render signed note: %s", exc)
+            return None
 
 
 async def build_checkpoint(
@@ -292,6 +462,9 @@ async def build_checkpoint(
     tree_size: int,
     *,
     timestamp: datetime | None = None,
+    format: str = FORMAT_JSON_V1,
+    origin: str = DEFAULT_ORIGIN,
+    previous_digest: bytes | None = None,
 ) -> Checkpoint:
     """Checkpoint the first `tree_size` entries. `tree_size` may be smaller than
     the log, which is how a mid-flight checkpoint stays verifiable.
@@ -299,6 +472,11 @@ async def build_checkpoint(
     Refuses to sign a chain that does not verify: a checkpoint is the
     operator's signed statement that this history is intact, and signing a
     broken chain would launder the break into a "signed" history.
+
+    The v2 fields (format, origin, previous_digest) are metadata about how the
+    result will be signed, not extra inputs to the math: two checkpoints over
+    the same tree_size always agree on root and chain hash whichever format
+    they carry, which is what lets the signer re-derive and compare.
     """
     if tree_size < 0:
         raise ValueError(f"tree_size must be >= 0, got {tree_size}")
@@ -326,17 +504,61 @@ async def build_checkpoint(
         merkle_root=merkle_root(leaves),
         chain_hash=chain_hash,
         timestamp=(timestamp or datetime.now(timezone.utc)).astimezone(timezone.utc),
+        origin=origin,
+        previous_digest=previous_digest,
+        format=format,
     )
 
 
 def sign_checkpoint(checkpoint: Checkpoint, signer: Signer) -> SignedCheckpoint:
-    """Detach-sign a checkpoint."""
+    """Detach-sign a checkpoint.
+
+    v2 stores the signature as a signed-note signature line would carry it: the
+    4-byte note key id (SHA-256 of key name, type byte and public key) followed
+    by the raw Ed25519 signature. That makes the stored bytes exactly what a
+    verifier needs, and it makes the two formats visibly different -- a v1
+    signature is 32 bytes of HMAC or 64 of raw Ed25519, a v2 one is 68.
+
+    A v2 checkpoint requires a signer that can produce a public key: the note
+    key id is derived from it, so a signer without one is refused rather than
+    quietly signing something unverifiable.
+    """
+    if checkpoint.format == FORMAT_C2SP_V2:
+        key_name = getattr(signer, "key_name", None) or checkpoint.origin
+        public_key = _signer_public_key(signer)
+        if not public_key:
+            raise ValueError(
+                "a v2 checkpoint needs a signer exposing public_key_bytes() so the "
+                "signed-note key id can be derived"
+            )
+        raw = signer.sign(checkpoint.signing_bytes())
+        key_id = note_key_id(key_name, public_key, signature_type=ED25519_NOTE_SIG_TYPE)
+        return SignedCheckpoint(
+            checkpoint=checkpoint,
+            signature=key_id + raw,
+            algorithm=signer.algorithm,
+            key_id=signer.key_id,
+            key_name=key_name,
+        )
     return SignedCheckpoint(
         checkpoint=checkpoint,
         signature=signer.sign(checkpoint.signing_bytes()),
         algorithm=signer.algorithm,
         key_id=signer.key_id,
+        key_name=getattr(signer, "key_name", None),
     )
+
+
+def _signer_public_key(signer: Signer) -> bytes | None:
+    """The signer's raw public key, or None when it cannot produce one."""
+    getter = getattr(signer, "public_key_bytes", None)
+    if not callable(getter):
+        return None
+    try:
+        return bytes(getter())
+    except Exception as exc:
+        logger.info(f"Signer could not expose its public key: {type(exc).__name__}")
+        return None
 
 
 def verify_checkpoint(signed: SignedCheckpoint, signer: Signer) -> bool:
@@ -345,6 +567,17 @@ def verify_checkpoint(signed: SignedCheckpoint, signer: Signer) -> bool:
     Returns False rather than raising: a checkpoint is untrusted input, so a
     wrong algorithm, wrong key, truncated signature, or malformed hex is a
     verification failure and nothing more.
+
+    For v2 three things are checked beyond the raw signature, and each closes a
+    real hole:
+
+    - the note key id in the stored signature is the one this public key
+      derives, so a signature cannot be replayed under a different key name
+    - the checkpoint's origin equals the signer's key name, so a key cannot sign
+      a note claiming to be some other log (the spec says a key name SHOULD
+      match the origin; here it is enforced, because the whole point of the
+      origin is to say which log this is)
+    - the algorithm matches, as before
     """
     if signed.algorithm != signer.algorithm or signed.key_id != signer.key_id:
         logger.info(
@@ -352,18 +585,50 @@ def verify_checkpoint(signed: SignedCheckpoint, signer: Signer) -> bool:
             f"verified against {signer.key_id}/{signer.algorithm}"
         )
         return False
+    checkpoint = signed.checkpoint
+    if checkpoint.format == FORMAT_C2SP_V2:
+        key_name = signed.key_name or checkpoint.origin
+        expected_name = getattr(signer, "key_name", None)
+        if expected_name and key_name != expected_name:
+            logger.info(
+                f"Checkpoint key name {key_name!r} does not match the verifying "
+                f"key's name {expected_name!r}"
+            )
+            return False
+        if len(signed.signature) <= KEY_ID_BYTES:
+            logger.info("v2 checkpoint signature is too short to carry a note key id")
+            return False
+        public_key = _signer_public_key(signer)
+        if public_key:
+            expected_id = note_key_id(key_name, public_key, signature_type=ED25519_NOTE_SIG_TYPE)
+            if signed.signature[:KEY_ID_BYTES] != expected_id:
+                logger.info(
+                    f"Note key id {signed.signature[:KEY_ID_BYTES].hex()} does not match "
+                    f"the id the verifying key derives ({expected_id.hex()})"
+                )
+                return False
+        raw_signature = signed.signature[KEY_ID_BYTES:]
+    else:
+        raw_signature = signed.signature
     try:
-        return signer.verify(signed.signing_bytes(), signed.signature)
+        return signer.verify(signed.signing_bytes(), raw_signature)
     except Exception as exc:  # malformed signature bytes, wrong key type, ...
         logger.info(f"Checkpoint signature rejected: {type(exc).__name__}")
         return False
 
 
 def checkpoint_digest(signed: SignedCheckpoint) -> str:
-    """Hex digest handed to an anchor provider: sha256 over signing bytes || signature.
+    """Hex digest handed to an anchor provider, and chained into the next checkpoint.
 
-    Anchoring this rather than the bare root means the anchored digest also
-    commits to who signed and to the signature itself.
+    sha256 over the signing bytes || signature. Anchoring this rather than the
+    bare root means the anchored digest also commits to who signed and to the
+    signature itself, and the next checkpoint carries it as previous_digest: a
+    reader can then walk the checkpoint chain without the database.
     """
     material = signed.signing_bytes() + b"\n" + signed.signature
     return hashlib.sha256(material).hexdigest()
+
+
+def signer_public_key(signer: Signer) -> bytes | None:
+    """A signer's raw public key, or None. Public API: the key ceremony needs it."""
+    return _signer_public_key(signer)

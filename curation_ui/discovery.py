@@ -182,6 +182,83 @@ def _verification_badge(story: Story) -> dict:
     }
 
 
+def _search_stmt_trigram(rep_join, query: str, limit: int):
+    """The pg_trgm branch of story search, ranked by word_similarity.
+
+    Split out of _search_story_ids so it can be compile-tested. It was
+    unreachable from the test suite (SQLite has no pg_trgm, so every test took
+    the ILIKE fallback), which is precisely how a branch that matched almost
+    nothing in production could sit here green.
+
+    word_similarity, NOT similarity, and the reason is measured, not stylistic:
+    a reader or curator types a topic ("trump", "ukraine"), not a whole
+    headline. Whole-string similarity scores a single topic word against a
+    60-character headline at about 0.10, below the `%` operator's 0.3
+    threshold, so `similarity` silently matched almost nothing. Measured
+    against the dev pending queue on 2026-10-02: 28 of the 30 most common
+    real tokens ("trump", "burnham", "diesel", "putin", "iranian", ...)
+    returned zero stories.
+
+    word_similarity scores the query against the best continuous extent of the
+    headline, which is the question actually being asked ("does this headline
+    talk about this topic"); those same tokens score 1.000. `<%` is that
+    comparison against pg_trgm.word_similarity_threshold and it tolerates
+    partial words, so "ukrain" still finds "Ukraine".
+
+    Containment stays OR-ed in so this branch selects the same stories as
+    _search_stmt_ilike; only the ranking differs. English title first, then the
+    original, so neither language is penalized.
+    """
+    from sqlalchemy import text as _text
+
+    sim = func.greatest(
+        func.word_similarity(query, func.coalesce(RawArticle.title_en, "")),
+        func.word_similarity(query, func.coalesce(RawArticle.title, "")),
+    )
+    like = f"%{query}%"
+    return (
+        select(rep_join.c.story_id, func.max(sim).label("score"))
+        .join(
+            ReportingUnit,
+            ReportingUnit.id == rep_join.c.id,
+        )
+        .join(
+            RawArticle,
+            RawArticle.id == ReportingUnit.representative_article_id,
+        )
+        .where(
+            or_(
+                _text(":q <% COALESCE(raw_articles.title_en, '')").bindparams(q=query),
+                _text(":q <% COALESCE(raw_articles.title, '')").bindparams(q=query),
+                RawArticle.title_en.ilike(like),
+                RawArticle.title.ilike(like),
+            )
+        )
+        .group_by(rep_join.c.story_id)
+        .order_by(desc("score"))
+        .limit(limit)
+    )
+
+
+def _search_stmt_ilike(rep_join, query: str, limit: int):
+    """The no-pg_trgm fallback: containment only, ranked by fetch recency."""
+    like = f"%{query}%"
+    return (
+        select(rep_join.c.story_id, func.max(RawArticle.fetched_at).label("score"))
+        .join(ReportingUnit, ReportingUnit.id == rep_join.c.id)
+        .join(RawArticle, RawArticle.id == ReportingUnit.representative_article_id)
+        .where(
+            or_(
+                RawArticle.title_en.ilike(like),
+                RawArticle.title.ilike(like),
+            )
+        )
+        .group_by(rep_join.c.story_id)
+        .order_by(desc("score"))
+        .limit(limit)
+    )
+
+
 async def _search_story_ids(
     session: AsyncSession,
     query: str,
@@ -189,10 +266,16 @@ async def _search_story_ids(
 ) -> list:
     """Ranked story search over article headlines (English preferred).
 
-    pg_trgm similarity ranking on Postgres; ILIKE fallback elsewhere (tests).
-    Searches both the translated and original headlines so a French query can
-    still find the story via its English translation and vice versa. Returns
-    story ids ordered best match first.
+    pg_trgm word_similarity ranking on Postgres; ILIKE fallback elsewhere
+    (tests). Searches both the translated and original headlines so a French
+    query can still find the story via its English translation and vice versa.
+    Returns story ids ordered best match first.
+
+    Both branches agree on WHICH stories match (containment in either
+    headline); only the ranking differs. That matters because the Postgres
+    branch is what production actually runs and the fallback is what the test
+    suite exercises, so a divergence between them ships as a feature that works
+    in tests and returns nothing in production.
     """
     query = (query or "").strip()
     if not query:
@@ -206,50 +289,9 @@ async def _search_story_ids(
     )
 
     if trigram:
-        from sqlalchemy import text as _text
-
-        # Similarity against the English headline first, then the original;
-        # take the better of the two so neither language is penalized.
-        sim = func.greatest(
-            func.similarity(func.coalesce(RawArticle.title_en, ""), query),
-            func.similarity(func.coalesce(RawArticle.title, ""), query),
-        )
-        stmt = (
-            select(rep_join.c.story_id, func.max(sim).label("score"))
-            .join(
-                ReportingUnit,
-                ReportingUnit.id == rep_join.c.id,
-            )
-            .join(
-                RawArticle,
-                RawArticle.id == ReportingUnit.representative_article_id,
-            )
-            .where(
-                or_(
-                    _text("COALESCE(raw_articles.title_en, '') % :q").bindparams(q=query),
-                    _text("COALESCE(raw_articles.title, '') % :q").bindparams(q=query),
-                )
-            )
-            .group_by(rep_join.c.story_id)
-            .order_by(desc("score"))
-            .limit(limit)
-        )
+        stmt = _search_stmt_trigram(rep_join, query, limit)
     else:
-        like = f"%{query}%"
-        stmt = (
-            select(rep_join.c.story_id, func.max(RawArticle.fetched_at).label("score"))
-            .join(ReportingUnit, ReportingUnit.id == rep_join.c.id)
-            .join(RawArticle, RawArticle.id == ReportingUnit.representative_article_id)
-            .where(
-                or_(
-                    RawArticle.title_en.ilike(like),
-                    RawArticle.title.ilike(like),
-                )
-            )
-            .group_by(rep_join.c.story_id)
-            .order_by(desc("score"))
-            .limit(limit)
-        )
+        stmt = _search_stmt_ilike(rep_join, query, limit)
     result = await session.execute(stmt)
     return [row[0] for row in result.all()]
 

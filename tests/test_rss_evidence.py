@@ -2000,3 +2000,172 @@ def test_build_adapters_warns_only_for_genuinely_unmatched_entries(capsys):
     out = capsys.readouterr().out
     assert "not-a-real-domain.example" in out
     assert "allafrica.com" not in out
+
+
+# ------------------------------------------------------- cap vs known URLs
+
+
+async def test_refresh_skips_known_urls_without_spending_fetch_budget():
+    """A URL the archive already holds must not cost a publisher request.
+
+    This is the difference between a scheduled stamping run that works and one
+    that does not. The evidence feeds are a subset of the tier-1 feeds, so the
+    ordinary ingest has usually archived most of what the locker sees; measured
+    2026-10-02 on dev, 52 of 114 current entries were already in raw_articles.
+    Spending the 10-fetch cap on those means stamping nothing.
+    """
+    fetched: list[str] = []
+
+    async def tracking_extract(url, html=None, source_key=None):
+        fetched.append(url)
+        return (f"Body for {url}. " * 30, "Title")
+
+    known = {
+        compute_url_hash("https://www.bbc.co.uk/news/world-known-1"),
+        compute_url_hash("https://www.bbc.co.uk/news/world-known-2"),
+    }
+    body = _rss_with_links("known-1", "known-2", "fresh-1", "fresh-2")
+    states = {}
+    with patch.object(rss_evidence, "fetch_feed_polite", return_value=(200, body, None, None, None)):
+        report = await rss_evidence.refresh(
+            states,
+            [FEED_A],
+            now_fn=lambda tz: FIXED_NOW,
+            extract=tracking_extract,
+            max_body_fetches=2,
+            known_url_hashes=known,
+        )
+
+    assert fetched == [
+        "https://www.bbc.co.uk/news/world-fresh-1",
+        "https://www.bbc.co.uk/news/world-fresh-2",
+    ], "known URLs were fetched, and the cap was spent on them"
+    assert report.body_fetches == 2
+    assert report.already_known == 2
+    assert report.items_seen == 4
+    assert [item["url"] for item in report.items] == [
+        "https://www.bbc.co.uk/news/world-fresh-1",
+        "https://www.bbc.co.uk/news/world-fresh-2",
+    ]
+    assert report.skipped_by_cap == 0, "a known URL is not a cap deferral"
+    assert report.feeds_deferred == []
+
+
+async def test_refresh_known_urls_leave_the_budget_for_a_later_feed():
+    """Known entries do not consume the budget a later feed would have used."""
+    feed_a = dict(FEED_A, url="https://a.invalid/rss")
+    feed_b = dict(FEED_B, url="https://b.invalid/rss")
+    responses = [
+        (200, _rss_with_links("k1", "k2", "k3"), None, None, None),
+        (200, _rss_with_links("n1", "n2", prefix="https://b.invalid/"), None, None, None),
+    ]
+    known = {
+        compute_url_hash("https://www.bbc.co.uk/news/world-k1"),
+        compute_url_hash("https://www.bbc.co.uk/news/world-k2"),
+        compute_url_hash("https://www.bbc.co.uk/news/world-k3"),
+    }
+    fetched: list[str] = []
+
+    async def tracking_extract(url, html=None, source_key=None):
+        fetched.append(url)
+        return (f"Body for {url}. " * 30, "Title")
+
+    states = {}
+    with patch.object(rss_evidence, "fetch_feed_polite", side_effect=responses):
+        report = await rss_evidence.refresh(
+            states,
+            [feed_a, feed_b],
+            now_fn=lambda tz: FIXED_NOW,
+            extract=tracking_extract,
+            max_body_fetches=2,
+            known_url_hashes=known,
+        )
+
+    assert report.already_known == 3
+    assert report.body_fetches == 2
+    assert report.feeds_deferred == [], "the cap was spent on known URLs, not on the budget"
+    assert sorted(fetched) == ["https://b.invalid/n1", "https://b.invalid/n2"]
+
+
+async def test_refresh_without_known_hashes_fetches_everything():
+    """Default behaviour is unchanged: no knowledge, no skipping."""
+    fetched: list[str] = []
+
+    async def tracking_extract(url, html=None, source_key=None):
+        fetched.append(url)
+        return (f"Body for {url}. " * 30, "Title")
+
+    body = _rss_with_links("k1", "k2")
+    states = {}
+    with patch.object(rss_evidence, "fetch_feed_polite", return_value=(200, body, None, None, None)):
+        report = await rss_evidence.refresh(
+            states, [FEED_A], now_fn=lambda tz: FIXED_NOW, extract=tracking_extract
+        )
+
+    assert report.body_fetches == 2
+    assert report.already_known == 0
+
+
+async def test_refresh_counts_known_entries_even_when_the_cap_is_spent():
+    """With the budget gone, known entries are still recognised, not deferred."""
+    body = _rss_with_links("k1", "k2", "n1")
+    known = {compute_url_hash("https://www.bbc.co.uk/news/world-k1")}
+    states = {}
+    with patch.object(rss_evidence, "fetch_feed_polite", return_value=(200, body, None, None, None)):
+        report = await rss_evidence.refresh(
+            states,
+            [FEED_A],
+            now_fn=lambda tz: FIXED_NOW,
+            extract=_extract_ok,
+            max_body_fetches=0,
+            known_url_hashes=known,
+        )
+    assert report.body_fetches == 0
+    assert report.already_known == 1
+    assert report.skipped_by_cap == 2
+    assert report.feeds_deferred == ["bbc_world"]
+
+
+async def test_run_evidence_refresh_reads_the_archive_before_the_network(db_session, tmp_path):
+    """With no caller-supplied knowledge, the archive decides what is worth a fetch.
+
+    Same real-SQL session the happy path uses, but known_url_hashes is left as
+    None so run_evidence_refresh must read raw_articles itself -- and it must do
+    so before refresh(), or the cap gets spent on URLs it is about to discard.
+    """
+    already = _persisted_article(0, url="https://www.bbc.co.uk/news/world-12345678")
+    already.url_hash = compute_url_hash(already.url)
+    db_session.add(already)
+    await db_session.flush()
+
+    fetched: list[str] = []
+
+    async def tracking_extract(url, html=None, source_key=None):
+        fetched.append(url)
+        return (LONG_BODY, "Title")
+
+    with patch.object(rss_evidence, "extract_entities_top_n", return_value={"ORG": ["BBC"]}):
+        with patch.object(rss_evidence, "save_feed_state", side_effect=lambda s, p=None: None):
+            with patch.object(
+                rss_evidence,
+                "fetch_feed_polite",
+                return_value=(200, RSS20_BYTES, None, None, None),
+            ):
+                result = await rss_evidence.run_evidence_refresh(
+                    session=db_session,
+                    feeds=[FEED_A],
+                    state_store_path=tmp_path / "state.json",
+                    known_url_hashes=None,
+                    now_fn=lambda tz: FIXED_NOW,
+                    extract=tracking_extract,
+                    merkle_log=_MemoryLog(),
+                )
+
+    assert result["entries_already_known"] == 1
+    assert fetched == [
+        "https://www.bbc.co.uk/news/world-87654321",
+        "https://www.bbc.co.uk/news/world-11223344",
+    ], "the archived URL was fetched anyway"
+    assert result["articles_new"] == 2
+    assert result["stamped"] == 2
+    assert result["body_fetches"] == 2

@@ -21,6 +21,12 @@ dependencies = [
     "groq>=0.5",
     "cerebras-cloud-sdk>=0.1",
     "slowapi>=0.1",
+    # Transparency-log checkpoint signing (GET /api/cron/checkpoint). Ed25519
+    # has no stdlib implementation, so without this the Vercel builder cannot
+    # sign and the route refuses with a 503 rather than falling back to the dev
+    # HMAC key. Wheels exist for 3.12 on Vercel's builder, so no Rust toolchain
+    # is needed; it adds roughly 8 MB to the bundle.
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,44 @@
+-- Index the canonical-event key the map's corroboration filter reads per row.
+--
+-- The public event read (/api/globe/events, /api/map/replay) filters every
+-- candidate row with cluster_tier1_sources(), a correlated subquery whose WHERE
+-- is
+--
+--     coalesce(event_cluster.canonical_event_id, event_cluster.id)
+--         = coalesce(events.canonical_event_id, events.id)
+--
+-- which had no index behind it. Before this file the plan for a viewport-bbox
+-- request ran that subquery once per surviving candidate and each execution was
+-- a full Seq Scan of events:
+--
+--   SubPlan 1
+--     -> Aggregate (actual time=27.699..27.700 rows=1 loops=53)
+--           -> Seq Scan on events event_cluster (actual time=4.708..27.676 rows=1 loops=53)
+--                 Rows Removed by Filter: 203615
+--                 Buffers: shared hit=154177
+--
+-- 53 loops x 203,615 rows discarded is where the request's time went; the bbox
+-- and time indexes were not the bottleneck. Measured in a scratch database at
+-- 200,384 rows (the real dev rows replicated; a plan probe, not content), median
+-- of three runs, against the statement compiled from curation_ui.events itself:
+--
+--   viewport                 before        after
+--   world                     1928.7 ms      0.5 ms
+--   continent (US)             272.8 ms      0.2 ms
+--   country (UK)                54.1 ms      1.4 ms
+--
+-- The expression index is what turns that subquery from a table scan into a
+-- 1-row index scan. It is an expression index rather than an index on
+-- canonical_event_id alone because the coalesce IS the lookup key: a row that is
+-- its own event has canonical_event_id NULL, so the plain column cannot serve
+-- those rows at all.
+--
+-- The GiST index on the event geometry that this backlog item also asked for is
+-- deliberately absent, and the measurements are in the batch report: the existing
+-- btree on (latitude, longitude) already covers the four bbox comparisons, and
+-- with this index in place the btree measured faster than a btree_gist GiST on
+-- (longitude, latitude) at every viewport size tried. An index the planner
+-- prefers over a better one is a cost, not a win.
+
+CREATE INDEX IF NOT EXISTS ix_events_canonical_key
+    ON events ((coalesce(canonical_event_id, id)));

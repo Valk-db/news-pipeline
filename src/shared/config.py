@@ -72,6 +72,38 @@ class Settings(BaseSettings):
     # than claiming a signed log. See src/transparency/keys.py.
     transparency_trusted_keys: str = ""
 
+    # Bearer token for GET /api/cron/checkpoint. Empty (the default) means the
+    # cron route refuses every caller, which is the safe state: an unset token
+    # must not mean "no auth required". Compared with secrets.compare_digest and
+    # throttled per client by curation_ui/security.FailureLimiter.
+    transparency_cron_token: str = ""
+
+    # Seed material for the production Ed25519 signing key. Deliberately a SEED
+    # rather than a raw 32-byte key: it is hashed down to 32 bytes by
+    # generate_ed25519_signer, so it can come from a password manager entry, and
+    # nothing in the repo ever sees the key itself. Empty means the cron route
+    # reports that signing is not configured instead of signing with a dev key.
+    transparency_signing_key: str = ""
+
+    # Which log a v2 checkpoint claims to be. The C2SP spec wants a unique,
+    # schema-less log identity; it must match the signer's key name.
+    transparency_origin: str = "procmon.dev/transparency"
+
+    # How old the newest published checkpoint may get before the watchdog calls
+    # the deployment unhealthy. A little over the cron interval so one skipped
+    # fire is not an incident, but far under a day so a log that quietly stops
+    # being checkpointed is noticed on the next check.
+    transparency_max_checkpoint_interval_hours: float = 26.0
+
+    # Optional least-privilege DSN for the signer only (see
+    # supabase/migrations/20261002200000_transparency_signer_v2.sql for the role
+    # and 20261002230000_transparency_signer_rbac.sql for the grants and policies
+    # that make it usable). When set, the cron route uses this instead of
+    # DATABASE_URL, so the signing path holds a role with SELECT on the log and
+    # on the two transparency tables plus INSERT on those two, and nothing else.
+    # Empty falls back to DATABASE_URL, which works but is over-privileged.
+    transparency_signer_database_url: str = ""
+
     # Scheduling
     cron_schedule: str = "0 6,18 * * *"  # 6 AM and 6 PM UTC
 

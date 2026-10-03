@@ -3,17 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# Story internals are behind app auth and must never be indexed. #}
+    <meta name="robots" content="noindex, nofollow">
     <title>News Pipeline - Curation</title>
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <script src="/static/errors.js" defer></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/detail/detail.css">
 </head>
-<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+<body>
     <div class="container">
         <header>
-            <h1>News Pipeline Curation</h1>
+            <div class="header-heading">
+                <h1>News Pipeline Curation</h1>
+                <p class="header-sub">Every story the pipeline is carrying, with the outlets behind it.</p>
+            </div>
             <div class="header-actions">
-                <a href="/posts" class="btn btn-secondary">View Posts ({{ posts_count }})</a>
                 <button class="btn btn-ghost btn-sm" id="theme-toggle" aria-label="Toggle theme" title="Toggle theme (T)">
                     <svg id="theme-icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
                         <circle cx="12" cy="12" r="5"></circle>
@@ -30,14 +36,107 @@
                         <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
                     </svg>
                 </button>
-                <span class="keyboard-hint">Keys: A=Approve, R=Reject, E=Edit, T=Theme</span>
+                <span class="keyboard-hint">T = theme</span>
             </div>
         </header>
+
+        <!-- ======================= DISCOVERY =======================
+             Tier chips, date window, sort, and topic search, server-rendered
+             in their initial state from the query string so first paint shows
+             the filtered queue and the page needs no JavaScript to be usable.
+             The chips carry the same tier words the cards do, so a filter and
+             the thing it filtered always describe a tier the same way. -->
+        <form class="discovery-bar" id="discovery-bar" method="get" action="/" role="search" aria-label="Filter the queue">
+            <div class="discovery-field discovery-search">
+                <label class="discovery-label" for="discovery-q">Search topics</label>
+                <input type="search" id="discovery-q" name="q" class="discovery-input"
+                       placeholder="Search headlines and topics…" value="{{ active_q }}"
+                       autocomplete="off" aria-label="Search stories by topic">
+            </div>
+            <div class="discovery-field">
+                <span class="discovery-label" id="discovery-tiers-label">Tiers</span>
+                <div class="tier-chips" role="group" aria-labelledby="discovery-tiers-label">
+                    <input type="hidden" name="tiers" value="{{ active_tiers_csv }}">
+                    {% for t in [1, 2, 3, 4] %}
+                    <button type="button" class="tier-chip{% if t in active_tiers %} is-on{% endif %}"
+                            data-tier="{{ t }}" aria-pressed="{{ 'true' if t in active_tiers else 'false' }}"
+                            title="{{ {1: 'Tier 1 — verified editorial standards', 2: 'Tier 2 — national or regional outlet', 3: 'Tier 3 — social, forums, unverified', 4: 'Tier 4 — niche, hyperlocal, experimental'}[t] }}">T{{ t }}</button>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="discovery-field">
+                <label class="discovery-label" for="discovery-hours">Window</label>
+                <select id="discovery-hours" name="hours" aria-label="Date window">
+                    <option value="0"{% if active_hours == 0 %} selected{% endif %}>All time</option>
+                    <option value="24"{% if active_hours == 24 %} selected{% endif %}>Last 24 hours</option>
+                    <option value="168"{% if active_hours == 168 %} selected{% endif %}>Last 7 days</option>
+                    <option value="720"{% if active_hours == 720 %} selected{% endif %}>Last 30 days</option>
+                </select>
+            </div>
+            <div class="discovery-field">
+                <label class="discovery-label" for="discovery-sort">Sort</label>
+                <select id="discovery-sort" name="sort" aria-label="Sort stories">
+                    <option value="newest"{% if active_sort == 'newest' %} selected{% endif %}>Newest first</option>
+                    <option value="oldest"{% if active_sort == 'oldest' %} selected{% endif %}>Oldest first</option>
+                    <option value="top"{% if active_sort == 'top' %} selected{% endif %}>Top corroborated</option>
+                </select>
+            </div>
+            <div class="discovery-actions">
+                <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+                <a class="btn btn-ghost btn-sm" href="/">Reset</a>
+            </div>
+        </form>
 
         {% include "story_grid.html" %}
     </div>
 
     <script nonce="{{ request.state.csp_nonce }}">
+        // Discovery controls. The toolbar is a plain GET form, so the queue is
+        // filterable with no JavaScript; this only adds the live behaviour: the
+        // tier chips toggle the one hidden tiers field and submit, the selects
+        // submit on change, and the search box debounces like the map's.
+        (function () {
+            const bar = document.getElementById('discovery-bar');
+            if (!bar) return;
+            const tiersField = bar.querySelector('input[name="tiers"]');
+            const chips = Array.prototype.slice.call(bar.querySelectorAll('.tier-chip'));
+
+            function chipTiers() {
+                return chips
+                    .filter(function (chip) { return chip.classList.contains('is-on'); })
+                    .map(function (chip) { return chip.dataset.tier; });
+            }
+
+            function syncTiers() {
+                const on = chipTiers();
+                // Every tier on is the unfiltered queue, so send nothing rather
+                // than all four, which is what the Reset link does too.
+                tiersField.value = on.length === chips.length ? '' : on.join(',');
+            }
+
+            chips.forEach(function (chip) {
+                chip.addEventListener('click', function () {
+                    chip.classList.toggle('is-on');
+                    chip.setAttribute('aria-pressed', chip.classList.contains('is-on') ? 'true' : 'false');
+                    syncTiers();
+                    bar.submit();
+                });
+            });
+
+            Array.prototype.forEach.call(bar.querySelectorAll('select'), function (select) {
+                select.addEventListener('change', function () { bar.submit(); });
+            });
+
+            const search = document.getElementById('discovery-q');
+            let debounce = null;
+            search.addEventListener('input', function () {
+                if (debounce) window.clearTimeout(debounce);
+                debounce = window.setTimeout(function () { bar.submit(); }, 400);
+            });
+
+            syncTiers();
+        })();
+
         // Theme toggle
         const themeToggle = document.getElementById('theme-toggle');
         const sunIcon = document.getElementById('theme-icon-sun');
@@ -86,38 +185,6 @@
                 e.preventDefault();
                 themeToggle.click();
             }
-        });
-
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-
-            const key = e.key.toLowerCase();
-            const focused = document.querySelector('.story-card:focus-within') ||
-                           document.querySelector('.story-card:hover') ||
-                           document.querySelector('.story-card');
-
-            if (!focused) return;
-
-            const storyId = focused.dataset.storyId;
-            if (!storyId) return;
-
-            if (key === 'a') {
-                e.preventDefault();
-                htmx.ajax('POST', `/story/${storyId}/approve`, { target: '#stories', swap: 'outerHTML' });
-            } else if (key === 'r') {
-                e.preventDefault();
-                htmx.ajax('POST', `/story/${storyId}/reject`, { target: '#stories', swap: 'outerHTML' });
-            } else if (key === 'e') {
-                e.preventDefault();
-                window.location.href = `/story/${storyId}/edit`;
-            }
-        });
-
-        // Focus first card on load
-        document.addEventListener('DOMContentLoaded', () => {
-            const firstCard = document.querySelector('.story-card');
-            if (firstCard) firstCard.focus();
         });
     </script>
 </body>

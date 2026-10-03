@@ -1,0 +1,120 @@
+name: Transparency Stamp (evidence locker)
+
+# Why this exists as its own workflow rather than a step in daily-ingest.yml:
+#
+# stamp_observations() in src/ingestion/rss_evidence.py is the ONLY code path
+# that appends to merkle_log_entries and sets raw_articles.log_index, and it is
+# reachable only through RssEvidenceAdapter, which is opt-in behind
+# `--sources rss_evidence`. Nothing scheduled asked for it, so the log stopped
+# growing, the signer had nothing new to sign, and every article the pipeline
+# ingested rendered /proof as "pending" forever. Measured on dev 2026-10-02:
+# 1811 articles fetched, 0 stamped.
+#
+# Why at 04:47, before the 06:23 tiered ingest:
+#
+#   1. Ordering vs the signer. vercel.json signs a checkpoint at 06:00 UTC.
+#      Stamping at 04:47 means the previous night's articles are in the log
+#      before that signature, so the signed tree is ~1.2h behind the log
+#      instead of a full day. Stamping after 06:23 would leave every signed
+#      tree a day stale.
+#   2. Ordering vs the tiered ingest, which is the one that actually
+#      decides whether this run stamps anything. The evidence feeds
+#      (src/ingestion/rss_evidence.py EVIDENCE_FEEDS) are a SUBSET of the
+#      tier-1 feeds (src/ingestion/source_registry.py): bbc world, guardian
+#      world, npr 1001, france24 /en. raw_articles.url_hash is UNIQUE, so
+#      whichever adapter gets to a URL first owns the row and only the locker
+#      ever stamps. Run after the 06:23 ingest and the ordinary adapter has
+#      already archived everything the locker can see, so it stamps 0. Run
+#      first, the locker claims the URLs published since the previous 18:23
+#      run.
+#   3. Footprint. Cold-state cost is 4 feed GETs plus at most
+#      MAX_BODY_FETCHES_PER_REFRESH (10) article GETs, sequential, 20s timeout
+#      each: measured 207s worst case, 3.2s of it feeds. Adding this as a step
+#      to daily-ingest.yml would run it twice a day (28 requests) and would
+#      still lose the race described above.
+#
+# Cost note: MAX_BODY_FETCHES_PER_REFRESH is deliberately left at 10. Raising it
+# widens the publisher-facing footprint and is a decision for a human, not for a
+# workflow file.
+
+on:
+  schedule:
+    # 04:47 UTC daily. Off-peak minute; lands before the 06:00 checkpoint cron
+    # and before the 06:23 tier-1 ingest.
+    - cron: '47 4 * * *'
+  workflow_dispatch:  # the manual escape hatch, same as daily-ingest
+    inputs:
+      target_db:
+        description: 'Database to run against (scheduled runs always use prod)'
+        required: false
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+
+concurrency:
+  group: transparency-stamp
+  cancel-in-progress: false
+
+# Read-only: this workflow writes to the database, not to the repository.
+permissions:
+  contents: read
+
+jobs:
+  stamp:
+    runs-on: ubuntu-24.04
+    # Measured worst case is ~3.5 minutes (4 feeds + 10 bodies at a 20s timeout
+    # each), plus dependency install. 20 minutes is generous headroom that still
+    # fails fast instead of sitting in GitHub's 6h default.
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra pipeline
+
+      - name: Schema drift check (preflight, fails the run before it starts)
+        env:
+          DATABASE_URL: ${{ inputs.target_db == 'dev' && secrets.DEV_DATABASE_URL || secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          uv run python -m scripts.check_schema
+
+      - name: Stamp the evidence locker into the merkle log
+        env:
+          DATABASE_URL: ${{ inputs.target_db == 'dev' && secrets.DEV_DATABASE_URL || secrets.DATABASE_URL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+          # The locker reads raw_articles.url_hash BEFORE it fetches anything,
+          # so a URL the tiered ingest already archived is skipped without
+          # spending a body-fetch on it. Those are the same knobs the main
+          # ingest sets, kept in step for readability: the locker itself uses
+          # its own sequential urllib/httpx client with a hardcoded 20s
+          # timeout and does not take the RSS_FETCH_CONCURRENCY semaphore.
+          RSS_FETCH_CONCURRENCY: ${{ inputs.target_db == 'dev' && '25' || '10' }}
+          RSS_FETCH_TIMEOUT: ${{ inputs.target_db == 'dev' && '15' || '30' }}
+        run: |
+          uv run python -m src.ingestion.run --sources rss_evidence
+
+      - name: "Report the log state"
+        # Reporting, not gating: a day with no new articles is a legitimate
+        # outcome and must not red the build. The signer still fails closed on
+        # an empty log, so a genuinely broken stamp path shows up there.
+        if: always()
+        env:
+          DATABASE_URL: ${{ inputs.target_db == 'dev' && secrets.DEV_DATABASE_URL || secrets.DATABASE_URL }}
+        run: |
+          uv run python scripts/check_transparency_log.py

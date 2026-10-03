@@ -14,3 +14,4 @@ groq==0.17.0
 cerebras-cloud-sdk==1.91.0
 slowapi==0.1.9
 scikit-learn==1.6.1
+cryptography==50.0.2

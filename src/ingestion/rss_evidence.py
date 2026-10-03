@@ -580,6 +580,11 @@ class RefreshReport:
     # Entries the cap stopped us fetching this cycle. Paired with feeds_deferred:
     # a feed is deferred when at least one of its entries did not fit the budget.
     skipped_by_cap: int = 0
+    # Entries dropped because the archive already holds that URL. These are NOT
+    # cap deferrals: they were never candidates for a fetch, and they cost
+    # nothing. Kept separate because the two mean opposite things about whether
+    # the cap is the bottleneck.
+    already_known: int = 0
 
 
 async def refresh(
@@ -589,6 +594,7 @@ async def refresh(
     now_fn=None,
     extract=None,
     max_body_fetches: int = MAX_BODY_FETCHES_PER_REFRESH,
+    known_url_hashes: Optional[Iterable[str]] = None,
 ) -> RefreshReport:
     """Poll every due feed, parse it, and extract bodies for the new items.
 
@@ -603,6 +609,16 @@ async def refresh(
     which is what makes the cap fair over cycles rather than starving the same
     feeds forever. A feed that fills the budget is itself listed as deferred,
     because it also left entries unfetched; the count says how many.
+
+    `known_url_hashes` is the set of url_hashes already in the archive. An entry
+    whose URL is already archived is dropped BEFORE the budget check, because a
+    fetch we would throw away afterwards is a request to a publisher for
+    nothing. This matters more than it looks: the evidence feeds are a subset of
+    the tier-1 feeds, so the ordinary ingest has usually archived most of what
+    the locker is looking at, and without this the cap is spent re-fetching
+    articles already held (measured 2026-10-02: 52 of 114 current entries) and
+    the run stamps nothing. Pass None to disable the check, which is what the
+    tests that care about the cap alone do.
     """
     # Resolved here rather than bound as a default argument, so patching
     # extract_article on this module is what a test actually intercepts.
@@ -612,6 +628,7 @@ async def refresh(
     report = RefreshReport()
     failed: list[str] = []
     budget = int(max_body_fetches)
+    known = set(known_url_hashes or ())
 
     for feed in feed_list:
         key = feed["key"]
@@ -691,18 +708,25 @@ async def refresh(
         else:
             state.last_yield_ts = None
 
-        if budget <= 0:
+        if budget <= 0 and not known:
             # Feeds past the cap still get counted as polled, but their items
             # wait for a later cycle rather than blowing the body budget.
             _defer(report, key, len(entries))
             continue
 
         for entry in entries:
-            if budget <= 0:
-                _defer(report, key, 1)
-                continue
             url = entry.get("link")
             if not url or not entry.get("title"):
+                continue
+            if known and compute_url_hash(url) in known:
+                # Already archived. Not a cap deferral and not a fetch: this is
+                # the common case, because the tier-1 adapter polls the same
+                # publishers, and counting it as deferred would misreport a run
+                # that had nothing to do.
+                report.already_known += 1
+                continue
+            if budget <= 0:
+                _defer(report, key, 1)
                 continue
             body_text, extracted_title = await extract(url)
             budget -= 1
@@ -1048,12 +1072,27 @@ async def run_evidence_refresh(
     no commit boundary is crossed here, so the caller still owns the
     transaction.
 
+    What the archive already holds is read BEFORE any network call, and handed
+    to refresh() so a URL already in raw_articles is dropped without spending
+    body-fetch budget on it. Measured 2026-10-02 on dev: 52 of the 114 current
+    entries across the four evidence feeds were already archived, and without
+    this the 10-fetch cap was spent on them and stamped 0.
+
     persist, stamp and link run inside ledger.stage_run("ingest_rss_evidence")
     so the run is countable and its drops are attributable. DEFENSIVE:
     pipeline_runs does not exist in dev either, so a missing-table error from
     the ledger is logged and the work continues unwrapped -- losing the ledger
     row matters less than losing the articles.
     """
+    known = set(known_url_hashes or ())
+    if known_url_hashes is None:
+        # No caller-supplied knowledge: ask the database what it already has.
+        # A missing table here would mean raw_articles is gone, which is a real
+        # outage and should raise rather than be swallowed. Asked before the
+        # network so the run costs nothing when there is nothing to fetch.
+        rows = await session.execute(select(RawArticle.url_hash))
+        known = {value for value in rows.scalars().all() if value}
+
     states = load_feed_state(state_store_path)
     report = await refresh(
         states,
@@ -1061,19 +1100,12 @@ async def run_evidence_refresh(
         now_fn=now_fn,
         extract=extract,
         max_body_fetches=max_body_fetches,
+        known_url_hashes=known,
     )
     try:
         save_feed_state(states, state_store_path)
     except OSError as exc:
         logger.warning("RSS evidence state could not be persisted: %s", exc)
-
-    known = set(known_url_hashes or ())
-    if known_url_hashes is None:
-        # No caller-supplied knowledge: ask the database what it already has.
-        # A missing table here would mean raw_articles is gone, which is a real
-        # outage and should raise rather than be swallowed.
-        rows = await session.execute(select(RawArticle.url_hash))
-        known = {value for value in rows.scalars().all() if value}
 
     articles = await build_articles(report.items, known)
 
@@ -1084,6 +1116,7 @@ async def run_evidence_refresh(
         "feeds_failed": list(report.feeds_failed),
         "items_seen": report.items_seen,
         "entries_skipped_by_cap": report.skipped_by_cap,
+        "entries_already_known": report.already_known,
         "articles_new": len(articles),
         "body_fetches": report.body_fetches,
         "gdelt_links": 0,

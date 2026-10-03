@@ -132,7 +132,6 @@ PUBLIC_ROUTES = [
 # Curation surface. Every one of these must stay behind HTTP Basic auth.
 AUTHED_ROUTES = [
     "/",
-    "/posts",
 ]
 
 
@@ -208,15 +207,22 @@ class TestAuthedRouteMatrix:
         assert "www-authenticate" in response.headers
 
     @pytest.mark.asyncio
-    async def test_story_edit_requires_auth(self, app_with_db, db_session):
-        """GET /story/{id}/edit is the curator's form, so it stays protected."""
+    async def test_story_detail_requires_auth(self, app_with_db, db_session):
+        """GET /story/{id} is the curator's detail view, so it stays protected."""
         now = datetime.now(timezone.utc)
         story = _make_story(db_session, day=now - timedelta(hours=2),
                             status=Story.Status.PENDING)
         await db_session.commit()
 
         client = TestClient(app_with_db)
-        response = client.get(f"/story/{story.id}/edit")
+        response = client.get(f"/story/{story.id}")
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_story_detail_is_protected_without_a_readable_story(self, app_with_db):
+        """The detail view is a curation surface, so auth runs before the 404."""
+        client = TestClient(app_with_db)
+        response = client.get(f"/story/{uuid.uuid4()}")
         assert response.status_code == 401
 
     @pytest.mark.asyncio
@@ -233,24 +239,16 @@ class TestAuthedRouteMatrix:
             assert response.status_code == 401, f"{suffix} was public"
 
     @pytest.mark.asyncio
-    async def test_curation_posts_require_auth(self, app_with_db, db_session):
-        """Approve, reject, save and mark posted all refuse anonymous POSTs."""
+    async def test_the_triage_flows_are_not_routable_at_all(self, app_with_db, db_session):
+        """The approve, reject, save and mark-posted endpoints are gone, not just unlinked.
+
+        They used to be tested for refusing anonymous POSTs. They are now 404 for
+        everybody, authenticated or not, which is the stronger guarantee: there is no
+        guessable URL left that can mutate a story.
+        """
         now = datetime.now(timezone.utc)
         story = _make_story(db_session, day=now - timedelta(hours=2),
                             status=Story.Status.PENDING)
-        await db_session.commit()
-
-        from src.schema.models import CuratedPost
-
-        post = CuratedPost(
-            id=uuid.uuid4(),
-            story_id=story.id,
-            platform="twitter",
-            caption="test",
-            source_urls=[],
-            status=CuratedPost.Status.APPROVED,
-        )
-        db_session.add(post)
         await db_session.commit()
 
         client = TestClient(app_with_db)
@@ -258,11 +256,19 @@ class TestAuthedRouteMatrix:
             (f"/story/{story.id}/approve", None),
             (f"/story/{story.id}/reject", None),
             (f"/story/{story.id}/save", {"caption": "a caption"}),
-            (f"/post/{post.id}/mark-posted", None),
+            (f"/story/{story.id}/edit", None),
+            ("/post/00000000-0000-0000-0000-000000000000/mark-posted", None),
+            ("/posts", None),
         ]
         for path, data in cases:
-            response = client.post(path, data=data)
-            assert response.status_code == 401, f"POST {path} was public"
+            anon = client.post(path, data=data)
+            assert anon.status_code == 404, f"POST {path} answered {anon.status_code}"
+            authed = client.post(
+                path,
+                data=data,
+                auth=("testuser", "testpass"),
+            )
+            assert authed.status_code == 404, f"authenticated POST {path} was routable"
 
 
 class TestDefaultViewFilters:

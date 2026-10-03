@@ -4,6 +4,7 @@ import pytest
 import asyncio
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from src.schema.models import Base, SourceTier
 from src.shared.config import Settings
@@ -58,6 +59,36 @@ async def db_session(db_engine) -> AsyncGenerator[AsyncSession, None]:
     async_session = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
         yield session
+
+
+@pytest.fixture
+async def ingestion_env(monkeypatch):
+    """A run_ingestion() whose adapters and database are both real and local.
+
+    The real ``build_adapters`` runs (so ``settings.gdelt_enabled`` and tier
+    selection are production logic), each adapter's ``fetch()`` is replaced with
+    a stub so nothing touches the network, and every ``get_session`` binding in
+    the process is pointed at a real in-memory SQLite database.
+
+    This exists because patching ``src.ingestion.run.get_session`` alone is not
+    enough: five modules bind the name with ``from ... import get_session``, and
+    patching the source attribute does not rebind them, so every adapter raised
+    "Database not configured" inside a test that still passed or failed for an
+    unrelated reason. See tests/ingestion_harness.py.
+    """
+    from tests.ingestion_harness import IngestionEnv
+
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    env = IngestionEnv(engine, monkeypatch)
+    yield env
+    await engine.dispose()
 
 
 @pytest.fixture

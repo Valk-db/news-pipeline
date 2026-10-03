@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <meta name="robots" content="noindex, nofollow">
+    {# Story internals are behind app auth and must never be indexed. #}
+    <title>{{ headline.headline }} · Curation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/detail/detail.css">
+    {# The queue page stores the reader's theme choice; the detail page has to
+       honour it or flipping the theme on one page silently reverts on the next
+       click. Runs before first paint so there is no flash of the wrong theme. #}
+    <script nonce="{{ request.state.csp_nonce }}">
+        (function () {
+            var saved = null;
+            try { saved = localStorage.getItem('theme'); } catch (e) { saved = null; }
+            if (!saved) {
+                saved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            }
+            document.documentElement.setAttribute('data-theme', saved);
+        })();
+    </script>
+</head>
+<body class="is-detail-page">
+    <div class="detail-shell">
+
+        <header class="detail-bar">
+            <a href="/{{ back_query }}" class="detail-back">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 12H5M11 5l-7 7 7 7"></path>
+                </svg>
+                <span>Back to the queue</span>
+            </a>
+        </header>
+
+        <main class="detail-main">
+
+            {# ---------- 1. The story, named ---------- #}
+            {% if lead_image %}
+                <div class="detail-media">
+                    <img src="{{ lead_image.url | is_safe_url }}" alt="" decoding="async">
+                </div>
+            {% endif %}
+
+                <p class="detail-eyebrow">
+                    <span class="detail-status">
+                        {%- if counts_pending -%}
+                            Tally pending
+                        {%- else -%}
+                            {{ verification.label }}
+                        {%- endif -%}
+                    </span>
+                <span class="detail-freshness">arrived {{ freshness }}</span>
+            </p>
+
+            <h1 class="detail-headline">{{ headline.headline }}</h1>
+
+            <p class="detail-byline">
+                {% if headline.source_domain %}
+                    Reported first by <span class="detail-outlet">{{ headline.source_domain }}</span>
+                {% else %}
+                    No reporting outlet attributed yet
+                {% endif %}
+                {%- if headline.translated %}
+                    <span class="detail-translated">shown in translation</span>
+                {% endif %}
+            </p>
+
+            {% if headline.translated and headline.headline_original != headline.headline %}
+                <p class="detail-original">Original title: {{ headline.headline_original }}</p>
+            {% endif %}
+
+            {% if summary %}
+                <p class="detail-summary">{{ summary.text }}{% if summary.truncated %}…{% endif %}</p>
+                <p class="detail-summary-source">
+                    Quoted from
+                    {% if summary.url %}
+                        <a href="{{ summary.url | is_safe_url }}" target="_blank" rel="noopener noreferrer">{{ summary.domain }}</a>
+                    {% else %}
+                        {{ summary.domain }}
+                    {% endif %}
+                </p>
+            {% endif %}
+
+            {# ---------- 2. Whether to believe it ---------- #}
+            <section class="detail-section" aria-labelledby="detail-trust">
+                <h2 class="detail-heading" id="detail-trust">Whether to believe it</h2>
+
+                <p class="detail-corroboration {{ 'is-corroborated' if verification.corroborated }}">
+                    {{ corroboration_sentence }}
+                </p>
+
+                <ul class="detail-tiers">
+                    {% for chip in tier_chips %}
+                        <li class="story-tier tier-{{ chip.tier }}">
+                            <span class="story-tier-name">Tier {{ chip.tier }}</span>
+                            <span class="story-tier-count">{{ chip.count }} {{ chip.noun }}</span>
+                            <span class="story-tier-meaning">{{ chip.meaning }}</span>
+                        </li>
+                    {% else %}
+                        <li class="story-tier tier-unknown">
+                            {%- if counts_pending -%}
+                                Tiers not tallied yet
+                            {%- else -%}
+                                No tiered source yet
+                            {%- endif -%}
+                        </li>
+                    {% endfor %}
+                </ul>
+
+                <p class="detail-tier-sentence">{{ tier_sentence }}</p>
+
+                <dl class="detail-facts">
+                    <div class="detail-fact">
+                        <dt>Gate outcome</dt>
+                        <dd>{{ status_sentence }}</dd>
+                    </div>
+                    <div class="detail-fact">
+                        <dt>Corroboration</dt>
+                        {# tier_sentence already ends in a full stop, so no dot here. #}
+                        <dd>
+                            {%- if counts_pending -%}
+                                Tally pending &mdash; {{ tier_sentence }}
+                            {%- else -%}
+                                {{ verification.label }} &mdash; {{ tier_sentence }}
+                            {%- endif -%}
+                        </dd>
+                    </div>
+                    <div class="detail-fact">
+                        <dt>Reporting units</dt>
+                        <dd>{{ units | length }} {{ 'unit' if units | length == 1 else 'units' }} from
+                            {{ story.distinct_owners or 0 }} {{ 'outlet' if (story.distinct_owners or 0) == 1 else 'outlets' }}</dd>
+                    </div>
+                    {% if story.day %}
+                        <div class="detail-fact">
+                            <dt>Story day</dt>
+                            <dd>{{ story.day }}</dd>
+                        </div>
+                    {% endif %}
+                </dl>
+            </section>
+
+            {# ---------- 3. Who said it ---------- #}
+            <section class="detail-section" aria-labelledby="detail-sources">
+                <h2 class="detail-heading" id="detail-sources">
+                    {{ sources | length }} {{ 'source' if sources | length == 1 else 'sources' }}
+                </h2>
+                {% if sources %}
+                    <ol class="detail-sources">
+                        {% for row in sources %}
+                            <li class="detail-source">
+                                {% if row.url %}
+                                    <a class="detail-source-title" href="{{ row.url | is_safe_url }}" target="_blank" rel="noopener noreferrer">
+                                        {{ row.article.title or 'Untitled article' }} &#8599;
+                                    </a>
+                                {% else %}
+                                    <span class="detail-source-title detail-source-title-absent">{{ row.article.title or 'Untitled article' }}</span>
+                                {% endif %}
+                                <span class="detail-source-meta">
+                                    <span class="source-domain">{{ row.domain }}</span>
+                                    {%- if row.tier_num %}
+                                        <span class="story-tier story-tier-inline tier-{{ row.tier_num }}">Tier {{ row.tier_num }}</span>
+                                    {% else %}
+                                        <span class="story-tier story-tier-inline tier-unknown">Tier unknown</span>
+                                    {% endif %}
+                                    {%- if row.published_at %}
+                                        <time datetime="{{ row.published_at.isoformat() }}">{{ row.published_at.strftime('%d %b %H:%M UTC') }}</time>
+                                    {%- else %}
+                                        <span>no timestamp</span>
+                                    {%- endif %}
+                                    {%- if row.article.title_en and row.article.title_en != row.article.title %}
+                                        <span class="detail-source-original">Original: {{ row.article.title }}</span>
+                                    {% endif %}
+                                    {%- if row.domain in reliability_by_domain %}
+                                        <span class="detail-source-score">reliability {{ '%.2f' | format(reliability_by_domain[row.domain] | float) }}</span>
+                                    {% endif %}
+                                </span>
+                            </li>
+                        {% endfor %}
+                    </ol>
+                {% else %}
+                    <p class="detail-empty">No source article is attached to this story, so nothing here can be corroborated.</p>
+                {% endif %}
+            </section>
+
+            {# ---------- 3b. Media from the sources ----------
+                 The card gets one lead image. Everything else the sources
+                 published belongs here, or nowhere: this is the page somebody
+                 opens on purpose. #}
+            {% if media %}
+                <section class="detail-section" aria-labelledby="detail-media">
+                    <h2 class="detail-heading" id="detail-media">Media</h2>
+                    <ul class="detail-media-list">
+                        {% for asset in media %}
+                            <li class="detail-media-item">
+                                <a href="{{ asset.url | is_safe_url }}" target="_blank" rel="noopener noreferrer">
+                                    {%- if asset.thumbnail_url %}
+                                        <img src="{{ asset.thumbnail_url | is_safe_url }}" alt="" loading="lazy" decoding="async">
+                                    {%- endif %}
+                                    <span class="detail-media-type">{{ asset.media_type }}</span>
+                                    <span class="detail-media-link">open &#8599;</span>
+                                </a>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </section>
+            {% endif %}
+
+            {# ---------- 4. The diagnostics, behind a disclosure ----------
+                 The key=value internals are still here, still rendered from the
+                 same data the card used to print inline, but a reader has to
+                 ask for them. They are not deleted, because they are the reason
+                 somebody debugging a bad story needs this page at all. #}
+            <section class="detail-section" aria-labelledby="detail-tech">
+                <h2 class="detail-heading" id="detail-tech">Technical details</h2>
+
+                <details class="detail-details">
+                    <summary class="detail-details-summary">
+                        Claim matrix, narrative links, topics and source scores
+                    </summary>
+
+                    <div class="detail-details-body">
+
+                        <dl class="detail-kv">
+                            <div class="detail-kv-row">
+                                <dt>Story id</dt>
+                                <dd><code>{{ story.id }}</code></dd>
+                            </div>
+                            <div class="detail-kv-row">
+                                <dt>Status</dt>
+                                <dd><code>{{ story.status.value if story.status else 'unknown' }}</code></dd>
+                            </div>
+                            <div class="detail-kv-row">
+                                <dt>Gate reason</dt>
+                                <dd><code>{{ story.gate_reason or 'none recorded' }}</code></dd>
+                            </div>
+                            <div class="detail-kv-row">
+                                <dt>Unit counts</dt>
+                                <dd>
+                                    <code>t1={{ story.tier1_unit_count or 0 }}</code>
+                                    <code>t2={{ story.tier2_unit_count or 0 }}</code>
+                                    <code>t3={{ story.tier3_unit_count or 0 }}</code>
+                                    <code>t4={{ story.tier4_unit_count or 0 }}</code>
+                                    <code>owners={{ story.distinct_owners or 0 }}</code>
+                                </dd>
+                            </div>
+                            <div class="detail-kv-row">
+                                <dt>Created</dt>
+                                <dd><code>{{ story.created_at.isoformat() if story.created_at else 'unknown' }}</code></dd>
+                            </div>
+                            {% if primary_entity_names %}
+                                <div class="detail-kv-row">
+                                    <dt>Primary entities</dt>
+                                    <dd>{{ primary_entity_names | join(', ') }}</dd>
+                                </div>
+                            {% endif %}
+                        </dl>
+
+                        <h3 class="detail-subheading">Claims ({{ claims | length }})</h3>
+                        {% for entry in claims %}
+                            <div class="detail-claim">
+                                <p class="detail-claim-text">{{ entry.claim.text }}</p>
+                                <p class="detail-claim-meta">
+                                    <code>{{ entry.claim.claim_type.value if entry.claim.claim_type else 'untyped' }}</code>
+                                    {%- if entry.claim.first_seen_at %} first seen {{ entry.claim.first_seen_at.strftime('%Y-%m-%d') }}{% endif %}
+                                </p>
+                                {% if entry.evidence %}
+                                    <ul class="detail-evidence">
+                                        {% for ev in entry.evidence %}
+                                            <li>
+                                                <code>{{ ev.stance.value if ev.stance else 'unknown' }}</code>
+                                                {{ ev.confidence }}%
+                                                <span class="detail-evidence-unit">unit <code>{{ ev.unit_id }}</code></span>
+                                            </li>
+                                        {% endfor %}
+                                    </ul>
+                                {% else %}
+                                    <p class="detail-claim-meta">No evidence recorded.</p>
+                                {% endif %}
+                            </div>
+                        {% else %}
+                            <p class="detail-empty">No claims have been extracted for this story.</p>
+                        {% endfor %}
+
+                        <h3 class="detail-subheading">Quoted snippets ({{ snippets | length }})</h3>
+                        {% for snippet in snippets %}
+                            <blockquote class="detail-snippet">
+                                {{ snippet.text }}
+                                <cite>confidence {{ snippet.confidence }}%</cite>
+                            </blockquote>
+                        {% else %}
+                            <p class="detail-empty">No snippets recorded.</p>
+                        {% endfor %}
+
+                        <h3 class="detail-subheading">Topics</h3>
+                        {% if topics %}
+                            <ul class="detail-tags">
+                                {% for topic in topics %}
+                                    <li>{{ topic.name }}{% if topic.confidence is not none %}
+                                        <span class="detail-topic-confidence">{{ topic.confidence }}%</span>{% endif %}</li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="detail-empty">No topic groups attached.</p>
+                        {% endif %}
+
+                        <h3 class="detail-subheading">Narrative links ({{ narrative_arcs | length }})</h3>
+                        {% if narrative_arcs %}
+                            <ul class="detail-tags">
+                                {% for edge in narrative_arcs %}
+                                    <li>
+                                        <span class="detail-predicate">{{ edge.predicate | replace('_', ' ') }}</span>
+                                        &rarr; {{ edge.object_headline or 'a story with no headline' }}
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="detail-empty">This story links to no other story.</p>
+                        {% endif %}
+
+                    </div>
+                </details>
+            </section>
+
+        </main>
+    </div>
+</body>
+</html>

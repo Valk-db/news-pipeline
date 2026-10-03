@@ -118,3 +118,43 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+@asynccontextmanager
+async def get_session_for_url(raw_url: str) -> AsyncGenerator[AsyncSession, None]:
+    """A session on an explicit DSN, bypassing the cached app engine.
+
+    Used by the transparency cron (curation_ui/cron.py), which should sign
+    through TRANSPARENCY_SIGNER_DATABASE_URL -- a role with SELECT on the log
+    and on both transparency tables, and INSERT on those two, and nothing else
+    (20261002230000_transparency_signer_rbac.sql) -- rather than through
+    DATABASE_URL. The app's engine is cached module-level and lazily built from
+    DATABASE_URL, so sharing it would make the least-privilege DSN decorative.
+
+    NULLP-pool and its connect_args match _get_engine(): one connection per
+    invocation, no serverless pooling surprises, same statement-cache settings
+    so it works behind a transaction pooler. Commit on success, rollback on
+    failure, always close.
+    """
+    if not raw_url or not raw_url.strip():
+        raise RuntimeError("No database URL given to get_session_for_url().")
+    url, connect_args = prepare_database_url(raw_url)
+    engine = create_async_engine(
+        url,
+        poolclass=NullPool,
+        connect_args=connect_args,
+        echo=False,
+    )
+    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with session_maker() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+    finally:
+        await engine.dispose()

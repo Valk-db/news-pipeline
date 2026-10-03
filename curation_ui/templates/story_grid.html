@@ -1,13 +1,22 @@
-{% if notice %}
-<div class="notice-banner notice-banner-{{ notice_type or 'info' }}" role="status">
-    {{ notice }}
-</div>
-{% endif %}
+{# The queue itself. A count up top, because "how much is there" is the first
+   question a reader asks of a list, and then one card per story. The notice
+   banner that used to live here was only ever set by the approve and reject
+   responses, which no longer exist; nothing here sets a notice, so nothing
+   renders one. #}
 {% if not stories %}
 <div class="empty-state">
-    <p>No pending stories. Run the ingestion pipeline or check back later.</p>
+    {% if filters_active %}
+    <p>No stories match these filters.</p>
+    <p class="empty-hint">Widen the window, or turn a tier back on.</p>
+    {% else %}
+    <p>No stories are waiting.</p>
+    <p class="empty-hint">Run the ingestion pipeline or check back later.</p>
+    {% endif %}
 </div>
 {% else %}
+<p class="queue-count">
+    {{ stories | length }} {{ 'story' if stories | length == 1 else 'stories' }}{% if filters_active %} matching your filters{% endif %}
+</p>
 <div class="stories-grid" id="stories">
     {% for item in stories %}
     {% include "story_card.html" %}
