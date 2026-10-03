@@ -39,9 +39,48 @@ jobs:
       - name: Run ruff
         run: uv run ruff check .
 
+      # The gate this job used to fake. `mypy` used to run here with
+      # `continue-on-error: true` and the comment "Allow pre-existing errors,
+      # only fail on new ones" -- but nothing compared the count to anything, so
+      # the step could not fail and the comment described an intention the
+      # workflow did not implement. It is now a ratchet against
+      # ci_quality_floor.json: the build fails if the count goes UP, and stays
+      # green when somebody fixes some. mypy exits 1 whenever it finds
+      # anything, which is the normal state of this tree, so its exit status is
+      # discarded here on purpose and the comparison below is the verdict.
+      # scripts/ci_quality_gate.py exits 2 if it cannot find mypy's summary
+      # line, so a crashed mypy fails the build rather than passing it.
       - name: Run mypy
-        run: uv run mypy src/ curation_ui/
-        continue-on-error: true  # Allow pre-existing errors, only fail on new ones
+        run: |
+          uv run mypy src/ curation_ui/ > /tmp/mypy.txt 2>&1 || true
+          tail -3 /tmp/mypy.txt
+          uv run python -m scripts.ci_quality_gate mypy /tmp/mypy.txt
+
+      # Free, offline, no account, no token, no Docker: Yelp's detect-secrets,
+      # installed by the dev extra. Everything else needs a binary this job
+      # cannot fetch or pin.
+      #
+      # The scan is diffed against a slim baseline of the 17 known non-secrets
+      # in this tree, all reviewed by hand: placeholder DSNs (user:pass in
+      # .env.example and VERCEL_DEPLOY.md, app-user:pw and gsk_super_secret in
+      # the tests), the ephemeral postgres:postgres of this job's own service
+      # container, env(VAR) references in supabase/config.toml, and the two CDN
+      # subresource-integrity digests in map.html. Anything new fails the build
+      # and the diff names it. `--slim` drops generated_at, which is what makes
+      # the baseline byte-stable enough to diff; the cost is that it cannot be
+      # re-audited with `detect-secrets audit`, which is cheap to redo by hand
+      # at 17 lines.
+      #
+      # HexHighEntropyString is off and everything else stays on. This repo is
+      # legitimately full of high-entropy hex (content_hash, url_hash, MinHash
+      # permutations), and that one detector reported 1,169 findings, 1,160 of
+      # them in eval/data. A baseline that noisy is not a gate.
+      - name: Scan for secrets
+        run: |
+          uv run detect-secrets scan --slim \
+            --disable-plugin HexHighEntropyString \
+            --exclude-files '^\.secrets\.baseline$' > /tmp/secrets-current.json
+          diff -u .secrets.baseline /tmp/secrets-current.json
 
   test:
     runs-on: ubuntu-24.04
@@ -93,5 +132,19 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ -v --tb=short
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_news
+
+      # A green suite does not mean the suite is intact: deleting a failing
+      # test makes it green. This counts what was collected and compares it to
+      # the floor in ci_quality_floor.json (1816, measured on main c58c6f6).
+      # Collected, not passed -- passes, skips and failures are all visible in
+      # the run above, but a deleted test only ever shows up as a smaller
+      # collection, so this is a separate invocation rather than a hook.
+      - name: Check the test-count floor
+        run: |
+          uv run pytest tests/ --collect-only -q > /tmp/collected.txt 2>&1 || true
+          tail -3 /tmp/collected.txt
+          uv run python -m scripts.ci_quality_gate pytest /tmp/collected.txt
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_news

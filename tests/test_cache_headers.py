@@ -101,7 +101,6 @@ class TestAllowlistAgainstTheRealRouteTable:
         assert MAP_READ_PATHS == frozenset({
             "/api/globe/events",
             "/api/globe/layers",
-            "/api/globe/stats",
             "/api/map/freshness",
             "/api/map/replay",
             "/api/map/stories",
@@ -260,10 +259,13 @@ class TestEndToEndThroughTheRealApp:
         return TestClient(app)
 
     def test_database_outage_is_not_cached(self, client):
-        """The real app, no mocking. /api/globe/stats returns 200 with
+        """The real app, no mocking. /api/globe/events returns 200 with
         {"error": ...} here, which is exactly the shape that must not reach a
-        shared cache."""
-        response = client.get("/api/globe/stats")
+        shared cache.
+
+        It was /api/globe/stats until drift cleanup removed that route; the
+        point of the test is the 200-with-an-error-body shape, not the path."""
+        response = client.get("/api/globe/events")
         assert response.status_code == 200
         assert response.json()["error"]
         assert "Cache-Control" not in response.headers
@@ -288,53 +290,51 @@ class TestEndToEndThroughTheRealApp:
         assert response.status_code == 401
         assert "public" not in response.headers.get("Cache-Control", "")
 
-    def test_real_stats_payload_is_cached(self, monkeypatch):
+    def test_real_layers_payload_is_cached(self, monkeypatch):
         """The positive case through the real route, the real handler and the
         real response, with only the database replaced. Without this the class
         above would pass even if the middleware never attached a header at all,
         which is the shape a broken registration takes.
+
+        This used to be pinned against /api/globe/stats. That route is gone
+        (drift cleanup: no template or script ever drew the panel it fed), so
+        the positive case rides on /api/globe/layers instead, which is the same
+        module, the same public-read guard, and the same single-query shape.
         """
         import contextlib
-        from datetime import datetime, timezone
+        import uuid
 
         import curation_ui.globe as globe_module
 
-        class _Row:
-            """The handler reads row[0].value for event types and row[0] for
-            layer names, so the stand-in needs both shapes."""
+        class _Layer:
+            """Every field the handler copies out, because a stand-in missing
+            one turns this into an AttributeError test instead of a cache test."""
 
-            def __init__(self, value):
-                self.value = value
+            def __init__(self):
+                self.id = uuid.UUID("11111111-2222-3333-4444-555555555555")
+                self.name = "world"
+                self.description = "Everywhere"
+                self.filter_criteria = {}
+                self.style = {}
+                self.is_default = True
+                self.is_visible = True
+                self.min_zoom = 1
+                self.max_zoom = 12
+                self.color = "#4488ff"
 
         class _Result:
-            def __init__(self, scalar=None, rows=(), first=()):
-                self._scalar = scalar
+            def __init__(self, rows=()):
                 self._rows = rows
-                self._first = first
 
-            def scalar(self):
-                return self._scalar
+            def scalars(self):
+                return self
 
             def all(self):
                 return self._rows
 
-            def first(self):
-                return self._first
-
         class _Session:
-            def __init__(self):
-                self._answers = [
-                    _Result(scalar=2),
-                    _Result(rows=[(_Row("PROTEST"), 2)]),
-                    _Result(rows=[("world", 2)]),
-                    _Result(first=(
-                        datetime(2026, 10, 1, tzinfo=timezone.utc),
-                        datetime(2026, 10, 2, tzinfo=timezone.utc),
-                    )),
-                ]
-
             async def execute(self, _statement):
-                return self._answers.pop(0)
+                return _Result(rows=[_Layer()])
 
         @contextlib.asynccontextmanager
         async def fake_session():
@@ -343,11 +343,11 @@ class TestEndToEndThroughTheRealApp:
         monkeypatch.setattr(globe_module, "check_database_public", lambda request: (True, ""))
         monkeypatch.setattr(globe_module, "get_session", fake_session)
 
-        response = TestClient(app).get("/api/globe/stats")
+        response = TestClient(app).get("/api/globe/layers")
         assert response.status_code == 200
         payload = response.json()
-        assert payload["total_events"] == 2
-        assert payload["by_type"] == {"PROTEST": 2}
+        assert payload["count"] == 1
+        assert payload["layers"][0]["name"] == "world"
         assert response.headers["Cache-Control"] == map_read_cache_control()
         assert "Content-Security-Policy" in response.headers
 
@@ -358,14 +358,14 @@ class TestOnABareApp:
 
     def build(self):
         application = Starlette(routes=[
-            Route("/api/globe/stats", _ok, methods=["GET"]),
+            Route("/api/map/freshness", _ok, methods=["GET"]),
             Route("/api/map/replay", _boom, methods=["GET"]),
         ])
         application.add_middleware(BaseHTTPMiddleware, dispatch=map_read_cache)
         return TestClient(application)
 
     def test_ok_route_is_cached(self):
-        response = self.build().get("/api/globe/stats")
+        response = self.build().get("/api/map/freshness")
         assert response.headers["Cache-Control"] == map_read_cache_control()
         assert response.json() == {"ok": True}
 

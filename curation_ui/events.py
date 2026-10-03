@@ -17,10 +17,11 @@ would hide the best-corroborated events on the map. See src/verification/event_i
 import uuid
 from datetime import datetime
 
-from sqlalchemy import and_
+from sqlalchemy import and_, select
 from sqlalchemy.types import Float
 
-from src.schema.models import Event
+from curation_ui.discovery import PUBLIC_STORY_STATUSES
+from src.schema.models import Event, Story
 from src.verification.event_identity import (
     IS_CANONICAL_EVENT,
     cluster_tier1_sources,
@@ -42,8 +43,28 @@ def _event_conditions(
     start/end arrive already parsed by _parse_iso_timestamp.
     min_tier1_sources applies the tier 1 corroboration threshold, counted across
     the whole canonical event rather than across one story's row of it.
+
+    The story-status clause is not optional and lives here rather than at the two
+    call sites so that /api/globe/events and /api/map/replay cannot drift apart
+    on it. Every other public read (public_pages.py, /api/map/stories) filters on
+    PUBLIC_STORY_STATUSES; this builder used to not, which meant the flat map
+    drew a pin for every event whose story had FAILED the corroboration gate or
+    was still sitting in the triage queue. Measured on dev 2026-10-03: all 26
+    events the public endpoint returned belonged to stories that were BLOCKED
+    (24) or PENDING (2) and not one to an approved story, while /stories/{id}
+    404'd for those same ids. A map that draws what a person has not approved is
+    the exact failure the human-gated decision in DECISIONS.md exists to prevent,
+    so the filter belongs next to the query, and a test asserts it.
+
+    events.story_id is NOT NULL with a foreign key to stories.id, so the subquery
+    cannot silently drop a pin for an event that has no story: there are none.
     """
     conditions = [IS_CANONICAL_EVENT]
+    conditions.append(
+        Event.story_id.in_(
+            select(Story.id).where(Story.status.in_(PUBLIC_STORY_STATUSES))
+        )
+    )
     if layer_id:
         conditions.append(Event.layer_id == layer_id)
     if event_type:

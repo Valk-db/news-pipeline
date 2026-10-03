@@ -16,9 +16,15 @@ Current pipeline (see `README.md` for the full picture):
 
 ```
 GitHub Actions (cron) → Ingestion → Verification → Grouping → Gate → Curation UI
-                              ↓
-                        Supabase/Neon (Postgres)
+                              ↓                    ↓
+                        Supabase/Neon (Postgres)  └→ public surfaces (/map, /stories/{id}, /proof/{id})
 ```
+
+The Curation UI is **read-only** and the arrow into the public surfaces does not go through it.
+There are no approve/reject/edit routes; `tests/test_curation_read_only_ui.py` pins that. What
+reaches the public is decided by `PUBLIC_STORY_STATUSES` in `curation_ui/discovery.py` and by
+the human-gated exposure decision in `DECISIONS.md`, which is the file to read before proposing
+anything here about publication.
 
 - **Ingestion**: 8 tier-1 + 4 enabled tier-2 RSS (12 configured), sensors, Reddit tier-3,
   GDELT disabled in the workflow (`src/ingestion/source_registry.py`)
@@ -119,7 +125,11 @@ discover after a paying customer is depending on a source you have to rip out.
 Builds on `cluster_viewpoints()` in `stories.py`, which already does LLM
 stance-labeling. This phase is "how do we store and navigate the relationship
 data between everything" — the answer is Postgres edge tables, not a separate
-graph database. You already have Supabase/pgvector; no new infra needed.
+graph database. You already have Supabase/pgvector; no new infra needed. As of
+`20261002220200_pgvector_readiness.sql` the `vector` extension is installed on every database this
+repo migrates, so a vector column is available without new infrastructure — but no column uses it
+yet and there is no HNSW index or `match_articles` RPC, deliberately, pending a real
+nearest-duplicate eval set. Do not plan §2 or §3 around a vector index that does not exist.
 
 **New tables (`supabase/migrations/`, idempotent per the existing convention):**
 

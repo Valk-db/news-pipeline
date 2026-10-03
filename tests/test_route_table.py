@@ -52,7 +52,6 @@ EXPECTED_ROUTE_TABLE = [
     ("/api/cron/checkpoint/watchdog", ("GET",), False, False),
     ("/api/globe/events", ("GET",), False, False),
     ("/api/globe/layers", ("GET",), False, False),
-    ("/api/globe/stats", ("GET",), False, False),
     ("/api/map/freshness", ("GET",), False, False),
     ("/api/map/replay", ("GET",), False, False),
     ("/api/map/stories", ("GET",), False, False),
@@ -148,7 +147,6 @@ class TestRouteTableMatchesPreSplitApp:
         assert by_path["/api/stories/{story_id}/viewpoints"][2] is True
         assert by_path["/api/stories/{story_id}/sources"][2] is True
         assert by_path["/api/globe/events"][2] is False
-        assert by_path["/api/globe/stats"][2] is False
         assert by_path["/api/globe/layers"][2] is False
         assert by_path["/api/map/freshness"][2] is False
         assert by_path["/api/map/stories"][2] is False
@@ -225,8 +223,23 @@ class TestGlobeRemoved:
         """map.js plots /api/globe/events, so removing the page keeps the JSON."""
         paths = {row[0] for row in route_table(app)}
         assert "/api/globe/events" in paths
-        assert "/api/globe/stats" in paths
         assert "/api/globe/layers" in paths
+
+    def test_globe_stats_is_gone(self):
+        """Drift cleanup removed /api/globe/stats; nothing renders it, so pin the removal.
+
+        The route counted events by type and by layer for a stats panel that no
+        template or script ever drew. Left in place it was the widest anonymous
+        read in the app (four unbounded aggregate queries over the whole events
+        table, no window, no limit) for zero readers. If someone wants a stats
+        panel back, the honest shape is the bounded one the event endpoints
+        already use: a window, a limit, and a report of the effective cap.
+        """
+        from fastapi.testclient import TestClient
+
+        paths = {row[0] for row in route_table(app)}
+        assert "/api/globe/stats" not in paths
+        assert TestClient(app).get("/api/globe/stats").status_code == 404
 
     def test_no_surviving_route_renders_the_globe_template(self):
         """globe.html is deleted; a route reaching for it would 500 at request time."""

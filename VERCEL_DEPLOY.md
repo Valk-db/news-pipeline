@@ -14,7 +14,11 @@ This guide walks through deploying the FastAPI curation UI to Vercel with a Supa
 2. Apply the schema — `supabase/migrations/*.sql` is the only thing that creates it, so either run
    `uv run python -m scripts.migrate` locally against the new database or paste the files into the
    **SQL Editor** in order. No extension needs enabling by hand: `pg_trgm` is created by its own
-   migration, and nothing uses pgvector (embeddings are JSON array columns)
+   migration, and so is `vector` (`20261002220200_pgvector_readiness.sql`, verified
+   installed on dev as pgvector 0.8.2). The extension being present is not a vector
+   search feature: no column uses it, embeddings are JSON array columns, and there is
+   no HNSW index or `match_articles` RPC. That is deliberate — see the migration
+   header and the pgvector note in `README.md`
 3. Go to **Settings → Database** and copy the **Connection string** (URI format)
    - **Direct (IPv6, may fail in CI/GitHub Actions):** `postgresql+asyncpg://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres`
    - **Pooler (IPv4, RECOMMENDED for CI/edge):** `postgresql+asyncpg://postgres.[PROJECT-REF]:[YOUR-PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres`
@@ -161,11 +165,24 @@ If you see module import errors:
 FastAPI app sees the original path. `pyproject.toml` also sets
 `[tool.vercel] entrypoint = "curation_ui.main:app"`, which points at the same app.
 
-**Routing** (verified against the code, not a live deployment): `/healthz` → 200 with
-`{"status", "database"}` only; `/healthz/details` → the topology report behind
-`require_auth`; `/`, `/posts`, `/story/{id}/edit`, `/post/{id}/mark-posted` → 401 without
-credentials; a nonexistent path → 404. The state-changing POSTs additionally require the
-`X-CSRF-Token` header, so a cross-origin form post gets 403.
+**Routing** (re-derived from the registered routes on 2026-10-03, not copied forward from an
+older version of this list; the four curation paths it used to name no longer exist):
+
+- `/healthz` → 200 with `{"status", "database"}` only, always 200
+- `/healthz/details` → the topology report behind `require_auth`, 401 without credentials
+- Behind `require_auth`, so 401 without credentials: `/`, `/story/{id}`,
+  `/api/stories/{id}/sources`, `/api/stories/{id}/viewpoints`
+- Behind a bearer token checked in the handler rather than by `require_auth`, so 401 without it:
+  `/api/cron/checkpoint`, `/api/cron/checkpoint/watchdog`
+- Public, no credentials: `/map`, `/stories/{id}`, `/proof/{id}`, `/api/globe/events`,
+  `/api/globe/layers`, `/api/map/freshness`, `/api/map/replay`, `/api/map/stories`
+- A nonexistent path → 404
+
+There are no state-changing routes in the app any more, so the `X-CSRF-Token` note that used to
+close this section no longer has anything to describe. The CSRF machinery is still wired up
+(`curation_ui/security.py`) for whatever comes next, and
+`tests/test_curation_read_only_ui.py` pins the absence of state-changing curation routes so this
+list cannot quietly go stale a second time.
 
 ## Cost
 

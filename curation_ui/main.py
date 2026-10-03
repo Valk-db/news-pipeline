@@ -6,7 +6,7 @@ one module per surface, so curation_ui/health.py can gate a route without
 importing main and each surface can be read on its own:
 
   cron.py           /api/cron/checkpoint (+ watchdog): bearer-token checkpoint signing
-  curation.py       the auth-gated triage workbench (queue, approve/reject/edit/save, posts)
+  curation.py       the auth-gated triage workbench (queue index, story detail)
   story_api.py      the auth-gated per-story JSON APIs
   globe.py          public /api/globe/* JSON
   map_api.py        public /api/map/* JSON plus the freshness and story serializers
@@ -77,8 +77,13 @@ def check_llm_available() -> tuple[bool, str]:
     src.shared.llm._llm_client). Gating on settings.has_llm alone made this
     return False even when a working client was already in place.
 
-    A False result is not fatal: approve and edit fall back to deterministic,
-    LLM-free behavior (see build_deterministic_caption) and tell the curator.
+    A False result is not fatal. It used to be non-fatal for a specific reason
+    that no longer applies: approve and edit fell back to deterministic,
+    LLM-free captions and told the curator. Those routes are gone, so nothing
+    in the app consults this any more -- see the note in DECISIONS.md. It is
+    left in place because the same check is worth having the moment any
+    generated surface comes back, and deleting it would take the only place
+    that can tell "no LLM configured" from "LLM configured and broken".
     """
     import src.shared.llm as llm_module
     if not settings.has_llm and llm_module._llm_client is None:
