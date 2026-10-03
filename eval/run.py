@@ -132,20 +132,6 @@ def _parse_predicted(snippets: list[dict[str, Any]]) -> list[PredSnippet]:
     return out
 
 
-class _NullStats:
-    """Accepts and discards the in-memory stats calls the extractor makes.
-
-    The real IngestStats.record raises TypeError on the one call site
-    (snippet_extractor.py:112 passes count=, the signature takes n=), and that
-    raise happens *after* a successful extraction inside the same try block, so
-    the except at line 115 returns []. Neutralising the recorder lets the
-    harness observe the extraction the pipeline throws away.
-    """
-
-    def record(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-
 async def run_corpus(
     items: list[CorpusItem],
     gold: dict[str, GoldLabel],
@@ -156,7 +142,7 @@ async def run_corpus(
     mutate: str | None = None,
 ) -> dict[str, Any]:
     """Run the real extraction over the corpus, scoring fields as we go."""
-    from unittest.mock import patch
+    from unittest.mock import AsyncMock, patch
 
     from src.enrichment import snippet_extractor
     from src.shared.llm import LLMClient
@@ -208,19 +194,23 @@ async def run_corpus(
                 model_override=model_override, usage=usage, on_response=on_response,
                 mutate=mutate,
             )
-            # The production function, called verbatim. Two names are redirected,
-            # and neither is the prompt or any extraction logic:
-            #   get_llm_client -- production calls it WITHOUT await (line 42) and then
-            #     uses llm.chat / llm.model, which LLMClient does not have (line 63).
-            #     The shim supplies exactly those two attributes.
-            #   STATS -- snippet_extractor.py:112 calls record(..., count=N) but the
-            #     signature is record(source, event, n=1) (src/utils/ingest_stats.py:20).
-            #     That TypeError is raised after a SUCCESSFUL extraction, inside the
-            #     same try block, so the except at line 115 turns a good result into
-            #     an empty list. It is a stats side-channel, not extraction, so it is
-            #     neutralised here; both defects are reported, neither is fixed.
-            with patch.object(snippet_extractor, "get_llm_client", lambda: shim), \
-                    patch.object(snippet_extractor, "STATS", _NullStats()):
+            # The production function, called verbatim. One name is redirected,
+            # and it is the transport, not the prompt and not any extraction
+            # logic. get_llm_client is now `await`ed for real
+            # (snippet_extractor.py:91) and the result is used as an LLMClient:
+            # `.chat_completion(...)` and `._parse_json_response(...)`. The shim
+            # implements both by delegating to its own complete(), which is where
+            # the cache, the mutation hook and the usage recorder already live.
+            #
+            # Nothing else is stubbed. An earlier version of this harness also
+            # replaced STATS and get_llm_client's result-shape because
+            # production had two real defects; both are fixed in the product now,
+            # so stubbing them here would hide regressions rather than measure
+            # them. AsyncioMock is used rather than a bare lambda because the
+            # callee is a coroutine function.
+            with patch.object(
+                snippet_extractor, "get_llm_client", AsyncMock(return_value=shim)
+            ):
                 produced = await snippet_extractor.extract_snippets_from_article(
                     article_id=item.article_id,
                     story_id="00000000-0000-0000-0000-000000000000",
