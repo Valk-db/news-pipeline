@@ -134,6 +134,16 @@ See `src/ingestion/source_registry.py` for the complete, up-to-date source regis
 - Single-source cascades (one owner → many rewrites) blocked automatically
 - All decisions logged for audit trail
 
+### Phase 2 Enrichment (Daily)
+- Runs after both ingests (`.github/workflows/daily-phase2.yml`, `23 20 * * *`), on
+  gate-passed `PENDING` stories plus any already-`QUEUED` ones
+- Adds topic groups → narrative arcs → claims, each step skipping stories whose
+  derived state is already current (so a second run costs nothing)
+- Excludes viewpoint children, and any story with fewer than 2 text-bearing units
+- **Changes no story's status.** Public exposure stays human-gated; see `DECISIONS.md`
+- Budgeted in **tokens** on its own counter (`groq_phase2_tokens`, 40,000/day = 20%
+  of Groq's 200,000 TPD) because the daily token cap binds long before the request cap
+
 ### Curation
 - FastAPI + HTMX UI at `localhost:8000`
 - Keyboard: **A**pprove, **R**eject, **E**dit
@@ -161,6 +171,7 @@ See `src/ingestion/source_registry.py` for the complete, up-to-date source regis
 | Tier-1 gate ≥2 distinct owners | Survives wire syndication (AP → 300 domains = 1 owner) |
 | Paraphrase-only captions | Copyright compliance, not just defamation defense |
 | Heartbeat commit | Keeps Actions schedule alive (60-day rule) |
+| Phase 2 enriches `PENDING`, never publishes | Public exposure stays human-gated; `DECISIONS.md` holds the evidence and the pre-registered exit criteria |
 
 ## File Structure
 
@@ -198,6 +209,11 @@ Every schema change — **new tables**, new columns, column type changes, enum t
 Two free quotas are spent against a row in `budget_counters` (`name`, `day`, `used`), not
 against anything held in memory or on disk: Groq requests (`groq_daily_request_budget`,
 900) and MyMemory translation characters (45,000, under the anonymous 50,000 limit).
+
+Phase 2 is counted separately and in **tokens** (`groq_phase2_tokens`,
+`phase2_daily_token_cap` 40,000). Requests are the wrong unit: on 2026-10-03 dev held 16
+Groq requests against a fully spent 200,000-token day, so a request budget would have
+read 96% unspent while the quota was gone. See `DECISIONS.md`.
 
 One statement reserves and counts, so the cap holds across processes — two ingest runs a
 day share one budget instead of each getting a full one, which is what an in-process
