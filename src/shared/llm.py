@@ -1,11 +1,31 @@
-"""LLM client with Groq primary, Cerebras fallback, and token accounting."""
+"""LLM client with a provider roster, per-rung budgets, and token accounting.
+
+The provider order lives in exactly one place, `src/shared/llm_roster.ROSTER`, and
+every public method here walks it. It used to be written out three times, once per
+method, and the copies had drifted: Cerebras spent against no budget at all, and a 429
+on one rung raised "No LLM provider available" rather than falling through to the next
+one. Both are now properties of the roster rather than of any single call site.
+"""
 
 import logging
+import os
 import re
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Callable
 from src.shared.config import get_settings
-from src.shared.llm_budget import RequestBudget, BudgetExhausted
-from tenacity import retry, stop_after_attempt, wait_exponential
+from src.shared.llm_budget import (
+    BudgetExhausted,
+    MinuteLimiter,
+    RequestBudget,
+    llm_backoff,
+    unwrap_retry,
+)
+from src.shared.llm_roster import (
+    ROSTER,
+    LLMRung,
+    live_rungs,
+    model_for,
+)
+from tenacity import retry, stop_after_attempt
 from httpx import TimeoutException, ConnectError
 import json
 
@@ -130,16 +150,26 @@ def validate_caption(
 
 
 class LLMClient:
-    """Unified LLM client with provider fallback."""
+    """Unified LLM client that walks the roster in llm_roster.ROSTER."""
 
     def __init__(self):
         self.settings = get_settings()
         self.groq_client: Optional[AsyncGroq] = None
         self.cerebras_client: Optional[AsyncCerebras] = None
-        self._budget = RequestBudget(self.settings.groq_daily_request_budget)
-        # Track which providers have already emitted auth failure warnings this run
-        self._groq_auth_warned = False
-        self._cerebras_auth_warned = False
+        # One budget per rung, built eagerly from settings. Cerebras and the free tiers
+        # used to have no counter, so their spend was invisible and uncapped; the dict
+        # is keyed by rung name so a new rung cannot silently join without one.
+        self._budgets: Dict[str, RequestBudget] = {}
+        self._minute_limiters: Dict[str, MinuteLimiter] = {}
+        # Rung that last produced a usable answer, and rungs ruled out for the rest of
+        # the process. See _candidates for why that is worth the two fields.
+        self._pinned: Optional[str] = None
+        # The last rung failure, kept so a caller that must raise can chain it.
+        self._last_walk_error: Optional[BaseException] = None
+        self._demoted: set[str] = set()
+        self._auth_warned: set[str] = set()
+        self._openrouter_key: Optional[str] = None
+        self._openrouter_http = None
         self._init_clients()
 
     def _init_clients(self):
@@ -147,6 +177,83 @@ class LLMClient:
             self.groq_client = AsyncGroq(api_key=self.settings.groq_api_key)
         if self.settings.cerebras_api_key and AsyncCerebras:
             self.cerebras_client = AsyncCerebras(api_key=self.settings.cerebras_api_key)
+        if self.settings.openrouter_api_key and self.settings.openrouter_api_key.strip():
+            self._openrouter_key = self.settings.openrouter_api_key.strip()
+
+    # ---------------------------------------------------------------- budget
+
+    @staticmethod
+    def _rung(name: str) -> LLMRung:
+        """Look a rung up by name. A missing name is a programming error, not a fallback."""
+        for rung in ROSTER:
+            if rung.name == name:
+                return rung
+        raise LLMError(f"rung {name!r} is missing from the roster")
+
+    def _cap(self, rung: LLMRung, attr: str, default: int) -> int:
+        value = getattr(self.settings, attr, None)
+        return int(value) if isinstance(value, (int, float)) else default
+
+    def _budget_for(self, rung: LLMRung) -> RequestBudget:
+        """The budget for one rung, created on first use.
+
+        Built lazily rather than in __init__ so a rung injected after construction (the
+        fallback tests do exactly this) still gets a real budget instead of a KeyError.
+        """
+        budget = self._budgets.get(rung.name)
+        if budget is None:
+            limiter = self._minute_limiters.get(rung.name)
+            if limiter is None:
+                limiter = self._minute_limiters[rung.name] = MinuteLimiter(
+                    self._cap(rung, rung.minute_cap_attr, 0) if rung.minute_cap_attr else 0
+                )
+            budget = self._budgets[rung.name] = RequestBudget(
+                self._cap(rung, rung.daily_cap_attr, 0) if rung.daily_cap_attr else 0,
+                rung.budget_name,
+                limiter,
+            )
+        return budget
+
+    # ---------------------------------------------------------------- roster
+
+    def _candidates(self) -> List[LLMRung]:
+        """The live rungs, demoted ones removed and the pinned one first.
+
+        The demotion is the reason this is not just `live_rungs`. OpenRouter's free pool
+        is shared with every other OpenRouter user, so a rung can be locked out for the
+        whole run: measured on 2026-10-03, google/gemma-4-26b-a4b-it:free returned 429
+        with `limit_source: upstream_provider_shared_pool` on 3/3 attempts while
+        nvidia/nemotron-3-super-120b-a12b:free returned 200 on the first. Without this,
+        every article in the batch pays three 429s and two backoffs to rediscover that.
+        A dead rung costs one probe per run, and the pinning means the rung that did work
+        is tried first for everything after it.
+        """
+        rungs = [r for r in live_rungs(self) if r.name not in self._demoted]
+        if self._pinned:
+            rungs.sort(key=lambda r: r.name != self._pinned)
+        return rungs
+
+    def _demote(self, rung: LLMRung, why: str) -> None:
+        self._demoted.add(rung.name)
+        if self._pinned == rung.name:
+            self._pinned = None
+        logger.warning("LLM rung %s demoted for this run: %s", rung.name, why)
+
+    def _warn_auth_once(self, rung: LLMRung, exc: BaseException) -> None:
+        """One GitHub Actions annotation per rung per run, and only the first."""
+        if rung.name in self._auth_warned:
+            return
+        self._auth_warned.add(rung.name)
+        if os.getenv("GITHUB_ACTIONS"):
+            label = rung.label or rung.name
+            print(f"::warning title=LLM provider auth failed::{label} authentication failed (401/403): {exc}")
+
+    # ---------------------------------------------------------------- errors
+
+    @staticmethod
+    def _unwrap_retry(exc: BaseException) -> BaseException:
+        """The real error behind tenacity's RetryError. See llm_budget.unwrap_retry."""
+        return unwrap_retry(exc)
 
     @classmethod
     def _status_code(cls, exception: BaseException) -> int:
@@ -301,8 +408,10 @@ class LLMClient:
         error_msg = str(exception).lower()
         return "invalid api key" in error_msg or "unauthorized" in error_msg or "forbidden" in error_msg
 
+    # ---------------------------------------------------------------- transports
+
     @retry(
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=llm_backoff,
         stop=stop_after_attempt(3),
         retry=lambda retry_state: (
             LLMClient._is_transient_error(retry_state.outcome.exception())
@@ -357,10 +466,10 @@ class LLMClient:
             }
 
         # Route through budget + coalescing
-        return await self._budget.run(_do_groq_call, messages, model)
+        return await self._budget_for(self._rung("groq")).run(_do_groq_call, messages, model)
 
     @retry(
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=llm_backoff,
         stop=stop_after_attempt(3),
         retry=lambda retry_state: (
             LLMClient._is_transient_error(retry_state.outcome.exception())
@@ -379,13 +488,218 @@ class LLMClient:
         """Make a chat completion request to Cerebras."""
         if not self.cerebras_client:
             raise LLMError("Cerebras client not initialized")
-        kwargs = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
-        if response_format:
-            kwargs["response_format"] = response_format
-        response = await self.cerebras_client.chat.completions.create(**kwargs)
-        return {
-            "choices": [{"message": {"content": response.choices[0].message.content}}]
-        }
+
+        # Now counted. This rung previously spent against nothing, which made a
+        # Cerebras-only day uncountable and its traffic uncapped.
+        async def _do_cerebras_call():
+            kwargs = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
+            if response_format:
+                kwargs["response_format"] = response_format
+            response = await self.cerebras_client.chat.completions.create(**kwargs)
+            return {
+                "choices": [{"message": {"content": response.choices[0].message.content}}]
+            }
+
+        return await self._budget_for(self._rung("cerebras")).run(_do_cerebras_call, messages, model)
+
+    @retry(
+        wait=llm_backoff,
+        stop=stop_after_attempt(3),
+        retry=lambda retry_state: (
+            LLMClient._is_transient_error(retry_state.outcome.exception())
+            if retry_state.outcome and retry_state.outcome.exception()
+            else False
+        ),
+    )
+    async def _chat_completion_openrouter(
+        self,
+        rung: LLMRung,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 500,
+        temperature: float = 0.3,
+        response_format: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Make a chat completion request to an OpenRouter rung, over plain httpx.
+
+        Raw httpx rather than a new SDK dependency, for one concrete reason: Retry-After.
+        The backoff in llm_budget is only as good as the header it can read, and a
+        vendored second implementation of the same HTTP client is the wrong place to
+        discover that a provider wants something other than exponential backoff.
+        """
+        if not self._openrouter_key:
+            raise LLMError("OpenRouter client not initialized")
+        if self._openrouter_http is None:
+            import httpx
+
+            self._openrouter_http = httpx.AsyncClient(
+                base_url=self.settings.openrouter_base_url,
+                timeout=self.settings.openrouter_timeout,
+                headers={"Authorization": f"Bearer {self._openrouter_key}"},
+            )
+
+        async def _do_openrouter_call():
+            payload: Dict[str, Any] = {
+                "model": rung.model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            if response_format:
+                payload["response_format"] = response_format
+            response = await self._openrouter_http.post("/chat/completions", json=payload)
+            response.raise_for_status()
+            body = response.json()
+            content = (body.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            if not content.strip():
+                # A 200 with no content is not a completion, it is a model that spent
+                # the budget on reasoning tokens and said nothing. Treating it as success
+                # would hand the caller an empty caption and hide the rung; the free
+                # reasoning models do this reliably at small max_tokens.
+                raise LLMError(f"{rung.model} returned an empty completion")
+            return {"choices": [{"message": {"content": content}}]}
+
+        return await self._budget_for(rung).run(_do_openrouter_call, messages, rung.model)
+
+    # ---------------------------------------------------------------- the walk
+
+    async def _dispatch(
+        self,
+        rung: LLMRung,
+        messages: List[Dict[str, str]],
+        *,
+        max_tokens: int,
+        temperature: float,
+        response_format: Optional[Dict[str, str]] = None,
+        reasoning_effort: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """One completion from one rung, however that rung is reached."""
+        if rung.method == "groq":
+            return await self._chat_completion_groq(
+                model_for(rung, self.settings), messages,
+                max_tokens=max_tokens, temperature=temperature, response_format=response_format,
+                reasoning_effort=reasoning_effort,
+            )
+        if rung.method == "cerebras":
+            return await self._chat_completion_cerebras(
+                model_for(rung, self.settings), messages,
+                max_tokens=max_tokens, temperature=temperature, response_format=response_format,
+            )
+        return await self._chat_completion_openrouter(
+            rung, messages,
+            max_tokens=max_tokens, temperature=temperature, response_format=response_format,
+        )
+
+    async def _walk(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        max_tokens: int,
+        temperature: float,
+        response_format: Optional[Dict[str, str]] = None,
+        accept: Optional[Callable[[str], Any]] = None,
+        reasoning_effort: Optional[str] = None,
+    ) -> Optional[Tuple[str, Any]]:
+        """Try the roster in order and return (rung name, accepted value), or None.
+
+        None and LLMError mean two different things, and the difference is the whole
+        reason this returns an Optional instead of just raising:
+
+        * None -- nothing is left to try, and nothing that failed is going to come back
+          on its own. A rejected key, an unconfigured provider, a caption the validator
+          refused. The caller degrades (0.5, no caption) because there is no point
+          retrying within the run.
+        * LLMError -- a rung hit a rate limit or a 5xx and burned its retries. That is
+          the *opposite* situation: the provider is fine and busy, so a caller that
+          answers 0.5 for every article in the batch has turned a transient upstream
+          blip into a day of fabricated neutrality that no error ever surfaces. This
+          propagates so the run fails visibly and the workflow retries it.
+
+        `accept` turns raw content into the value the caller wants and returns None to
+        reject it and fall through -- a caption that fails the paraphrase check, a
+        relevance score that will not parse. A rejection does NOT demote the rung: bad
+        output on one article says nothing about the next one, and demoting on it would
+        let a single malformed response walk the whole batch off the primary provider.
+
+        Every other failure does demote, because by the time it reaches here the rung has
+        already retried and the roster has somewhere better to send the work.
+        """
+        from src.utils.ingest_stats import STATS
+
+        rungs = self._candidates()
+        self._last_walk_error = None
+        if not rungs:
+            return None
+        transient = False
+        # The last transient failure, so the LLMError raised at the bottom of the
+        # walk is a report of what actually went wrong rather than a shrug. A bare
+        # raise here drops the chain, and the chain is the only place the 429
+        # still exists: by the time a rate limit reaches this point it has been
+        # through the retry decorator, so the live exception is tenacity's
+        # RetryError and the status code lives two links down. Without `from e`,
+        # is_rate_limited() and is_out_of_credit() both answer False on a real
+        # provider limit, and the runner cannot tell "you are rate limited" from
+        # "this is a bug". Measured 2026-10-03; the old hand-written chain had the
+        # `from e`, and replacing it with the walk dropped it.
+        last_transient: Optional[BaseException] = None
+
+        for rung in rungs:
+            try:
+                result = await self._dispatch(
+                    rung, messages,
+                    max_tokens=max_tokens, temperature=temperature, response_format=response_format,
+                    reasoning_effort=reasoning_effort,
+                )
+            except BudgetExhausted as e:
+                logger.warning("%s budget exhausted: %s", rung.name, e)
+                STATS.record(rung.name, "budget_skipped")
+                self._demote(rung, f"budget exhausted ({e})")
+                continue
+            except Exception as e:
+                inner = self._unwrap_retry(e)
+                if self._is_auth_error(inner):
+                    self._warn_auth_once(rung, inner)
+                    self._demote(rung, "auth rejected (401/403)")
+                elif self._is_transient_error(inner):
+                    # The case that used to end the request on the spot: a 429 that
+                    # survived its retries raised "No LLM provider available" without
+                    # looking at the rest of the roster. On a shared free pool that was
+                    # every single request.
+                    logger.warning("%s exhausted its retries, falling through: %s", rung.name, e)
+                    STATS.record(rung.name, "retries_exhausted")
+                    self._demote(rung, "retries exhausted")
+                    transient = True
+                    last_transient = e
+                else:
+                    logger.warning("%s failed, falling through: %s", rung.name, e)
+                    self._demote(rung, f"{type(inner).__name__}: {inner}"[:120])
+                # Remembered even when the failure is not transient. A caller with
+                # no degradation to fall back on -- chat_completion -- has to raise,
+                # and a bare raise reports "nothing worked" without saying what. An
+                # out-of-credit 402 arrives on this path: not transient, so it never
+                # sets `transient`, so the walk ends in None, and a $0 rule that
+                # cannot see the 402 cannot enforce itself.
+                last_transient = last_transient or e
+                continue
+
+            content = result["choices"][0]["message"]["content"]
+            if accept is None:
+                self._pinned = rung.name
+                return rung.name, content
+
+            try:
+                value = accept(content)
+            except Exception as exc:  # noqa: BLE001 - unusable output is a rejection, not a crash
+                logger.warning("%s output unusable: %s", rung.name, exc)
+                value = None
+            if value is not None:
+                self._pinned = rung.name
+                return rung.name, value
+            logger.warning("%s output rejected by the caller, falling through", rung.name)
+
+        self._last_walk_error = last_transient
+        if transient:
+            raise LLMError("No LLM provider available") from last_transient
+        return None
 
     async def generate_caption(
         self,
@@ -435,67 +749,28 @@ OUTPUT: Just the post text, nothing else."""
         # Source texts for validation (from key_facts and story_title)
         source_texts = [story_title] + key_facts
 
-        # Try Groq first
-        if self.groq_client:
-            try:
-                result = await self._chat_completion_groq(
-                    self.settings.groq_model,
-                    messages,
-                    max_tokens=300,
-                    temperature=0.2,
-                )
-                caption = result["choices"][0]["message"]["content"].strip()
-                is_valid, error = validate_caption(caption, platform, source_texts)
-                if is_valid:
-                    return caption
-                logger.warning("Groq caption validation failed: %s", error)
-            except BudgetExhausted as e:
-                logger.warning("Groq budget exhausted: %s", e)
-            except Exception as e:
-                # If it's a transient error (including RetryError wrapping one), re-raise
-                from tenacity import RetryError
-                if isinstance(e, RetryError):
-                    if e.last_attempt:
-                        exc = e.last_attempt.exception()
-                        if exc and self._is_transient_error(exc):
-                            raise LLMError("No LLM provider available")
-                elif self._is_transient_error(e):
-                    raise LLMError("No LLM provider available")
-                # P0-5: Handle auth failures uniformly - fall through to Cerebras
-                if self._is_auth_error(e) and not self._groq_auth_warned:
-                    import os
-                    if os.getenv("GITHUB_ACTIONS"):
-                        print(f"::warning title=LLM provider auth failed::Groq authentication failed (401/403): {e}")
-                    self._groq_auth_warned = True
-                logger.warning("Groq failed: %s", e)
+        def _accept_caption(content: str) -> Optional[str]:
+            caption = (content or "").strip()
+            is_valid, error = validate_caption(caption, platform, source_texts)
+            if not is_valid:
+                logger.warning("Caption validation failed: %s", error)
+                return None
+            return caption
 
-        # Fallback to Cerebras
-        if self.cerebras_client:
-            try:
-                result = await self._chat_completion_cerebras(
-                    self.settings.cerebras_model,
-                    messages,
-                    max_tokens=300,
-                    temperature=0.2,
-                )
-                caption = result["choices"][0]["message"]["content"].strip()
-                is_valid, error = validate_caption(caption, platform, source_texts)
-                if is_valid:
-                    return caption
-                logger.warning("Cerebras caption validation failed: %s", error)
-            except Exception as e:
-                if self._is_auth_error(e) and not self._cerebras_auth_warned:
-                    import os
-                    if os.getenv("GITHUB_ACTIONS"):
-                        print(f"::warning title=LLM provider auth failed::Cerebras authentication failed (401/403): {e}")
-                    self._cerebras_auth_warned = True
-                logger.warning("Cerebras failed: %s", e)
-
-        # Budget exhausted and no Cerebras fallback - record skip
-        if not self.cerebras_client:
-            from src.utils.ingest_stats import STATS
-            STATS.record("groq", "budget_skipped")
-        return None
+        try:
+            walked = await self._walk(
+                messages,
+                max_tokens=300,
+                temperature=0.2,
+                accept=_accept_caption,
+            )
+        except LLMError:
+            # A rate-limited roster is worth failing the run over; see _walk.
+            raise
+        if walked is None:
+            logger.warning("No LLM provider produced a valid caption")
+            return None
+        return walked[1]
 
     async def classify_relevance(
         self,
@@ -520,63 +795,27 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
 
         response_format = {"type": "json_object"}
 
-        if self.groq_client:
-            try:
-                result = await self._chat_completion_groq(
-                    self.settings.groq_model,
-                    messages,
-                    max_tokens=100,
-                    temperature=0.1,
-                    response_format=response_format,
-                )
-                content = result["choices"][0]["message"]["content"]
-                data = self._parse_json_response(content)
-                return float(data.get("score", 0))
-            except BudgetExhausted as e:
-                logger.warning("Groq budget exhausted: %s", e)
-            except (json.JSONDecodeError, KeyError, ValueError) as e:
-                logger.warning("classify_relevance Groq parse failed: %s", e)
-            except Exception as e:
-                # If it's a transient error (including RetryError wrapping one), re-raise
-                from tenacity import RetryError
-                if isinstance(e, RetryError):
-                    if e.last_attempt and self._is_transient_error(e.last_attempt.exception()):
-                        raise LLMError("No LLM provider available")
-                elif self._is_transient_error(e):
-                    raise LLMError("No LLM provider available")
-                # P0-5: Handle auth failures uniformly - fall through to Cerebras
-                if self._is_auth_error(e) and not self._groq_auth_warned:
-                    import os
-                    if os.getenv("GITHUB_ACTIONS"):
-                        print(f"::warning title=LLM provider auth failed::Groq authentication failed (401/403): {e}")
-                    self._groq_auth_warned = True
-                logger.warning("classify_relevance Groq failed: %s", e)
+        def _accept_score(content: str) -> Optional[float]:
+            data = self._parse_json_response(content)
+            return float(data.get("score", 0))
 
-        if self.cerebras_client:
-            try:
-                result = await self._chat_completion_cerebras(
-                    self.settings.cerebras_model,
-                    messages,
-                    max_tokens=100,
-                    temperature=0.1,
-                    response_format=response_format,
-                )
-                content = result["choices"][0]["message"]["content"]
-                data = self._parse_json_response(content)
-                return float(data.get("score", 0))
-            except Exception as e:
-                if self._is_auth_error(e) and not self._cerebras_auth_warned:
-                    import os
-                    if os.getenv("GITHUB_ACTIONS"):
-                        print(f"::warning title=LLM provider auth failed::Cerebras authentication failed (401/403): {e}")
-                    self._cerebras_auth_warned = True
-                logger.warning("classify_relevance Cerebras failed: %s", e)
-
-        # Budget exhausted and no Cerebras fallback - record skip
-        if not self.cerebras_client:
-            from src.utils.ingest_stats import STATS
-            STATS.record("groq", "budget_skipped")
-        return 0.5  # Default neutral
+        try:
+            walked = await self._walk(
+                messages,
+                max_tokens=100,
+                temperature=0.1,
+                response_format=response_format,
+                accept=_accept_score,
+            )
+        except LLMError:
+            # A rate-limited roster is worth failing the run over; see _walk. Returning
+            # the neutral 0.5 here instead would rate every article in the batch as
+            # unremarkable and report success.
+            raise
+        if walked is None:
+            logger.warning("No LLM provider returned a relevance score")
+            return 0.5  # Default neutral
+        return walked[1]
 
     def _parse_json_response(self, content: str) -> Dict[str, Any]:
         """Parse JSON response, handling fenced code blocks if present."""
@@ -592,6 +831,9 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
             await self.groq_client.close()
         if self.cerebras_client:
             await self.cerebras_client.close()
+        if self._openrouter_http is not None:
+            await self._openrouter_http.aclose()
+            self._openrouter_http = None
 
     async def chat_completion(
         self,
@@ -611,70 +853,21 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
         a reasoning model needs it: without it the call can return an empty
         message while still being counted against every budget.
         """
-        # The last provider failure, so the LLMError raised at the bottom is a report
-        # of what actually went wrong rather than a shrug. Without it a 429 that
-        # exhausted the internal retries is indistinguishable from a missing key.
-        last_error: Optional[BaseException] = None
+        walked = await self._walk(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+        )
+        if walked is None:
+            raise LLMError("No LLM provider available") from self._last_walk_error
+        return {"choices": [{"message": {"content": walked[1]}}]}
 
-        # Try Groq first
-        if self.groq_client:
-            try:
-                return await self._chat_completion_groq(
-                    self.settings.groq_model,
-                    messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    reasoning_effort=reasoning_effort,
-                )
-            except BudgetExhausted as e:
-                last_error = e
-                logger.warning(f"Groq budget exhausted: {e}")
-            except Exception as e:
-                last_error = e
-                # Transient, and the decorator has already spent its three attempts.
-                # Raise LLMError rather than re-raising: what the decorator hands back
-                # is tenacity's RetryError, which says nothing a caller can act on, and
-                # summarize_story/classify_relevance already report this case this way.
-                # `from e` is what keeps the 429 legible -- a bare `raise` here loses it
-                # entirely, and is_rate_limited/is_out_of_credit/_retry_after_seconds all
-                # read the cause chain. This branch was unreachable before _status_code
-                # learned to unwrap RetryError (RetryError is not an httpx error, so the
-                # old isinstance check said "not transient" and it fell through to
-                # Cerebras); making it reachable is the point of the unwrap, and leaking
-                # RetryError out of a public method is the cost that has to be paid.
-                if self._is_transient_error(e):
-                    raise LLMError("No LLM provider available") from e
-                # P0-5: Handle auth failures uniformly - fall through to Cerebras
-                if self._is_auth_error(e) and not self._groq_auth_warned:
-                    import os
-                    if os.getenv("GITHUB_ACTIONS"):
-                        print(f"::warning title=LLM provider auth failed::Groq authentication failed (401/403): {e}")
-                    self._groq_auth_warned = True
-                logger.warning(f"Groq chat completion failed: {e}")
+    def roster_report(self) -> str:
+        """The order actually in force, for a log line at the top of a run."""
+        from src.shared.llm_roster import roster_summary
 
-        # Fallback to Cerebras
-        if self.cerebras_client:
-            try:
-                return await self._chat_completion_cerebras(
-                    self.settings.cerebras_model,
-                    messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
-            except Exception as e:
-                last_error = e
-                # Same reasoning as the Groq branch above: LLMError with the cause
-                # attached, never a bare re-raise of the retry wrapper.
-                if self._is_transient_error(e):
-                    raise LLMError("No LLM provider available") from e
-                if self._is_auth_error(e) and not self._cerebras_auth_warned:
-                    import os
-                    if os.getenv("GITHUB_ACTIONS"):
-                        print(f"::warning title=LLM provider auth failed::Cerebras authentication failed (401/403): {e}")
-                    self._cerebras_auth_warned = True
-                logger.warning(f"Cerebras chat completion failed: {e}")
-
-        raise LLMError("No LLM provider available") from last_error
+        return roster_summary(self.settings)
 
 
 # Singleton instance

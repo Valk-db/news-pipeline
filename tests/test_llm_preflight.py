@@ -3,12 +3,15 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.shared.llm import LLMError
 from src.shared.llm_preflight import (
     _detail,
     _reason,
+    _report_free_roster,
     run_llm_preflight,
     run_llm_preflight_or_fail,
 )
+from src.shared.llm_roster import RosterCheck
 
 OK_RESPONSE = {"choices": [{"message": {"content": "pong"}}]}
 
@@ -242,3 +245,111 @@ def test_reason_402_is_billing_not_auth():
         "out of credit / billing dead — treated as unavailable"
     )
     assert "auth" not in _detail({"status": 402, "ok": False, "error": "payment required"})
+
+
+class TestPingBudget:
+    """A preflight probe must be a question the model cannot answer with nothing.
+
+    Live 2026-10-03: with a bare "ping" prompt the healthy free model
+    nvidia/nemotron-3-super-120b-a12b:free returned no content 3/4 times at 64 tokens
+    and 2/4 at 200, and the preflight printed `DEGRADED 500 ... returned an empty
+    completion` -- indistinguishable from a real outage, so an operator would have gone
+    to debug a provider that was fine. Raising max_tokens did not fix it; changing the
+    prompt did. The assertion below is on that mechanism, so the prompt cannot go back to
+    a content-free utterance.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_model_that_answers_only_a_directive_prompt_is_not_reported_unhealthy(self):
+        from src.shared.llm_roster import ROSTER
+
+        free = next(r for r in ROSTER if r.name == "openrouter:nemotron")
+        asked = {}
+
+        async def reasoning_model(rung, messages, max_tokens, temperature, response_format=None):
+            # Emits nothing for a content-free utterance, exactly as the live model did.
+            asked["prompt"] = messages[0]["content"]
+            asked["max_tokens"] = max_tokens
+            if len(messages[0]["content"].split()) < 3:
+                raise LLMError(f"{free.model} returned an empty completion")
+            return OK_RESPONSE
+
+        client = _client()
+        client._chat_completion_openrouter = AsyncMock(side_effect=reasoning_model)
+        results = await _run(
+            client,
+            MagicMock(openrouter_api_key="k", groq_api_key="gsk_test", cerebras_api_key=""),
+        )
+
+        assert results["openrouter:nemotron"] == {"status": 200, "ok": True}, asked
+        assert asked["max_tokens"] >= 32, "the free tiers need room for reasoning before the answer"
+
+
+class TestFreeRosterAdvisory:
+    """The roster check is an ADVISORY: it prints, it never decides, and it never raises."""
+
+    @pytest.mark.asyncio
+    async def test_silent_when_no_openrouter_key(self, monkeypatch, capsys):
+        """No key => no free ids configured => nothing to check, and nothing to say."""
+        monkeypatch.setattr("src.shared.llm_preflight.get_settings", lambda: MagicMock(openrouter_api_key=""))
+        with patch(
+            "src.shared.llm_roster.fetch_free_model_ids",
+            new_callable=AsyncMock,
+        ) as mock_fetch:
+            await _report_free_roster()
+        mock_fetch.assert_not_awaited()  # must not hit the network for a deployment that has no key
+        assert "Free-model roster" not in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_stale_id_prints_advisory_and_does_not_raise(self, monkeypatch, capsys):
+        monkeypatch.setattr("src.shared.llm_preflight.get_settings", lambda: MagicMock(openrouter_api_key="k"))
+        check = RosterCheck(
+            ok=False,
+            configured=("google/gemma-4-26b-a4b-it:free",),
+            listed=17,
+            stale=("google/gemma-4-26b-a4b-it:free",),
+        )
+        with patch("src.shared.llm_preflight.check_free_model_roster", new_callable=AsyncMock, return_value=check):
+            await _report_free_roster()
+
+        out = capsys.readouterr().out
+        assert "ADVISORY" in out
+        assert "STALE" in out
+        assert "google/gemma-4-26b-a4b-it:free" in out
+
+    @pytest.mark.asyncio
+    async def test_healthy_roster_prints_ok(self, monkeypatch, capsys):
+        monkeypatch.setattr("src.shared.llm_preflight.get_settings", lambda: MagicMock(openrouter_api_key="k"))
+        check = RosterCheck(ok=True, configured=("nvidia/nemotron-3-super-120b-a12b:free",), listed=17, stale=())
+        with patch("src.shared.llm_preflight.check_free_model_roster", new_callable=AsyncMock, return_value=check):
+            await _report_free_roster()
+        assert "Free-model roster: OK" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_a_check_that_raises_is_swallowed(self, monkeypatch, capsys):
+        """An advisory that can fail a run is not an advisory."""
+        monkeypatch.setattr("src.shared.llm_preflight.get_settings", lambda: MagicMock(openrouter_api_key="k"))
+        with patch(
+            "src.shared.llm_preflight.check_free_model_roster",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("network down"),
+        ):
+            await _report_free_roster()  # must not raise
+        assert "check failed (network down)" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_stale_roster_does_not_fail_an_otherwise_healthy_run(self, monkeypatch, capsys):
+        """The whole point of advisory: a retired id degrades, it does not exit 1."""
+        monkeypatch.setattr("src.shared.llm_preflight.get_settings", lambda: MagicMock(openrouter_api_key="k"))
+        stale = RosterCheck(ok=False, configured=("x:free",), listed=1, stale=("x:free",))
+        with patch("src.shared.llm_preflight.run_llm_preflight", new_callable=AsyncMock) as mock_preflight:
+            mock_preflight.return_value = {"groq": {"status": 200, "ok": True}}
+            with patch(
+                "src.shared.llm_preflight.check_free_model_roster",
+                new_callable=AsyncMock,
+                return_value=stale,
+            ):
+                await run_llm_preflight_or_fail()  # must not raise SystemExit
+        out = capsys.readouterr().out
+        assert "ADVISORY" in out
+        assert "continuing on Groq" in out

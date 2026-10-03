@@ -27,7 +27,6 @@ from src.enrichment.snippet_extractor import (
 )
 from src.reliability.fact_checker import extract_claims_from_article
 from src.shared.llm import LLMClient
-from src.shared.llm_budget import RequestBudget
 
 FENCED_ARRAY = """```json
 [
@@ -121,9 +120,22 @@ def make_client(transport: FakeTransport) -> tuple[LLMClient, RecordingSpend]:
     )
     client.groq_client = transport
     client.cerebras_client = None
-    client._budget = RequestBudget(900)
-    client._groq_auth_warned = False
-    client._cerebras_auth_warned = False
+    client._openrouter_key = None
+    client._openrouter_http = None
+    # Every piece of instance state LLMClient.__init__ sets, restated here because
+    # this fixture builds the client with __new__ and hand-writes the fields. A
+    # field added to __init__ and not to this fixture does not fail a test -- it
+    # fails *inside* the code under test with an AttributeError, which is exactly
+    # what happened when the per-rung budget dict and the sticky demotion set
+    # arrived: 13 tests here went red reporting "extraction returned nothing" for
+    # a reason that had nothing to do with extraction. Check this list against
+    # __init__ when the client grows a field.
+    client._budgets: dict = {}
+    client._minute_limiters: dict = {}
+    client._pinned = None
+    client._last_walk_error = None
+    client._demoted: set = set()
+    client._auth_warned: set = set()
     return client, SPEND
 
 
@@ -262,12 +274,20 @@ async def test_unparseable_content_is_distinguishable_too(caplog):
 async def test_provider_error_logs_the_real_exception_type(caplog):
     """Where the real exception is logged depends on LLMClient's own policy.
 
-    `chat_completion` deliberately does NOT let a non-transient, non-auth provider
-    error escape: it warns at llm.py:471, tries Cerebras, and only raises
-    `LLMError("No LLM provider available")` if there is no fallback (llm.py:474-493).
-    So the extractor sees LLMError. Asserting RuntimeError here would have been
-    asserting a behaviour LLMClient is built to prevent; the point of the test is that
-    the underlying cause is still visible in the log, one layer up.
+    `chat_completion` deliberately does NOT let a provider error escape as itself: it
+    warns, walks the rest of the roster, and only raises
+    `LLMError("No LLM provider available")` when there is nothing left to try. So the
+    extractor sees LLMError. Asserting RuntimeError here would have been asserting a
+    behaviour LLMClient is built to prevent; the point of the test is that the
+    underlying cause is still visible in the log, one layer up.
+
+    Updated when the three hand-written chains became one roster walk. The warning
+    text moved from "Groq chat completion failed" to "<rung> failed, falling through"
+    -- a different sentence, the same fact. What strengthened rather than weakened:
+    a 429 is now classified transient, so the walk raises LLMError with the
+    RetryError chained onto it, where the old code warned and fell through. The
+    extractor's fail-soft handler is unchanged, so `out == []` still holds, and the
+    status code is still readable off the raised error by LLMClient.is_rate_limited.
     """
     transport = FakeTransport(raise_exc=RuntimeError("429 rate limit exceeded"))
     stats = RecordingStats()
@@ -282,7 +302,7 @@ async def test_provider_error_logs_the_real_exception_type(caplog):
     assert ("snippets", "extraction_failed:error_LLMError", 1) in stats.events
     assert "LLMError" in caplog.text
     # the real cause is preserved, at the layer that caught it
-    assert "Groq chat completion failed" in caplog.text
+    assert "groq failed, falling through" in caplog.text
     assert "429 rate limit exceeded" in caplog.text
 
 
