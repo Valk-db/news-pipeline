@@ -257,6 +257,31 @@ class TestSiblingsAreReported:
 
 
 class TestTheOutputDoesNotOverclaim:
+    async def test_a_withdrawal_prints_the_cache_window_not_just_success(self) -> None:
+        """The success line and the caveat have to travel together.
+
+        Claiming the story is off every public surface without saying five read
+        APIs are cached for half an hour is the one way this tool can be worse
+        than the raw SQL it replaces: the operator stops looking.
+        """
+        session = FakeSession(make_story(Story.Status.QUEUED))
+        result = await mod.unpublish_story(
+            str(STORY_ID), reason="r", actor="tyler", session=session
+        )
+        printed = "\n".join(result.summary_lines())
+        assert "withdrawn from every public surface" in printed
+        assert mod._CACHED_READS in printed
+        assert "until the edge notices" in printed
+
+    async def test_the_cache_caveat_survives_a_forced_withdrawal_too(self) -> None:
+        session = FakeSession(make_story(Story.Status.BLOCKED))
+        result = await mod.unpublish_story(
+            str(STORY_ID), reason="r", actor="tyler", force=True, session=session
+        )
+        printed = "\n".join(result.summary_lines())
+        assert mod._CACHED_READS in printed
+        assert "without withdrawing anything" in printed
+
     def test_the_cache_window_is_stated_with_real_numbers(self) -> None:
         from curation_ui.cache import MAP_READ_S_MAXAGE
 
