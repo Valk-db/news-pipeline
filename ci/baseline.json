@@ -1,0 +1,42 @@
+{
+  "_README": [
+    "Committed floors for the two CI ratchets in ci/gates.py. Every number here",
+    "was measured on the commit named below, on a clean checkout of that commit,",
+    "with the tool versions named below. Changing one of these numbers is a",
+    "deliberate act: re-measure it, and say in the batch report what you measured",
+    "and why. The gate treats an unreadable or keyless baseline as a FAILURE.",
+    "",
+    "To re-measure (from a clean checkout of the commit you are measuring):",
+    "  python -m ci.gates mypy --floor 999999   # prints the real count in its detail line",
+    "  python -m ci.gates tests --floor 999999  # ditto for collected tests"
+  ],
+
+  "measured_on": {
+    "commit": "73789dc01c9acf3530d72b87e0c515bbda4cd337",
+    "commit_subject": "fix: normalize DB URL driver in scripts (psycopg2 import error in CI)",
+    "measured_on_date": "2026-10-03",
+    "measured_by": "batch drift-ci, on a detached clean worktree at that commit",
+    "why_this_commit": "The floor must be MAIN's number. A floor measured on a feature branch arrives already-broken if another batch merges off main first, because main's count can only have gone up in the meantime."
+  },
+
+  "mypy_error_floor": 445,
+  "mypy_targets": ["src/", "curation_ui/"],
+  "mypy_version": "2.3.1",
+  "mypy_measurement": {
+    "command": "python -m mypy src/ curation_ui/",
+    "raw_summary": "Found 445 errors in 58 files (checked 87 source files)",
+    "note": "445 is the count under mypy 2.3.1, which is what uv.lock pins and therefore what CI runs. The same command under mypy 2.4.0 reports 443, so a floor taken from the wrong mypy would be 2 too low and the ratchet would be red on arrival. The version is pinned here and checked at run time for exactly that reason.",
+    "why_a_ratchet_and_not_a_pass_fail_gate": "445 pre-existing errors make a pass/fail gate unreachable, and `continue-on-error: true` with nothing comparing counts is not a soft gate, it is no gate. The ratchet fails when the count RISES and passes when it falls, which is enforceable today and gets stricter as the backlog clears."
+  },
+
+  "pytest_collected_floor": 1899,
+  "pytest_collect_paths": ["tests/"],
+  "pytest_measurement": {
+    "command": "python -m pytest tests/ --collect-only -q",
+    "raw_summary": "1899 tests collected in 6.41s",
+    "pytest_version": "9.1.1",
+    "why_collected_and_not_executed": "The floor is on COLLECTED tests, not executed ones. `--collect-only` needs no database and returned the identical 1899 with and without DATABASE_URL set, so the number is environment-independent and a batch on this VM can reproduce it. An executed-count floor cannot be: on this VM main executes 1899 tests as 1851 passed / 14 failed / 34 skipped, and in CI with Postgres those 14 run and pass, so the executed count is a property of the machine, not of the suite. A floor on a number that changes with the environment is a flaky gate.",
+    "executed_count_on_this_vm_at_the_measured_commit": "14 failed, 1851 passed, 34 skipped (all 14 failures are langdetect/translation tests, pre-existing on the measured commit)",
+    "known_limitation": "A collected-count floor does not notice a test that is renamed, or marked `skip` instead of deleted, or moved behind a collection error in a file that still collects. It catches the case the backlog names - a test silently disappearing - and nothing more. The gate also fails when the count cannot be parsed at all, which is the shape a collection error takes when it takes out every test in the suite."
+  }
+}

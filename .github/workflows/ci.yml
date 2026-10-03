@@ -39,9 +39,19 @@ jobs:
       - name: Run ruff
         run: uv run ruff check .
 
-      - name: Run mypy
-        run: uv run mypy src/ curation_ui/
-        continue-on-error: true  # Allow pre-existing errors, only fail on new ones
+      # Ratchet, not a soft gate. `continue-on-error: true` with nothing comparing
+      # counts is a no-op that prints a wall of pre-existing errors and moves on;
+      # there is no code anywhere that compares error counts. ci/gates.py fails
+      # when the count RISES above the floor and passes when it falls. The floor
+      # lives in ci/baseline.json, was measured on main (not on a branch), and a
+      # run whose output cannot be parsed is a FAILURE, never an implicit pass.
+      - name: Ratchet mypy error count
+        run: uv run python -m ci.gates mypy
+
+      # Floor on collected tests so a test cannot silently disappear. Both floors
+      # and their provenance live in the same committed file.
+      - name: Check collected test count
+        run: uv run python -m ci.gates tests
 
   test:
     runs-on: ubuntu-24.04
