@@ -29,7 +29,6 @@ one window per run is the right tradeoff for a scheduled job.
 
 import asyncio
 import csv
-import gzip
 import io
 import logging
 import os
@@ -45,12 +44,10 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from src.schema.models import RawArticle, SourceTier
-from src.shared.config import get_settings
 from src.utils.ingest_stats import STATS
 from src.utils.trafilatura_extract import (
     compute_content_hash,
     compute_url_hash,
-    extract_article,
 )
 
 logger = logging.getLogger(__name__)

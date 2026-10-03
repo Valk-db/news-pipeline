@@ -6,7 +6,6 @@ The pipeline subprocess is mocked; nothing here runs the real pipeline.
 
 import importlib.util
 import os
-import sys
 
 import pytest
 

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from src.verification.topics import (
+    TOPIC_KEYWORDS,
     _match_topic_groups,
     _resolve_entity_names,
     assign_story_topic_groups,
@@ -138,6 +139,107 @@ def test_match_topic_groups_empty_entities():
     assert len(matches) == 1
     assert matches[0][0] == "Geopolitics"
     assert matches[0][1] == 10
+
+
+def test_match_topic_groups_diplomacy():
+    """A multilateral-institution story lands in Diplomacy & Multilateral.
+
+    This is the layer the GDELT measurement says was unlabelled: COOPERATION
+    + VERBAL + DISAPPROVE is 77.77% of measured GDELT events and 8.54% of the
+    pipeline articles the GDELT batch attributed, so before this group existed
+    these stories could only ever be Geopolitics.
+    """
+    matches = _match_topic_groups(["United Nations", "NATO", "European Union"])
+
+    diplomacy = [m for m in matches if m[0] == "Diplomacy & Multilateral"]
+    assert len(diplomacy) == 1
+    assert diplomacy[0][1] == 55  # 10 + 3 keywords * 15
+
+
+def test_match_topic_groups_humanitarian():
+    """A humanitarian-response story lands in Humanitarian Aid & Development."""
+    matches = _match_topic_groups(["UNHCR", "World Food Programme"])
+
+    aid = [m for m in matches if m[0] == "Humanitarian Aid & Development"]
+    assert len(aid) == 1
+    # "unhcr", "world food programme" and the substring "world food program"
+    # are three separate entries in the list, so the count is 3.
+    assert aid[0][1] == 55
+
+
+def test_new_groups_reject_unmeasured_bare_words():
+    """The bare words measured as false-positive sources on real entity names
+    are not in either new keyword list.
+
+    Measured on the 3,916 distinct entity names resolved from 1,669 dev
+    stories: "aid" matched "ali al-zaidi", "maidenhead" and "medicaid";
+    "relief" matched "fashion for relief" and "ksrelief"; "ocha" matched
+    "bochasanwasi akshar"; bare "development" matched "webgis dashboard
+    development". Those names are NER output from real articles, not typos.
+    """
+    keywords = {k.lower() for kws in TOPIC_KEYWORDS.values() for k in kws}
+    for word in ("aid", "relief", "ocha", "development"):
+        assert word not in keywords, f"{word!r} is a measured false-positive source"
+    # ...and the safe phrase forms are present instead.
+    aid_keywords = {k.lower() for k in TOPIC_KEYWORDS["Humanitarian Aid & Development"]}
+    assert "aid package" in aid_keywords
+    assert "relief effort" in aid_keywords
+
+
+def test_process_only_entities_still_fall_back():
+    """Documented ceiling: the matcher reads entity names, so a story whose
+    entities are places and people keeps the Geopolitics fallback even when
+    its subject is diplomacy.
+
+    Measured: accord, envoy, delegation, negotiation, peace talks, state
+    visit, diplomat, security council, resolution and arms control each score
+    zero against every entity name resolved from dev. The fix is upstream
+    (entity extraction that names the process), not more keywords.
+    """
+    matches = _match_topic_groups(["Caracas", "Venezuela", "Maria Corina Machado"])
+
+    assert matches == [("Geopolitics", 10)]
+    assert all(m[0] != "Diplomacy & Multilateral" for m in matches)
+
+
+def test_every_topic_group_name_is_seeded():
+    """Every name in TOPIC_KEYWORDS has a row to land in.
+
+    assign_story_topic_groups() skips a match whose topic_groups row is
+    missing, logging a warning and writing nothing -- so a keyword group with
+    no seed row and no migration row is a group that computes and then quietly
+    does nothing. This asserts the keyword side and the seed side agree.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    seed_path = Path(__file__).resolve().parents[1] / "scripts" / "seed_topic_groups.py"
+    spec = importlib.util.spec_from_file_location("seed_topic_groups", seed_path)
+    seed = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(seed)
+
+    seeded = {name for name, _ in seed.TOPIC_GROUPS}
+    assert set(TOPIC_KEYWORDS) == seeded
+
+
+def test_new_group_names_present_in_migration():
+    """The two new groups ship as SQL rows, not only as seed-script entries.
+
+    A deployed database is migrated, not seeded, so the migration is the path
+    that matters in production; this guards against the migration and the
+    keyword list drifting apart.
+    """
+    from pathlib import Path
+
+    migrations = sorted(
+        (Path(__file__).resolve().parents[1] / "supabase" / "migrations").glob("*.sql")
+    )
+    sql = "\n".join(
+        p.read_text(encoding="utf-8") for p in migrations if "topic_groups" in p.read_text(encoding="utf-8")
+    )
+    for name in ("Diplomacy & Multilateral", "Humanitarian Aid & Development"):
+        assert f"'{name}'" in sql, f"{name} has no migration inserting its topic_groups row"
+    assert "ON CONFLICT DO NOTHING" in sql
 
 
 @pytest.mark.asyncio

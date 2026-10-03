@@ -26,6 +26,8 @@ TOPIC_GROUPS = [
     ("Environment & Disaster", None),
     ("Technology", None),
     ("Domestic Politics (US)", None),
+    ("Diplomacy & Multilateral", "Geopolitics"),
+    ("Humanitarian Aid & Development", None),
 ]
 
 

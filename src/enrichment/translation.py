@@ -22,9 +22,10 @@ Deliberately NOT used, with evidence:
   - LibreTranslate public instances: translate.argosopentech.com drops the
     connection through our proxy; libretranslate.com returns 403. Unreliable.
 
-MyMemory politeness: 1s between requests, 4500-char chunks (under the 5000
-per-request cap), and a daily char budget of 45000 (under the 50000 anonymous
-limit) counted in budget_counters. That counter was a JSON file under var/, a
+MyMemory politeness: 1s between requests, 480-char chunks (the anonymous tier
+rejects anything over 500 characters, measured 2026-10-02 -- see
+MYMEMORY_MAX_CHUNK), and a daily char budget of 45000 counted in
+budget_counters. That counter was a JSON file under var/, a
 gitignored directory on an ephemeral runner, so the cap was really per run and
 two runs a day could send twice the anonymous limit. Translation never breaks
 ingest: failures are caught, reported, and the article persists untranslated.
@@ -53,8 +54,27 @@ logger = logging.getLogger(__name__)
 
 MYMEMORY_URL = "https://api.mymemory.translated.net/get"
 MYMEMORY_DAILY_CHAR_BUDGET = 45000
-MYMEMORY_MAX_CHUNK = 4500
+# Measured 2026-10-02, not assumed: MyMemory's anonymous tier rejects any query
+# over 500 CHARACTERS with HTTP 200 + responseStatus 403 and
+# responseData.translatedText = "QUERY LENGTH LIMIT EXCEEDED. MAX ALLOWED QUERY
+# : 500 CHARS". 499 and 500 chars pass, 501 fails, every length above that fails
+# identically. This used to be 4500 ("under the 5000 per-request cap"), which is
+# wrong by 9x, and the consequence was silent: the error string is a perfectly
+# well-formed non-empty translation, so it was stored in body_text_en and NER
+# then dutifully extracted ORG "CHARS" and PERSON "MAX" from it. Chunks are now
+# under the real limit, and a response that looks like a rejection is refused
+# rather than stored (see _looks_like_rejection).
+MYMEMORY_MAX_CHUNK = 480
 MYMEMORY_POLITENESS_SECONDS = 1.0
+# MyMemory reports failures inside a 200 response, so the error text has to be
+# recognised rather than inferred from a status code.
+MYMEMORY_REJECTION_MARKERS = (
+    "QUERY LENGTH LIMIT EXCEEDED",
+    "MYMEMORY WARNING",
+    "YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY",
+    "INVALID LANGUAGE PAIR",
+    "PLEASE SELECT TWO DISTINCT LANGUAGES",
+)
 # Bodies are front-loaded in news copy; translating the whole archive would
 # blow the free daily budget on one long article. The cap is reported, not hidden.
 BODY_TRANSLATE_CHAR_CAP = 4000
@@ -140,6 +160,20 @@ def detect_language(text: str | None) -> str | None:
         return None
 
 
+def _looks_like_rejection(translated: str, status: object) -> bool:
+    """True when MyMemory's 200 response is actually a refusal.
+
+    Two independent signals, because either alone is insufficient: the quota
+    rejection comes back with responseStatus 200 and only the marker text, and
+    the length rejection comes back with status 403 whose translatedText is the
+    complaint. Trusting a status code alone is how the length bug hid.
+    """
+    if status not in (None, 200, "200"):
+        return True
+    upper = translated.upper()
+    return any(marker in upper for marker in MYMEMORY_REJECTION_MARKERS)
+
+
 class MyMemoryBackend:
     """Keyless MyMemory translation. Free, no account, no opt-ins.
 
@@ -179,6 +213,15 @@ class MyMemoryBackend:
         if not translated:
             raise TranslationUnavailable(
                 f"MyMemory returned no translation: {str(payload)[:160]}"
+            )
+        # A rejection arrives as HTTP 200 with the complaint in the body, so
+        # responseStatus has to be checked and so does the text itself: storing
+        # the complaint as the translation is worse than having none, because
+        # downstream stages then treat an error string as an article.
+        status = payload.get("responseStatus")
+        if _looks_like_rejection(translated, status):
+            raise TranslationUnavailable(
+                f"MyMemory rejected the request (status={status}): {translated[:120]}"
             )
         return translated
 
@@ -443,4 +486,76 @@ def translate_articles(articles: list, backend: TranslationBackend | None = None
             summary["english"] += 1
         else:
             summary["unknown"] += 1
+    return summary
+
+
+def refresh_entities_after_translation(
+    articles: list, top_n: int | None = None
+) -> dict:
+    """Re-run entity extraction on the English text a translation just produced.
+
+    Why this exists, measured rather than argued: ingestion extracts entities
+    from the ORIGINAL body (src/ingestion/rss.py, in process_feed_entry), and
+    extraction runs en_core_web_sm, which is an English model. A French,
+    Turkish or Chinese article therefore arrives with an empty entity map and
+    stays inert -- no canonical entity, no story merge, no corroboration, no
+    topic label -- no matter how good the translation is.
+
+    Measured on the dev database (2026-10-02, read-only, replaying this exact
+    function over real rows): 52 raw_articles have detected_language <> 'en',
+    49 of them with a body_text_en. Over the 40 most recently fetched of
+    those, 14 carried no entities at all, and after this step 0 do;
+    275 entity mentions were found and the per-article count rose on 21 of
+    40. The clearest cases are the un.org French feed (10 -> 25 mentions,
+    gaining NATO, the UN, the Economic Community of West African States) and
+    the GDELT Chinese rows (0 -> 31). The cost of having no entities is
+    specific rather than cosmetic: build_stories() builds a story's canonical
+    entities from the unit's representative article, and a unit with no
+    entities creates a story with empty primary_entities, which build_stories()
+    then skips when matching later units. Such a story is one unit forever, so
+    the corroboration gate (>=2 units, >=2 owners) can never be evaluated for
+    it. Reporting units themselves are not affected -- those cluster by
+    shingle containment on body_text, not by entities -- so the loss is at the
+    story layer and above, which is where the gate lives.
+
+    One honest caveat from that measurement: 31 of the 49 translated dev rows
+    stored MyMemory's rejection string ("QUERY LENGTH LIMIT EXCEEDED...")
+    as their body_text_en, from before the chunk-size fix landed. Extracting
+    over that junk produces ORG "CHARS" / PERSON "MAX" noise, so a share of
+    the "gains" above are noise, not signal. This function faithfully reuses
+    whatever body_text_en holds; it cannot repair a poisoned translation, and
+    it deliberately does not skip those rows silently -- a row with a wrong
+    translation is a data bug to fix at the translation, not here.
+
+    So translation without this step bought a translated string and nothing
+    else. This runs the same extractor over body_text_en, in the same thread-
+    offloaded way, and only for articles that actually have translated text --
+    an English article's entities were already extracted from English text and
+    are left exactly as they are.
+
+    Returns a summary, never raises: an article that fails extraction keeps the
+    entities it had.
+    """
+    from src.utils.ner import extract_entities_top_n
+
+    summary = {"eligible": 0, "refreshed": 0, "entities_found": 0, "errors": 0}
+    for article in articles:
+        lang = getattr(article, "detected_language", None)
+        body_en = getattr(article, "body_text_en", None)
+        if not lang or lang == "en" or not body_en:
+            continue
+        summary["eligible"] += 1
+        try:
+            entities = extract_entities_top_n(body_en, top_n=top_n)
+        except Exception as exc:  # never break ingest on NER
+            summary["errors"] += 1
+            logger.warning(
+                "entity refresh failed for %s: %s", getattr(article, "url", "?"), exc
+            )
+            continue
+        if not entities:
+            continue
+        article.entities = entities
+        summary["refreshed"] += 1
+        summary["entities_found"] += sum(len(v) for v in entities.values())
     return summary

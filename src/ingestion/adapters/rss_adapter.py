@@ -16,16 +16,28 @@ from sqlalchemy import select
 class RssAdapter:
     """Adapter for RSS ingestion sources."""
 
-    def __init__(self, tier: SourceTier):
+    def __init__(self, tier: SourceTier, domains: set[str] | None = None):
         self.tier = tier
+        # Registry domains this adapter is allowed to sweep. None means every
+        # enabled source in the tier; a set narrows the sweep to those domains,
+        # which is what `--sources <domain>` needs. Without the narrowing a
+        # domain-filtered run still polled the whole tier.
+        self.domains = domains
         self.name = f"rss_{tier.name.lower()}"
         self._last_fetch_articles: list = []
         self._last_fetch_stats: dict = {}
         self._fetch_called = False
 
+    def sources(self) -> dict:
+        """The registry sources this adapter is allowed to sweep."""
+        enabled = get_enabled_sources_by_tier(self.tier)
+        if self.domains is None:
+            return enabled
+        return {d: cfg for d, cfg in enabled.items() if d in self.domains}
+
     async def fetch(self) -> list:
         """Fetch articles from RSS feeds for the configured tier."""
-        sources = get_enabled_sources_by_tier(self.tier)
+        sources = self.sources()
 
         # P1-1: Fetch known URL hashes from DB to dedup before extraction
         known_url_hashes = set()
@@ -59,12 +71,12 @@ class RssAdapter:
             return SourceHealth(
                 status="down",
                 detail="No fetch performed yet",
-                failed=[s.domain for s in get_enabled_sources_by_tier(self.tier).values()],
+                failed=[s.domain for s in self.sources().values()],
             )
 
         # Check per-domain success for tier-1
         if self.tier == SourceTier.TIER1:
-            sources = get_enabled_sources_by_tier(SourceTier.TIER1)
+            sources = self.sources()
             failed_domains = []
             for domain in sources.keys():
                 ok_count = self._last_fetch_stats.get(f"{domain}.ok", 0)

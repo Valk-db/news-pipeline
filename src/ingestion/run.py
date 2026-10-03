@@ -34,6 +34,12 @@ from src.shared.database import get_session
 from src.schema.models import RawArticle, StatusLog
 from src.shared.config import get_settings
 from src.utils.ingest_stats import STATS
+from src.ingestion.feed_health import (
+    DEAD_AFTER_EMPTY_POLLS,
+    load_active,
+    report_dead_feeds,
+    save_active,
+)
 import json
 
 
@@ -279,26 +285,46 @@ def build_adapters(
     candidates = candidates + opt_in
 
     selected = []
+    matched_entries = set()
     for adapter in candidates:
         if adapter.name.lower() in wanted:
             selected.append(adapter)
+            matched_entries.add(adapter.name.lower())
             continue
         # SensorAdapter reports per feed, so accept the sensor domain names too.
         if adapter.name == "sensors" and (
             {d for d in get_enabled_sensor_feeds()} & wanted
         ):
             selected.append(adapter)
+            matched_entries |= {d for d in get_enabled_sensor_feeds()} & wanted
             continue
         if isinstance(adapter, RssAdapter):
             from src.ingestion.source_registry import get_enabled_sources_by_tier
             domains = set(get_enabled_sources_by_tier(adapter.tier))
-            if domains & wanted:
-                selected.append(adapter)
+            hit = domains & wanted
+            if hit:
+                # Narrow the adapter to just the requested domains. Selecting
+                # the whole tier adapter for one named domain made
+                # `--sources allafrica.com` poll every tier-2 feed, which reads
+                # as a filtered run in the log but is not one.
+                selected.append(adapter if hit == domains else RssAdapter(adapter.tier, domains=hit))
+                matched_entries |= hit
                 continue
 
-    matched = {a.name.lower() for a in selected}
-    for entry in sorted(wanted):
-        if entry not in matched and entry not in get_enabled_sensor_feeds():
+    # An unmatched --sources entry is only a mystery if it names nothing at all.
+    # A name the registry knows but has enabled=False is a different failure: the
+    # operator asked for a real source and will get silence, so say which it was
+    # and why it is off rather than reporting it as unknown.
+    from src.ingestion.source_registry import ALL_SOURCES
+
+    known_disabled = {d for d, cfg in ALL_SOURCES.items() if not cfg.enabled}
+    for entry in sorted(wanted - matched_entries):
+        if entry in known_disabled:
+            print(
+                f"WARNING: --sources entry {entry!r} is a known source but is "
+                f"disabled in the registry; it will not be polled"
+            )
+        else:
             print(f"WARNING: --sources entry {entry!r} matched no adapter")
 
     return selected
@@ -318,6 +344,9 @@ async def run_ingestion(
     """
     settings = get_settings()
     STATS.reset()
+    # Load the cross-run feed health so the empty-streak counters survive restarts,
+    # and so a feed that died yesterday is still reported dead today.
+    feed_health = load_active()
     results = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "phases": {},
@@ -458,6 +487,38 @@ async def run_ingestion(
                 print(f"  Translation step failed, continuing untranslated: {exc}")
                 translation_summary = {"backend": "error", "total": len(new_articles), "error": str(exc)}
 
+        # Phase 1.6: Re-extract entities from the translated English text.
+        # Ingestion extracts entities from the ORIGINAL body, and the extractor
+        # is an English model, so a non-English article arrived with no entities
+        # and stayed inert downstream no matter how well it translated: an
+        # entity-less unit builds a story with empty primary_entities, which
+        # build_stories() then skips when matching later units, so that story is
+        # one unit forever and the corroboration gate can never be evaluated for
+        # it. This runs the same extractor over body_text_en so a translated
+        # article is actually mergeable and gateable. Same contract as
+        # translation: it never breaks ingest.
+        print("Phase 1.6: Re-extracting entities from translated text...")
+        entity_summary = {"eligible": 0, "refreshed": 0, "entities_found": 0, "errors": 0}
+        if new_articles:
+            try:
+                from src.enrichment.translation import refresh_entities_after_translation
+
+                entity_summary = await asyncio.to_thread(
+                    refresh_entities_after_translation,
+                    new_articles,
+                    settings.top_n_entities,
+                )
+                print(
+                    f"  Translated articles re-extracted: {entity_summary['refreshed']}"
+                    f"/{entity_summary['eligible']} eligible, "
+                    f"{entity_summary['entities_found']} entities, "
+                    f"{entity_summary['errors']} errors"
+                )
+            except Exception as exc:
+                print(f"  Entity refresh failed, keeping original entities: {exc}")
+                entity_summary = {"eligible": 0, "refreshed": 0, "entities_found": 0,
+                                  "errors": 0, "error": str(exc)}
+
         # Get GDELT health from adapter for tier1_critical_down check
         gdelt_health = adapter_health.get("gdelt", SourceHealth(
             status="down",
@@ -476,6 +537,33 @@ async def run_ingestion(
         # Add extraction stats to ingestion results
         stats_snapshot = STATS.snapshot()
 
+        # Persist what this run saw before anything can return early, and state
+        # the dead feeds out loud: a feed that yielded nothing three runs running
+        # is a coverage hole, and the only way it stays invisible is if nobody
+        # says it. The counters count entries fetched, not articles stored, so a
+        # feed whose article pages all 403 does not look healthy.
+        feed_health_saved = save_active()
+        dead_feeds = report_dead_feeds(feed_health)
+        for dead in dead_feeds:
+            logger.warning(
+                "Feed DEAD (no entries in %d consecutive polls): %s (%s)",
+                dead["consecutive_empty"], dead["url"], dead["last_detail"],
+            )
+        if dead_feeds:
+            print(
+                f"  Feed health: {len(dead_feeds)} DEAD feed(s) "
+                f"(no entries in {DEAD_AFTER_EMPTY_POLLS}+ consecutive polls) - "
+                f"see `python scripts/report_feed_health.py`"
+            )
+            for dead in dead_feeds:
+                print(
+                    f"    DEAD {dead['url']} "
+                    f"[{dead['source_key']}] last: {dead['last_detail']} "
+                    f"(empty {dead['consecutive_empty']}x, {dead['polls']} polls total)"
+                )
+        else:
+            print("  Feed health: no dead feeds")
+
         results["phases"]["ingestion"] = {
             "rss": rss_tier1_count + rss_tier2_count,
             "gdelt": gdelt_count,
@@ -487,6 +575,7 @@ async def run_ingestion(
             "url_duplicates_skipped": url_dup,
             "content_duplicates_skipped": content_dup,
             "translation": translation_summary,
+            "entity_refresh": entity_summary,
             "gdelt_health": {
                 "succeeded": gdelt_health.succeeded,
                 "failed": gdelt_health.failed,
@@ -494,6 +583,15 @@ async def run_ingestion(
             },
             "tier1_critical_down": tier1_critical_down,
             "extraction_stats": stats_snapshot,
+            "feed_health": {
+                "state_saved": feed_health_saved,
+                "dead_feeds": dead_feeds,
+                "empty_feeds": [
+                    {"url": f.url, "source_key": f.source_key,
+                     "consecutive_empty": f.consecutive_empty, "last_detail": f.last_detail}
+                    for f in sorted(feed_health.empty(), key=lambda x: x.url)
+                ],
+            },
             "adapter_health": {
                 name: {
                     "status": health.status,

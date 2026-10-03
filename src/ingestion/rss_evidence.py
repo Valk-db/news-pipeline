@@ -55,11 +55,13 @@ Feeds dropped on purpose, so the absence is not mistaken for an oversight:
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
 import os
 import re
 import sys
+import zlib
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -319,6 +321,27 @@ def backoff_seconds(consecutive_failures: int) -> int:
     return min(BACKOFF_BASE_SECONDS * (2 ** exponent), BACKOFF_MAX_SECONDS)
 
 
+GZIP_MAGIC = b"\x1f\x8b"
+
+
+def maybe_decompress(body: bytes) -> bytes:
+    """Return the decompressed bytes when body is gzip, otherwise body itself.
+
+    Decided on the magic bytes rather than on the Content-Encoding header,
+    because urllib strips nothing and a header can disagree with the payload.
+    A body that starts with the gzip magic but does not inflate is returned
+    unchanged: a broken body is the parser's problem to report, not this
+    function's to swallow.
+    """
+    if not body.startswith(GZIP_MAGIC):
+        return body
+    try:
+        return gzip.decompress(body)
+    except (OSError, EOFError, zlib.error):
+        logger.warning("Feed body claimed gzip but would not inflate; passing it through unchanged")
+        return body
+
+
 def fetch_feed_polite(
     feed_url: str,
     state: FeedState | None = None,
@@ -332,12 +355,19 @@ def fetch_feed_polite(
 
     urllib only, on purpose: this process egresses through a proxy that
     http.client cannot speak to, and urllib is what honors it.
+
+    A gzip-encoded 200 body is decompressed here rather than handed back as
+    magic bytes. urllib does not negotiate content-encoding by itself, and
+    CDNs in front of these feeds compress anyway, so a raw gzip body used to
+    reach parse_feed_xml, which logged "not well-formed" and reported the feed
+    as empty -- indistinguishable from a dead feed. Verified on
+    news.un.org and middleeasteye.net on 2026-10-02.
     """
     headers = build_request_headers(state)
     request = Request(feed_url, headers=headers, method="GET")
     try:
         with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as resp:
-            body = resp.read() or b""
+            body = maybe_decompress(resp.read() or b"")
             return int(resp.status), body, resp.headers.get("ETag"), resp.headers.get("Last-Modified"), None
     except HTTPError as exc:
         # A 304 arrives as HTTPError, not a success: urllib treats any status
