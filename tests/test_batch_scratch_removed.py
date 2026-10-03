@@ -126,9 +126,12 @@ class TestNoDanglingReferences:
     def test_mentions_are_history_references_only(self) -> None:
         offenders: list[str] = []
         for path in self._tracked_text_files():
-            if path.name == ".gitignore":
-                # The .gitignore entries are the rules themselves; the comment
-                # above them carries the reason.
+            # .gitignore holds the rules themselves (the reason is in the comment
+            # above them), and this module holds the registry of what was
+            # removed. A registry is not a dangling reference. Both exclusions
+            # are by construction, named here, and both would have to be
+            # re-justified to widen.
+            if path.name in {".gitignore"} or path.resolve() == Path(__file__).resolve():
                 continue
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
             for number, line in enumerate(lines, start=1):
