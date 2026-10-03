@@ -122,7 +122,6 @@ def _make_story(
 PUBLIC_ROUTES = [
     "/map",
     "/api/globe/events",
-    "/api/globe/stats",
     "/api/globe/layers",
     "/api/map/replay",
     "/api/map/freshness",
