@@ -31,7 +31,7 @@
     "why_a_ratchet_and_not_a_pass_fail_gate": "445 pre-existing errors make a pass/fail gate unreachable, and `continue-on-error: true` with nothing comparing counts is not a soft gate, it is no gate. The ratchet fails when the count RISES and passes when it falls, which is enforceable today and gets stricter as the backlog clears.",
     "raw_summary_at_73789dc": "Found 445 errors in 58 files (checked 87 source files)"
   },
-  "pytest_collected_floor": 2098,
+  "pytest_collected_floor": 2117,
   "pytest_collect_paths": [
     "tests/"
   ],
@@ -52,6 +52,7 @@
     "why_collected_and_not_executed": "The floor is on COLLECTED tests, not executed ones. `--collect-only` needs no database and returned the identical 1899 with and without DATABASE_URL set, so the number is environment-independent and a batch on this VM can reproduce it. An executed-count floor cannot be: on this VM main executes 1899 tests as 1851 passed / 14 failed / 34 skipped, and in CI with Postgres those 14 run and pass, so the executed count is a property of the machine, not of the suite. A floor on a number that changes with the environment is a flaky gate.",
     "executed_count_on_this_vm_at_the_measured_commit": "14 failed, 1851 passed, 34 skipped (all 14 failures are langdetect/translation tests, pre-existing on the measured commit)",
     "known_limitation": "A collected-count floor does not notice a test that is renamed, or marked `skip` instead of deleted, or moved behind a collection error in a file that still collects. It catches the case the backlog names - a test silently disappearing - and nothing more. The gate also fails when the count cannot be parsed at all, which is the shape a collection error takes when it takes out every test in the suite.",
-    "raw_summary_after_drift_transparency_merge": "2098 tests collected in 2.9s"
+    "raw_summary_after_drift_transparency_merge": "2098 tests collected in 2.9s",
+    "raw_summary_after_public_status_gate_merge": "2117 tests collected (raised 2090 -> 2098 -> 2117 as batches landed)"
   }
 }
