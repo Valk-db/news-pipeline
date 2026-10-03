@@ -13,6 +13,7 @@ sitting in MAP_READ_PATHS by accident.
 """
 
 import json
+import uuid
 
 import pytest
 from starlette.applications import Starlette
@@ -101,7 +102,6 @@ class TestAllowlistAgainstTheRealRouteTable:
         assert MAP_READ_PATHS == frozenset({
             "/api/globe/events",
             "/api/globe/layers",
-            "/api/globe/stats",
             "/api/map/freshness",
             "/api/map/replay",
             "/api/map/stories",
@@ -260,10 +260,10 @@ class TestEndToEndThroughTheRealApp:
         return TestClient(app)
 
     def test_database_outage_is_not_cached(self, client):
-        """The real app, no mocking. /api/globe/stats returns 200 with
+        """The real app, no mocking. /api/globe/events returns 200 with
         {"error": ...} here, which is exactly the shape that must not reach a
         shared cache."""
-        response = client.get("/api/globe/stats")
+        response = client.get("/api/globe/events")
         assert response.status_code == 200
         assert response.json()["error"]
         assert "Cache-Control" not in response.headers
@@ -288,53 +288,48 @@ class TestEndToEndThroughTheRealApp:
         assert response.status_code == 401
         assert "public" not in response.headers.get("Cache-Control", "")
 
-    def test_real_stats_payload_is_cached(self, monkeypatch):
+    def test_real_layers_payload_is_cached(self, monkeypatch):
         """The positive case through the real route, the real handler and the
         real response, with only the database replaced. Without this the class
         above would pass even if the middleware never attached a header at all,
         which is the shape a broken registration takes.
+
+        /api/globe/stats used to be the path here and was removed on 2026-10-03,
+        so the positive case moved to a route that still exists rather than
+        going away with it.
         """
         import contextlib
-        from datetime import datetime, timezone
 
         import curation_ui.globe as globe_module
 
-        class _Row:
-            """The handler reads row[0].value for event types and row[0] for
-            layer names, so the stand-in needs both shapes."""
+        class _Layer:
+            """The handler reads these attributes by name off the ORM row."""
 
-            def __init__(self, value):
-                self.value = value
+            def __init__(self):
+                self.id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+                self.name = "conflict"
+                self.description = "Armed conflicts"
+                self.filter_criteria = {"event_type": ["conflict"]}
+                self.style = {"color": "#e74c3c"}
+                self.is_default = True
+                self.is_visible = True
+                self.min_zoom = 1.0
+                self.max_zoom = 10.0
+                self.color = "#e74c3c"
 
         class _Result:
-            def __init__(self, scalar=None, rows=(), first=()):
-                self._scalar = scalar
+            def __init__(self, rows):
                 self._rows = rows
-                self._first = first
 
-            def scalar(self):
-                return self._scalar
+            def scalars(self):
+                return self
 
             def all(self):
                 return self._rows
 
-            def first(self):
-                return self._first
-
         class _Session:
-            def __init__(self):
-                self._answers = [
-                    _Result(scalar=2),
-                    _Result(rows=[(_Row("PROTEST"), 2)]),
-                    _Result(rows=[("world", 2)]),
-                    _Result(first=(
-                        datetime(2026, 10, 1, tzinfo=timezone.utc),
-                        datetime(2026, 10, 2, tzinfo=timezone.utc),
-                    )),
-                ]
-
             async def execute(self, _statement):
-                return self._answers.pop(0)
+                return _Result([_Layer()])
 
         @contextlib.asynccontextmanager
         async def fake_session():
@@ -343,13 +338,27 @@ class TestEndToEndThroughTheRealApp:
         monkeypatch.setattr(globe_module, "check_database_public", lambda request: (True, ""))
         monkeypatch.setattr(globe_module, "get_session", fake_session)
 
-        response = TestClient(app).get("/api/globe/stats")
+        response = TestClient(app).get("/api/globe/layers")
         assert response.status_code == 200
         payload = response.json()
-        assert payload["total_events"] == 2
-        assert payload["by_type"] == {"PROTEST": 2}
+        assert payload["count"] == 1
+        assert payload["layers"][0]["name"] == "conflict"
         assert response.headers["Cache-Control"] == map_read_cache_control()
         assert "Content-Security-Policy" in response.headers
+
+    def test_the_removed_globe_stats_path_is_not_cached(self, client):
+        """A deleted route must not linger in the allowlist.
+
+        /api/globe/stats was removed on 2026-10-03. Its 404 is not cacheable
+        anyway, but a stale entry would be a path in MAP_READ_PATHS that no
+        longer resolves, which is exactly the drift
+        test_allowlist_paths_all_exist_in_the_app exists to catch -- pinned here
+        from the other direction so the deletion cannot be half-reverted.
+        """
+        assert "/api/globe/stats" not in MAP_READ_PATHS
+        response = client.get("/api/globe/stats")
+        assert response.status_code == 404
+        assert "Cache-Control" not in response.headers
 
 
 class TestOnABareApp:
@@ -358,14 +367,14 @@ class TestOnABareApp:
 
     def build(self):
         application = Starlette(routes=[
-            Route("/api/globe/stats", _ok, methods=["GET"]),
+            Route("/api/globe/events", _ok, methods=["GET"]),
             Route("/api/map/replay", _boom, methods=["GET"]),
         ])
         application.add_middleware(BaseHTTPMiddleware, dispatch=map_read_cache)
         return TestClient(application)
 
     def test_ok_route_is_cached(self):
-        response = self.build().get("/api/globe/stats")
+        response = self.build().get("/api/globe/events")
         assert response.headers["Cache-Control"] == map_read_cache_control()
         assert response.json() == {"ok": True}
 

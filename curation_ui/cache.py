@@ -43,7 +43,6 @@ MAP_READ_PATHS = frozenset(
     {
         "/api/globe/events",
         "/api/globe/layers",
-        "/api/globe/stats",
         "/api/map/freshness",
         "/api/map/replay",
         "/api/map/stories",

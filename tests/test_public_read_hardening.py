@@ -181,7 +181,6 @@ def _add_units(db_session, story, count, day):
 ANONYMOUS_SURFACES = [
     "/map",
     "/api/globe/events",
-    "/api/globe/stats",
     "/api/globe/layers",
     "/api/map/freshness",
     "/api/map/stories",
