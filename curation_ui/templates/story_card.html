@@ -48,6 +48,13 @@
           </li>
         {% endfor %}
       </ul>
+    {% elif item.counts_pending %}
+      {# Sources are attached but the story's tier counters are still zero, so
+         saying "no tiered source" here would be false: the sources below carry
+         their own tier. #}
+      <ul class="story-tiers">
+        <li class="story-tier tier-unknown">Tiers not tallied yet</li>
+      </ul>
     {% endif %}
 
     <p class="story-corroboration {{ 'is-corroborated' if item.verification.corroborated }}">
@@ -91,7 +98,13 @@
     </div>
 
     <footer class="story-card-footer">
-      <span class="story-status">{{ item.verification.label }}</span>
+      <span class="story-status">
+        {%- if item.counts_pending -%}
+          Tally pending
+        {%- else -%}
+          {{ item.verification.label }}
+        {%- endif -%}
+      </span>
       <span class="story-freshness">arrived {{ item.freshness }}</span>
       <span class="story-more">All details &#8594;</span>
     </footer>

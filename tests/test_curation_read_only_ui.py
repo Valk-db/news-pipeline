@@ -304,6 +304,97 @@ class TestEveryCardIsIdentifiable:
         assert "This summary must not become the headline." not in card
 
     @pytest.mark.asyncio
+    async def test_a_story_whose_tally_has_not_landed_does_not_deny_its_own_sources(
+        self, app_with_db, db_session
+    ):
+        """A card must not list outlets and then say there are none.
+
+        Reproduces the state measured on dev: a story created seconds ago has a
+        representative article attached but its tier counters and owner count
+        are still zero, because the pipeline writes those a stage later.
+        """
+        story, _ = _make_story(
+            db_session,
+            title="A story the pipeline has not tallied yet",
+            domain="cjme.com",
+            tier=SourceTier.TIER2,
+            tier_counts=(0, 0, 0, 0),
+            owners=0,
+        )
+        await db_session.commit()
+
+        card = _cards(TestClient(app_with_db).get("/", auth=AUTH).text)[0]
+        assert "cjme.com" in card, "the source should still be listed"
+        assert "no outlet has been attributed" not in card
+        assert "No sources have been attributed" not in card
+        assert "Tally pending" in card
+        assert "Tiers not tallied yet" in card
+        assert "Not tallied yet" in card
+
+    @pytest.mark.asyncio
+    async def test_the_detail_view_also_refuses_to_deny_its_own_sources(
+        self, app_with_db, db_session
+    ):
+        story, _ = _make_story(
+            db_session,
+            title="Untallied story on the detail page",
+            domain="cjme.com",
+            tier=SourceTier.TIER2,
+            tier_counts=(0, 0, 0, 0),
+            owners=0,
+        )
+        await db_session.commit()
+
+        page = _detail_html(app_with_db, story)
+        assert "cjme.com" in page
+        assert "no outlet has been attributed" not in page
+        assert "No sources have been attributed" not in page
+        assert page.count("Tally pending") >= 2
+
+    @pytest.mark.asyncio
+    async def test_a_story_with_no_source_at_all_still_says_it_has_none(
+        self, app_with_db, db_session
+    ):
+        """The honest "nothing here" wording is kept for a story with no sources."""
+        story = Story(
+            id=uuid.uuid4(),
+            day=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc),
+            status=Story.Status.PENDING,
+            primary_entities=[],
+            tier1_unit_count=0,
+            tier2_unit_count=0,
+            tier3_unit_count=0,
+            tier4_unit_count=0,
+            distinct_owners=0,
+        )
+        db_session.add(story)
+        await db_session.commit()
+
+        card = _cards(TestClient(app_with_db).get("/", auth=AUTH).text)[0]
+        assert "No source has been attributed to this story yet" in card
+        assert "Tally pending" not in card
+
+    @pytest.mark.asyncio
+    async def test_a_tallied_story_still_uses_the_filters_own_vocabulary(
+        self, app_with_db, db_session
+    ):
+        """The pending wording is an exception for the untallied, not a replacement
+        for the badge vocabulary the T1..T4 filters are selected with."""
+        _make_story(
+            db_session,
+            title="A properly tallied story",
+            tier_counts=(2, 0, 0, 0),
+            owners=2,
+        )
+        await db_session.commit()
+
+        card = _cards(TestClient(app_with_db).get("/", auth=AUTH).text)[0]
+        assert "Corroborated · 2 outlets" in card
+        assert "Tally pending" not in card
+        assert "Tier 1" in card and "2 outlets" in card
+
+    @pytest.mark.asyncio
     async def test_every_attributed_source_is_listed_on_the_card(self, app_with_db, db_session):
         """Not a sample, not a count: the outlets themselves, under the headline."""
         story, _ = _make_story(
@@ -517,6 +608,55 @@ class TestTheSentencesReadAsEnglish:
     def test_tier_sentence_handles_a_story_with_no_tiered_source(self):
         assert "No sources have been attributed" in curation._tier_sentence(
             {"t1": 0, "t2": 0, "t3": 0, "t4": 0}
+        )
+
+    # ------------------------------------------------------------------
+    # The tally lags the sources. The pipeline attaches a source article to a
+    # story a stage before it writes tier1..4_unit_count and distinct_owners,
+    # so a story that is minutes old has real, listed sources and a tally of
+    # zero. Measured on dev on 2026-10-02: 50 of 50 live queue cards were in
+    # that state, and the page said "no outlet has been attributed to this
+    # story yet" directly above a list of outlets. These tests pin the fix.
+    # ------------------------------------------------------------------
+
+    def test_counts_pending_needs_both_a_source_and_an_untallied_story(self):
+        tallied = {"outlets": 2, "tier_mix": {"t1": 2}, "corroborated": True}
+        assert curation._counts_pending(tallied, 2) is False
+        assert curation._counts_pending(tallied, 0) is False
+        blank = {"outlets": 0, "tier_mix": {"t1": 0, "t2": 0, "t3": 0, "t4": 0},
+                 "corroborated": False}
+        assert curation._counts_pending(blank, 0) is False
+        assert curation._counts_pending(blank, 1) is True
+        # A story with a source and a tally is not pending, even when the tally
+        # is only a tier-3 source: that is a real verdict, not a missing one.
+        untiered = {"outlets": 1, "tier_mix": {"t1": 0, "t2": 0, "t3": 1, "t4": 0},
+                    "corroborated": False}
+        assert curation._counts_pending(untiered, 1) is False
+
+    def test_a_pending_tally_never_claims_there_is_no_source(self):
+        blank = {"outlets": 0, "tier_mix": {"t1": 0, "t2": 0, "t3": 0, "t4": 0},
+                 "corroborated": False}
+        sentence = curation._corroboration_sentence(blank, 1)
+        assert "Not tallied yet" in sentence
+        assert "1 source listed" in sentence
+        assert "no outlet has been attributed" not in sentence
+        tiers = curation._tier_sentence(blank["tier_mix"], 1)
+        assert "has not tallied this story's tiers yet" in tiers
+        assert "No sources have been attributed" not in tiers
+
+    def test_a_pending_tally_is_reported_in_the_plural_too(self):
+        blank = {"outlets": 0, "tier_mix": {"t1": 0, "t2": 0, "t3": 0, "t4": 0},
+                 "corroborated": False}
+        assert "2 sources listed" in curation._corroboration_sentence(blank, 2)
+
+    def test_a_story_with_no_source_at_all_still_says_plainly_that_it_has_none(self):
+        blank = {"outlets": 0, "tier_mix": {"t1": 0, "t2": 0, "t3": 0, "t4": 0},
+                 "corroborated": False}
+        assert curation._corroboration_sentence(blank, 0) == (
+            "Not corroborated: no outlet has been attributed to this story yet."
+        )
+        assert curation._tier_sentence(blank["tier_mix"], 0) == (
+            "No sources have been attributed to this story yet."
         )
 
     def test_a_single_outlet_is_singular(self):

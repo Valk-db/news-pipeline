@@ -48,8 +48,14 @@
                 </div>
             {% endif %}
 
-            <p class="detail-eyebrow">
-                <span class="detail-status">{{ verification.label }}</span>
+                <p class="detail-eyebrow">
+                    <span class="detail-status">
+                        {%- if counts_pending -%}
+                            Tally pending
+                        {%- else -%}
+                            {{ verification.label }}
+                        {%- endif -%}
+                    </span>
                 <span class="detail-freshness">arrived {{ freshness }}</span>
             </p>
 
@@ -98,7 +104,13 @@
                             <span class="story-tier-meaning">{{ chip.meaning }}</span>
                         </li>
                     {% else %}
-                        <li class="story-tier tier-unknown">No tiered source yet</li>
+                        <li class="story-tier tier-unknown">
+                            {%- if counts_pending -%}
+                                Tiers not tallied yet
+                            {%- else -%}
+                                No tiered source yet
+                            {%- endif -%}
+                        </li>
                     {% endfor %}
                 </ul>
 
@@ -112,7 +124,13 @@
                     <div class="detail-fact">
                         <dt>Corroboration</dt>
                         {# tier_sentence already ends in a full stop, so no dot here. #}
-                        <dd>{{ verification.label }} &mdash; {{ tier_sentence }}</dd>
+                        <dd>
+                            {%- if counts_pending -%}
+                                Tally pending &mdash; {{ tier_sentence }}
+                            {%- else -%}
+                                {{ verification.label }} &mdash; {{ tier_sentence }}
+                            {%- endif -%}
+                        </dd>
                     </div>
                     <div class="detail-fact">
                         <dt>Reporting units</dt>

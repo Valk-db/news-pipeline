@@ -101,6 +101,33 @@ def _tier_count(tier_mix: dict, tier: int) -> int:
     return int(tier_mix.get(f"t{tier}", 0) or 0)
 
 
+def _source_phrase(count: int) -> str:
+    """A count with the noun it needs: 1 source, 2 sources."""
+    return "1 source" if count == 1 else f"{count} sources"
+
+
+def _counts_pending(verification: dict, source_count: int) -> bool:
+    """True when a story has sources but the pipeline has not tallied them yet.
+
+    The corroboration verdict and the tier mix both come from the Story's own
+    counters (tier1..4_unit_count, distinct_owners), and the pipeline writes
+    those a stage after the source article is attached to the story. A story
+    that is minutes old therefore has real, listed sources and a tally of zero,
+    and the badge vocabulary then says "No outlets yet" directly above a list
+    of outlets. That is the page arguing with itself, so the UI says the tally
+    is pending instead of claiming there is nothing there.
+
+    The counters stay the source of truth for the verdict and for the filters:
+    the gate and the tier filters key off the same columns, and a card that
+    disagreed with its own filter would be the worse bug.
+    """
+    if source_count <= 0:
+        return False
+    if int(verification.get("outlets", 0) or 0) > 0:
+        return False
+    return not any(_tier_count(verification.get("tier_mix") or {}, t) for t in (1, 2, 3, 4))
+
+
 def _tier_chips(tier_mix: dict) -> list:
     """One labelled chip per tier present: {"tier": 1, "count": 2, ...}.
 
@@ -159,7 +186,7 @@ def _outlet_phrase(outlets: int) -> str:
     return "1 outlet" if outlets == 1 else f"{outlets} outlets"
 
 
-def _tier_sentence(tier_mix: dict) -> str:
+def _tier_sentence(tier_mix: dict, source_count: int = 0) -> str:
     """One sentence naming every tier present and what that tier means.
 
     Tier in words, never as a bare digit: "1 tier-1 outlet (verified editorial
@@ -168,6 +195,11 @@ def _tier_sentence(tier_mix: dict) -> str:
     """
     present = [tier for tier in (1, 2, 3, 4) if _tier_count(tier_mix, tier) > 0]
     if not present:
+        if source_count > 0:
+            return (
+                "The pipeline has not tallied this story's tiers yet, so the "
+                f"{_source_phrase(source_count)} listed below each carry their own tier."
+            )
         return "No sources have been attributed to this story yet."
 
     parts = []
@@ -180,17 +212,25 @@ def _tier_sentence(tier_mix: dict) -> str:
     return ", ".join(parts[:-1]) + " and " + parts[-1] + "."
 
 
-def _corroboration_sentence(verification: dict) -> str:
+def _corroboration_sentence(verification: dict, source_count: int = 0) -> str:
     """The badge's own verdict, restated as a sentence a person can act on.
 
     The wording follows discovery.py's _verification_badge labels so the number
-    in the badge and the sentence on the card always agree.
+    in the badge and the sentence on the card always agree, except while the
+    tally is pending (see _counts_pending), where the badge would otherwise
+    claim there are no outlets on a card that is listing them.
     """
     outlets = int(verification.get("outlets", 0) or 0)
     if verification.get("corroborated"):
         tier1 = _tier_count(verification["tier_mix"], 1)
         return f"Corroborated by {_outlet_phrase(outlets)}, {tier1} of them tier-1."
     if outlets == 0:
+        if source_count > 0:
+            return (
+                f"Not tallied yet: {_source_phrase(source_count)} listed, and the "
+                "pipeline has not counted this story's outlets, so there is no "
+                "corroboration verdict to give yet."
+            )
         return "Not corroborated: no outlet has been attributed to this story yet."
     if outlets == 1:
         return (
@@ -420,7 +460,8 @@ async def _render_stories_grid(
             # disagree with the filter that selected it.
             "verification": verification,
             "tier_chips": _tier_chips(verification["tier_mix"]),
-            "corroboration_sentence": _corroboration_sentence(verification),
+            "counts_pending": _counts_pending(verification, len(articles)),
+            "corroboration_sentence": _corroboration_sentence(verification, len(articles)),
             "freshness": _freshness(story.created_at, now),
             # Carried on the detail link so the queue survives the round trip.
             "filter_query": filter_query,
@@ -821,8 +862,9 @@ async def story_detail(
         "units": units,
         "verification": verification,
         "tier_chips": _tier_chips(verification["tier_mix"]),
-        "tier_sentence": _tier_sentence(verification["tier_mix"]),
-        "corroboration_sentence": _corroboration_sentence(verification),
+        "counts_pending": _counts_pending(verification, len(articles)),
+        "tier_sentence": _tier_sentence(verification["tier_mix"], len(articles)),
+        "corroboration_sentence": _corroboration_sentence(verification, len(articles)),
         "status_sentence": _status_sentence(story),
         "freshness": _freshness(story.created_at, datetime.now(timezone.utc)),
         "back_query": back_query,
