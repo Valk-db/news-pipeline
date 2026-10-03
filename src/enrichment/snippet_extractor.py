@@ -210,7 +210,12 @@ Only return the JSON array, no explanation. Maximum {max_snippets} snippets."""
             "snippet_type": snippet_type,
             "text": snippet_text,
             "entities": _coerce_entities(s.get("entities")),
-            "minhash_signature": shingle_text(snippet_text, k=5),
+            # shingle_text returns a Set[str], and Snippet.minhash_signature is a JSON
+            # column (models.py:516) -- so handing it the raw set makes the INSERT fail
+            # with "Object of type set is not JSON serializable". That killed every write
+            # even once the un-awaited client was fixed. sorted() keeps it deterministic,
+            # which matters because this value is a dedup input.
+            "minhash_signature": sorted(shingle_text(snippet_text, k=5)),
             "confidence": _coerce_confidence(s.get("confidence", 80)),
             "position": _coerce_position(s.get("position_estimate", 0.5)),
         })

@@ -523,3 +523,71 @@ async def test_snippet_type_outside_the_enum_is_dropped_not_raised():
             f"{s['snippet_type']!r} would raise ValueError in SnippetType() and take "
             "the whole story's persistence with it"
         )
+
+
+async def test_minhash_signature_is_json_serializable():
+    """The third defect, and the one that survives every unit test.
+
+    shingle_text returns a Set[str]; Snippet.minhash_signature is a JSON column. So the
+    extraction SUCCEEDED, returned five snippets, and the very next line -- the INSERT in
+    enrich_story_with_snippets -- died with "Object of type set is not JSON serializable".
+    The snippets table therefore stayed at zero rows for a third, independent reason even
+    after the un-awaited client was fixed. Every test up to here asserted on the returned
+    dict and never on serializability, so all of them were green.
+    """
+    import json
+
+    from src.schema.models import Snippet
+
+    transport = FakeTransport()
+    stats = RecordingStats()
+    p_client, p_stats, _, _ = attach(snippet_extractor, transport, stats)
+
+    with p_client, p_stats:
+        out = await extract_snippets_from_article(
+            article_id="a-12", story_id="s-12", text=ARTICLE, title="t"
+        )
+
+    assert out
+    for s in out:
+        json.dumps(s["minhash_signature"])  # the whole point: must not raise
+        assert isinstance(s["minhash_signature"], list)
+        assert s["minhash_signature"] == sorted(s["minhash_signature"]), (
+            "a JSON column loses set ordering; unsorted output makes dedup irreproducible"
+        )
+    # and the column really is JSON, not some type that would have accepted a set
+    assert Snippet.__table__.c.minhash_signature.type.__class__.__name__ == "JSON"
+
+
+async def test_snippet_row_round_trips_through_the_real_model():
+    """Build the actual ORM row the persistence path builds, and serialise it."""
+    import json
+
+    from src.schema.models import Snippet, Snippet as SnippetType
+
+    transport = FakeTransport()
+    stats = RecordingStats()
+    p_client, p_stats, _, _ = attach(snippet_extractor, transport, stats)
+
+    with p_client, p_stats:
+        out = await extract_snippets_from_article(
+            article_id="a-13", story_id="s-13", text=ARTICLE, title="t"
+        )
+
+    for s in out:
+        row = Snippet(
+            story_id=s["story_id"],
+            article_id=s["article_id"],
+            snippet_type=SnippetType.SnippetType(s["snippet_type"]),
+            text=s["text"],
+            entities=s["entities"],
+            minhash_signature=s["minhash_signature"],
+            confidence=s["confidence"],
+            position=s["position"],
+        )
+        # exactly what SQLAlchemy hands to the JSON serializer
+        for col in row.__table__.columns:
+            value = getattr(row, col.name)
+            if col.name == "id":
+                continue
+            json.dumps(value)
