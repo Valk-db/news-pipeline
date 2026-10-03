@@ -34,10 +34,21 @@ async def _get_stories_with_entities(
     cutoff: datetime,
     exclude_story_id=None,
 ) -> list[tuple[uuid.UUID, set[str]]]:
-    """Get QUEUED stories from lookback period with their primary_entities."""
+    """Get gate-passed stories from lookback period with their primary_entities.
+
+    Phase 2 (2026-10-03): widened from QUEUED-only to the same pool
+    PHASE2_STATUSES covers, because an arc is a claim that two stories are
+    about the same ongoing situation. A link between a PENDING story and a
+    QUEUED one is true regardless of which side the curator has already
+    approved, and restricting the peer set to QUEUED would make arcs
+    impossible while QUEUED is still empty. This does not publish anything:
+    EntityEdge rows are derived state, not public rows.
+    """
+    from src.verification.phase2 import PHASE2_STATUSES
+
     stmt = (
         select(Story)
-        .where(Story.status == Story.Status.QUEUED)
+        .where(Story.status.in_(PHASE2_STATUSES))
         .where(Story.created_at >= cutoff)
     )
     if exclude_story_id:
@@ -159,29 +170,28 @@ async def link_narrative_arcs(session: AsyncSession, story_id) -> list[dict]:
 async def link_narrative_arcs_for_recent_stories(
     session_factory, hours_back: int = 168, max_stories: int = 100,
 ) -> list[dict]:
-    """Batch narrative arc linking for recent QUEUED stories."""
-    from datetime import datetime, timezone, timedelta
+    """Batch narrative arc linking for recent gate-passed stories.
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+    Retargeted for Phase 2 (2026-10-03): the pool used to be QUEUED-only and
+    selected nothing in practice, so entity_edges was empty. PENDING stories
+    have passed the dynamic gate; public exposure stays human-gated.
+    """
+    from src.verification.phase2 import select_phase2_stories
 
     async with session_factory() as session:
-        stmt = (
-            select(Story)
-            .where(Story.status == Story.Status.QUEUED)
-            .where(Story.created_at >= cutoff)
-            .order_by(Story.created_at.desc())
-            .limit(max_stories)
+        stories = await select_phase2_stories(
+            session, hours_back=hours_back, max_stories=max_stories
         )
-        result = await session.execute(stmt)
-        stories = result.scalars().all()
 
     story_ids = [s.id for s in stories]
 
     if not story_ids:
-        logger.info("No QUEUED stories to link narrative arcs for")
+        logger.info("No gate-passed stories to link narrative arcs for")
         return []
 
-    logger.info(f"Linking narrative arcs for {len(story_ids)} QUEUED stories")
+    logger.info(
+        f"Linking narrative arcs for {len(story_ids)} gate-passed stories"
+    )
 
     results = []
     for story_id in story_ids:

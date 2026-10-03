@@ -4,18 +4,21 @@ Design rule: the harness patches the TRANSPORT, never the prompt and never the
 post-processing. ``src.enrichment.snippet_extractor.extract_snippets_from_article``
 is called verbatim, so the prompt the model sees, the truncation to 8000 chars,
 the 300-char cap, the 20-char minimum, the JSON fence fallback and the field
-defaults are all the production ones. The only thing replaced is the object the
-production function reaches for, and that object does not exist: line 42 calls
-``get_llm_client()`` without awaiting it, and line 63 uses ``llm.chat`` and
-``llm.model``, neither of which ``LLMClient`` has. The production function
-therefore returns ``[]`` for every article, every time, and the ``except
-Exception`` at line 115 logs the AttributeError and swallows it. (Reported, not
-fixed -- this batch measures.)
+defaults are all the production ones. The only thing replaced is the transport:
+``get_llm_client`` is redirected to return ``TransportShim``, which implements the
+``LLMClient`` surface production actually uses -- ``.chat_completion(...)`` and
+``._parse_json_response(...)`` (plus ``.model``) -- by funnelling into the one
+seam where the request is really made.
 
-``TransportShim`` supplies the two attributes the production code reaches for
-(``.model`` from settings, ``.chat.completions.create``) and puts the
-record-and-replay cache and the cost accounting at the single seam where the
-request is actually made. Nothing under ``src/`` is edited.
+That surface is a moving target: production used to call ``get_llm_client()``
+without awaiting it and reach for ``llm.chat``, an attribute ``LLMClient`` does not
+define, so it returned ``[]`` for every article and this harness had to fake the
+wrong shape to observe anything at all. Both defects are fixed in the product now,
+so the shim implements the *current* ``LLMClient`` contract. If you change that
+contract, change this file in the same commit or the eval silently measures a
+harness rather than the product.
+
+Nothing under ``src/`` is edited.
 """
 from __future__ import annotations
 
@@ -32,7 +35,7 @@ _TEXT = "\x00<text>\x00"
 
 # Production constants, read from the production module rather than retyped, so a
 # change there is a change here and not a silent drift.
-BODY_CHARS = 8000  # src/enrichment/snippet_extractor.py:40
+BODY_CHARS = 8000  # src/enrichment/snippet_extractor.py:89 (text_for_llm = text[:8000])
 
 
 def build_template(messages: list[dict[str, str]], *, body: str, knobs: dict[str, Any]) -> str:
@@ -174,6 +177,42 @@ class TransportShim:
         # Production passes model=llm.model; LLMClient has no .model, so the shim
         # reports the configured production model id (settings.groq_model).
         self.model = model_override or llm_client.settings.groq_model
+
+    async def chat_completion(
+        self, *, messages: list[dict[str, str]], max_tokens: int, temperature: float
+    ) -> dict[str, Any]:
+        """The LLMClient surface production actually calls.
+
+        extract_snippets_from_article does ``await get_llm_client()`` and then
+        ``await llm.chat_completion(messages=..., temperature=..., max_tokens=...)``
+        (snippet_extractor.py:91,112) and reads the result as
+        ``response["choices"][0]["message"]["content"]``. So the shim has to
+        answer that shape, not the SDK's ``.chat.completions.create`` shape.
+
+        It funnels straight into complete(), which is the single place the cache,
+        the mutation hook and the usage recorder live. Only the envelope changes;
+        the prompt is still passed through untouched.
+        """
+        resp = await self.complete(
+            model=self.model, messages=messages, temperature=temperature, max_tokens=max_tokens
+        )
+        return {"choices": [{"message": {"content": resp.choices[0].message.content}}]}
+
+    @staticmethod
+    def _parse_json_response(content: str) -> Any:
+        """Verbatim copy of LLMClient._parse_json_response (src/shared/llm.py:423).
+
+        Production calls this on the client to strip a ``` fence before
+        json.loads; a bare json.loads would reject every fenced response. It is
+        duplicated rather than borrowed so the harness never has to construct a
+        real LLMClient, but it must not drift -- if this raises where the client
+        would not, the eval scores production's parsing as broken.
+        """
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            content = content.removeprefix("json").strip()
+        return json.loads(content)
 
     async def complete(self, *, model: str, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> Any:
         template = build_template(messages, body=self._body, knobs=self._knobs)

@@ -18,6 +18,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from src.schema.models import RawArticle, SourceTier
+from src.shared.database import prepare_database_url
 
 
 async def check_freshness(hours: int = 30) -> int:
@@ -39,8 +40,11 @@ async def check_freshness(hours: int = 30) -> int:
 
     print(f"Checking tier-1 article freshness (last {hours}h)...")
 
-    # Supabase pooler uses pgbouncer which doesn't support prepared statements
-    engine = create_async_engine(database_url, echo=False, connect_args={"statement_cache_size": 0})
+    # Supabase pooler uses pgbouncer which doesn't support prepared statements.
+    # prepare_database_url normalizes the driver to asyncpg (the secret URL may be
+    # plain postgresql:// or psycopg2, neither of which create_async_engine accepts).
+    url, connect_args = prepare_database_url(database_url)
+    engine = create_async_engine(url, echo=False, connect_args=connect_args)
     async_session = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)

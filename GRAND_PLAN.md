@@ -142,6 +142,26 @@ graph database. You already have Supabase/pgvector; no new infra needed.
 **Deliverable:** extend `cluster_viewpoints()` into a full per-story claim
 matrix ("source A says X, source B says Y") rather than just a viewpoint label.
 
+**Status (2026-10-03).** Shipped for the *storage and analysis* half, deliberately
+not for the *publication* half.
+
+- All four tables exist and are populated by `scripts/run_phase2.py`, on a **daily**
+  schedule (`.github/workflows/daily-phase2.yml`, `23 20 * * *`) that runs before any
+  publish decision rather than weekly.
+- Phase 2 runs on gate-passed `PENDING` stories (+ `QUEUED`) and **never changes a
+  story's status**. Public exposure stays human-gated; the public filters remain
+  `(QUEUED, POSTED)`. The proof that derived state cannot leak into public exposure is
+  `tests/test_phase2_isolation.py`, which asserts both that no public module even
+  references the derived models and that a `PENDING` story with real claim, evidence,
+  topic-group and entity-edge rows still 404s on every public route.
+- The dynamic gate and the certification badge below are **not** built. `DECISIONS.md`
+  holds the four pre-registered exit criteria and the evidence (dev has
+  `curated_posts` count(\*) = 0 and 0 queued stories, so there is nothing to gate yet),
+  and states that reopening automatic publication requires new evidence against those
+  criteria rather than a code change.
+- The binding cost constraint is Groq's 200,000 tokens/day, not its 1,000
+  requests/day, so Phase 2 is budgeted in tokens on its own counter.
+
 ---
 
 ## 3. Verification & certification layer (Phase 3)

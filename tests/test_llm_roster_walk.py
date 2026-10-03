@@ -487,3 +487,65 @@ class TestOpenRouterTransport:
         await client.close()
         http.aclose.assert_awaited_once()
         assert client._openrouter_http is None
+
+
+class TestReasoningEffortReachesTheTransport:
+    """The roster walk must not swallow `reasoning_effort`.
+
+    `src/verification/claims.py` calls `chat_completion(..., reasoning_effort="low",
+    max_tokens=4096)` because `openai/gpt-oss-20b` is a reasoning model: without the
+    parameter the budget is consumed by reasoning and the answer never comes out.
+    Measured on dev 2026-10-03 -- one call returned `finish_reason="length"`,
+    `usage.total_tokens=4962` and **zero characters of content**, while a repeat with
+    identical parameters returned 1,054 characters of valid JSON. Intermittent, so it
+    reads as a feature that works on some days.
+
+    When the hand-written chains were replaced by one `_walk()`, the parameter stayed
+    on `chat_completion`'s signature and stopped being forwarded. Nothing failed: the
+    signature still accepted it, so the defect was invisible to the suite and would
+    only have shown up as an empty-claims feature in production.
+    """
+
+    @pytest.mark.asyncio
+    async def test_chat_completion_forwards_reasoning_effort_to_groq(self):
+        client = _client(groq=AsyncMock())
+        client._chat_completion_groq = AsyncMock(
+            return_value={"choices": [{"message": {"content": "{}"}}]}
+        )
+
+        await client.chat_completion(
+            MESSAGES, max_tokens=4096, reasoning_effort="low"
+        )
+
+        assert client._chat_completion_groq.await_args.kwargs["reasoning_effort"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_the_walk_forwards_it_too_not_just_the_caller(self):
+        """A one-hop test would pass if chat_completion passed it straight through.
+
+        The parameter has to survive the whole chain, because the caller of
+        `chat_completion` is not the only door in: `_walk` is also the path caption
+        and classification take.
+        """
+        client = _client(groq=AsyncMock())
+
+        with patch.object(
+            client, "_dispatch",
+            new=AsyncMock(return_value={"choices": [{"message": {"content": "{}"}}]}),
+        ) as dispatch:
+            await client._walk(
+                MESSAGES, max_tokens=4096, temperature=0.0, reasoning_effort="low"
+            )
+
+        assert dispatch.await_args.kwargs["reasoning_effort"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_absent_by_default_so_a_caller_that_omits_it_is_unchanged(self):
+        client = _client(groq=AsyncMock())
+        client._chat_completion_groq = AsyncMock(
+            return_value={"choices": [{"message": {"content": "{}"}}]}
+        )
+
+        await client.chat_completion(MESSAGES, max_tokens=300)
+
+        assert client._chat_completion_groq.await_args.kwargs["reasoning_effort"] is None

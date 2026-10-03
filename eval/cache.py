@@ -125,6 +125,16 @@ class ReplayCache:
             # caller re-fetches rather than scoring garbage.
             self.stats.misses += 1
             return None
+        if raw.get("error") is not None:
+            # A RECORDED FAILURE IS NOT A HIT. Provider errors get written to the
+            # cache like successes so the run can report them, but replaying one
+            # is worse than missing: the entry replays as empty content, the
+            # extractor sees an empty completion, returns [], and the article is
+            # scored 0 on every future run with no provider call to explain it.
+            # One 429 from a daily token cap then silently becomes a permanent
+            # zero for that article. A miss costs one request and is honest.
+            self.stats.misses += 1
+            return None
         self.stats.hits += 1
         return CacheEntry(
             model=raw["model"],

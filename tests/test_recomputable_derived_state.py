@@ -69,7 +69,7 @@ from src.shared.analyzer_versions import (
     resolve_stage,
     stage_version,
 )
-from src.verification.claims import extract_claims_for_story
+from src.verification.claims import extract_claims_for_story, story_input_digest
 from src.verification.narrative import link_narrative_arcs
 from src.verification.stories import build_stories
 from src.verification.topics import FALLBACK_GROUP, assign_story_topic_groups
@@ -280,14 +280,26 @@ async def test_claims_stamp_claim_and_evidence(db_session):
 
     claim = (await db_session.execute(select(Claim))).scalar_one()
     assert claim.analyzer_version == CLAIM_VERSION
+    # Three inputs, not two: the story, the claim text, and a digest of the units the
+    # reading was taken against. The third input arrived with Phase 2 (2026-10-03).
+    # Without it a claim stays "current" after the evidence under it changes, and the
+    # caller has no way to ask "has this story been read?" before spending on it.
+    unit_digest = story_input_digest([unit_a.id, unit_b.id])
     # Claim text is whitespace/case-normalized, so a re-wrapped or re-cased claim hashes the same.
     assert claim.input_hash == hash_text(
-        CLAIM_VERSION, story.id, "The government announced new policies."
+        CLAIM_VERSION, story.id, unit_digest, "The government announced new policies."
     )
     assert claim.input_hash == hash_text(
-        CLAIM_VERSION, story.id, "  the GOVERNMENT announced\nnew policies. "
+        CLAIM_VERSION, story.id, unit_digest, "  the GOVERNMENT announced\nnew policies. "
     )
-    assert claim.input_hash != hash_text(CLAIM_VERSION, story.id, "A different claim.")
+    assert claim.input_hash != hash_text(
+        CLAIM_VERSION, story.id, unit_digest, "A different claim."
+    )
+    # Different evidence, same claim text: a different hash, which is the whole
+    # reason the digest is folded in.
+    assert claim.input_hash != hash_text(
+        CLAIM_VERSION, story.id, story_input_digest([unit_a.id]), "The government announced new policies."
+    )
 
     evidence = (await db_session.execute(select(ClaimEvidence))).scalars().all()
     assert len(evidence) == 2

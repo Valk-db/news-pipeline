@@ -66,6 +66,10 @@ CRON_WINDOW_SECONDS = 300.0
 CRON_MAX_FAILURES = 5
 cron_limiter = FailureLimiter(CRON_WINDOW_SECONDS, CRON_MAX_FAILURES)
 
+# F12: no floor on token length existed, so a one-character token authenticated
+# the cron. See _configured_token().
+MIN_CRON_TOKEN_LENGTH = 32
+
 
 def _configured_token() -> str:
     """The expected bearer token, read from the environment.
@@ -74,8 +78,26 @@ def _configured_token() -> str:
     warm serverless instance must not decide whether a rotated token is
     accepted, and this avoids ever holding the token in a model that could be
     dumped.
+
+    F12: a configured token shorter than MIN_CRON_TOKEN_LENGTH is treated as NOT
+    configured, and the caller answers 503. Any non-empty string used to pass, so
+    a deployment could end up with a one-character token that authenticates the
+    whole transparency cron -- an endpoint whose only job is to publish signed
+    checkpoints. There is no way to tell "the operator set a short token" from
+    "the operator set a placeholder to fill in later" from inside the process,
+    and the second one is the dangerous one, so both are refused. 32 characters
+    is the floor because that is what `openssl rand -hex 16` and every password
+    manager produce, so no real deployment is inconvenienced.
     """
-    return (os.environ.get(CRON_TOKEN_ENV_VAR) or "").strip()
+    token = (os.environ.get(CRON_TOKEN_ENV_VAR) or "").strip()
+    if token and len(token) < MIN_CRON_TOKEN_LENGTH:
+        logger.error(
+            f"{CRON_TOKEN_ENV_VAR} is set but only {len(token)} characters long; "
+            f"refusing every caller because a token this short is not a secret "
+            f"(minimum {MIN_CRON_TOKEN_LENGTH})"
+        )
+        return ""
+    return token
 
 
 async def require_cron_token(request: Request) -> str:
@@ -99,7 +121,18 @@ async def require_cron_token(request: Request) -> str:
     header = request.headers.get("Authorization", "")
     scheme, _, presented = header.partition(" ")
     key = client_key(request)
-    if scheme.lower() != "bearer" or not presented or not secrets.compare_digest(presented.strip(), expected):
+    # F12: compare bytes, not str. secrets.compare_digest raises TypeError on a str
+    # operand containing non-ASCII ("comparing strings with non-ASCII characters
+    # is not supported"), and this route is reachable by an unauthenticated
+    # caller, so `Authorization: Bearer e-acute` was an unhandled 500 on a public
+    # endpoint -- a crash available to anyone, and a crash that looks like a bug
+    # rather than a rejected request. Encoding both sides to UTF-8 first keeps the
+    # comparison constant-time AND total: every possible input has a byte
+    # representation.
+    presented_bytes = presented.strip().encode("utf-8")
+    if scheme.lower() != "bearer" or not presented or not secrets.compare_digest(
+        presented_bytes, expected.encode("utf-8")
+    ):
         if cron_limiter.blocked(key):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -260,11 +293,32 @@ async def cron_checkpoint_watchdog(_: str = Depends(require_cron_token)):
     """
     database_url = _database_url("watchdog")
     settings = get_settings()
-    age_hours = None
-    alerts = []
+    age_hours: float | None = None
+    age_readable = True
+    published_tree_size: int | None = None
+    log_size: int | None = None
+    alerts: list[dict[str, str]] = []
     async with get_session_for_url(database_url) as session:
+        # Three independent reads, each rolled back on its own failure. F13: the
+        # version this replaces did one try/except around all of them and then
+        # re-queried the age inside the except -- on an already-aborted
+        # transaction, so the re-query raised InFailedSqlTransaction and the
+        # "graceful degradation" was itself the 500. A failed statement in
+        # Postgres poisons the transaction until it is rolled back, so each read
+        # has to earn its own rollback; there is no way to reuse the session for
+        # a second read without one.
         try:
             age_hours = await signing.checkpoint_age_hours(session)
+        except Exception as exc:
+            await session.rollback()
+            age_readable = False
+            logger.warning(f"Could not read the newest checkpoint age: {type(exc).__name__}")
+        try:
+            published_tree_size, log_size = await signing.checkpoint_lag(session)
+        except Exception as exc:
+            await session.rollback()
+            logger.warning(f"Could not read the checkpoint/log size lag: {type(exc).__name__}")
+        try:
             rows = await session.execute(
                 text(
                     "select kind, created_at from transparency_alerts "
@@ -276,15 +330,27 @@ async def cron_checkpoint_watchdog(_: str = Depends(require_cron_token)):
             # The alerts table is added by a later migration than the rest of
             # the schema; a database without it still gets a real watchdog
             # answer, just without the alert history.
+            await session.rollback()
             logger.info(f"Could not read transparency_alerts: {type(exc).__name__}")
-            age_hours = await signing.checkpoint_age_hours(session)
-    healthy, verdict = signing.watchdog_verdict(
-        age_hours, max_interval_hours=settings.transparency_max_checkpoint_interval_hours
+    # F13: watchdog_state, not watchdog_verdict. An old checkpoint on a log that
+    # has had no new entries is the log being idle, not the signer being dead,
+    # and reporting it as "unhealthy" is how an operator learns to ignore this
+    # endpoint. `unknown` (age unreadable) is its own state rather than being
+    # silently reported as never-signed.
+    healthy, state, verdict = signing.watchdog_state(
+        age_hours,
+        max_interval_hours=settings.transparency_max_checkpoint_interval_hours,
+        published_tree_size=published_tree_size,
+        log_size=log_size,
+        age_readable=age_readable,
     )
     return {
         "verdict": "ok" if healthy else "unhealthy",
+        "state": state,
         "checkpoint_age_hours": None if age_hours is None else round(age_hours, 3),
         "max_interval_hours": settings.transparency_max_checkpoint_interval_hours,
+        "published_tree_size": published_tree_size,
+        "log_size": log_size,
         "reason": verdict,
         "recent_alerts": alerts,
     }

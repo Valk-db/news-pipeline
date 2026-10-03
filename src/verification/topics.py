@@ -257,29 +257,29 @@ async def assign_story_topic_groups(session: AsyncSession, story_id) -> list[dic
 async def assign_topic_groups_for_recent_stories(
     session_factory, hours_back: int = 168, max_stories: int = 100,
 ) -> list[dict]:
-    """Batch assignment for recent QUEUED stories."""
-    from datetime import datetime, timezone, timedelta
+    """Batch assignment for recent gate-passed stories.
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+    Retargeted for Phase 2 (2026-10-03): the pool used to be QUEUED-only and
+    selected nothing in practice. PENDING stories have passed the dynamic
+    gate. Viewpoint child stories are excluded so spend is not multiplied
+    across children that share one body of evidence.
+    """
+    from src.verification.phase2 import select_phase2_stories
 
     async with session_factory() as session:
-        stmt = (
-            select(Story)
-            .where(Story.status == Story.Status.QUEUED)
-            .where(Story.created_at >= cutoff)
-            .order_by(Story.created_at.desc())
-            .limit(max_stories)
+        stories = await select_phase2_stories(
+            session, hours_back=hours_back, max_stories=max_stories
         )
-        result = await session.execute(stmt)
-        stories = result.scalars().all()
 
     story_ids = [s.id for s in stories]
 
     if not story_ids:
-        logger.info("No QUEUED stories to assign topic groups for")
+        logger.info("No gate-passed stories to assign topic groups for")
         return []
 
-    logger.info(f"Assigning topic groups for {len(story_ids)} QUEUED stories")
+    logger.info(
+        f"Assigning topic groups for {len(story_ids)} gate-passed stories"
+    )
 
     results = []
     for story_id in story_ids:

@@ -11,7 +11,13 @@ import json
 import pytest
 
 from src.transparency.checkpoint import ED25519_ALGORITHM, ed25519_available
-from src.transparency.keys import TRUSTED_KEYS_ENV_VAR, TrustedKey, load_trusted_keys, verifier_for
+from src.transparency.keys import (
+    TRUSTED_KEYS_ENV_VAR,
+    TrustedKey,
+    TrustedKeyError,
+    load_trusted_keys,
+    verifier_for,
+)
 
 
 def _seed(label: str) -> bytes:
@@ -57,17 +63,61 @@ class TestLoadTrustedKeys:
         assert trusted == {}
         assert "not publicly verifiable" in caplog.text
 
-    def test_malformed_entries_are_skipped_not_fatal(self, caplog):
-        trusted = load_trusted_keys(_raw({
+    def test_malformed_entries_fail_the_load_closed(self):
+        """F6 INVERTED THIS TEST (it was `..._are_skipped_not_fatal`).
+
+        Each of these four entries used to be dropped and the good one kept. That
+        is the vulnerability, not a robustness feature: the operator's published
+        key document is the only thing that says which keys are trusted, and a
+        silently-skipped entry means the document on the page is not the document
+        the signer is enforcing. The operator has no way to see the difference
+        -- a skipped key and an absent key verify identically.
+
+        Failing the whole load is the safe direction because the signer's response
+        to an empty trust store is to REFUSE to sign (signer_key_untrusted), which
+        is visible, rather than to publish checkpoints nobody can check.
+        """
+        entries = {
             "good": {"algorithm": ED25519_ALGORITHM, "public_key": "cd" * 32},
             "bad-hex": {"algorithm": ED25519_ALGORITHM, "public_key": "zz"},
             "short": {"algorithm": ED25519_ALGORITHM, "public_key": "ab" * 16},
             "no-spec": "not-an-object",
             "": {"algorithm": ED25519_ALGORITHM, "public_key": "ab" * 32},
+        }
+        # Each one on its own, so the assertion names the defect rather than just
+        # proving that some error happened.
+        for key_id, match in (
+            ("bad-hex", "not valid hex"),
+            ("short", "32 bytes"),
+            ("no-spec", "must be an object"),
+            ("", "non-string key id"),
+        ):
+            with pytest.raises(TrustedKeyError, match=match):
+                load_trusted_keys(_raw({key_id: entries[key_id]}))
+        # And the whole document, which is what production actually loads.
+        with pytest.raises(TrustedKeyError):
+            load_trusted_keys(_raw(entries))
+
+    def test_one_good_entry_alongside_none_loads(self):
+        """The control for the test above: good entries still load.
+
+        Without this, "everything raises" would satisfy the fail-closed test, so
+        the pair is what shows the change is about malformed entries specifically.
+        """
+        trusted = load_trusted_keys(_raw({
+            "good": {"algorithm": ED25519_ALGORITHM, "public_key": "cd" * 32},
         }))
         assert set(trusted) == {"good"}
 
     def test_invalid_json_yields_no_keys(self, caplog):
+        """A document that is not a key document at all is NOT the same as a
+        document with a bad entry, and F6 does not change this.
+
+        Unparseable JSON means there are no keys to enforce and no keys that look
+        valid-and-wrong; returning an empty store gets the same fail-closed
+        outcome (the signer refuses) without turning every transient config error
+        into an exception the operator has to read a traceback to diagnose.
+        """
         assert load_trusted_keys("{not json") == {}
         assert load_trusted_keys(_raw(["a", "list"])) == {}
 

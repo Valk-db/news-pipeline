@@ -9,6 +9,7 @@ one. Both are now properties of the roster rather than of any single call site.
 
 import logging
 import os
+import re
 from typing import Optional, List, Dict, Any, Tuple, Callable
 from src.shared.config import get_settings
 from src.shared.llm_budget import (
@@ -25,7 +26,7 @@ from src.shared.llm_roster import (
     model_for,
 )
 from tenacity import retry, stop_after_attempt
-from httpx import HTTPStatusError, TimeoutException, ConnectError
+from httpx import TimeoutException, ConnectError
 import json
 
 try:
@@ -163,6 +164,8 @@ class LLMClient:
         # Rung that last produced a usable answer, and rungs ruled out for the rest of
         # the process. See _candidates for why that is worth the two fields.
         self._pinned: Optional[str] = None
+        # The last rung failure, kept so a caller that must raise can chain it.
+        self._last_walk_error: Optional[BaseException] = None
         self._demoted: set[str] = set()
         self._auth_warned: set[str] = set()
         self._openrouter_key: Optional[str] = None
@@ -252,23 +255,155 @@ class LLMClient:
         """The real error behind tenacity's RetryError. See llm_budget.unwrap_retry."""
         return unwrap_retry(exc)
 
+    @classmethod
+    def _status_code(cls, exception: BaseException) -> int:
+        """The HTTP status behind an SDK or httpx error, or 0 if there isn't one.
+
+        Written as a single lookup rather than two isinstance chains because the
+        provider SDKs do not raise httpx's HTTPStatusError: `groq.RateLimitError`
+        carries `.status_code` and is not an httpx class at all, so every
+        status-code predicate in this class silently returned False for it. That
+        is why a 429 from Groq reached the caller as a generic failure instead of
+        as the rate limit it was.
+        """
+        code = getattr(exception, "status_code", None)
+        if isinstance(code, int):
+            return code
+        response = getattr(exception, "response", None)
+        code = getattr(response, "status_code", None)
+        if isinstance(code, int):
+            return code
+        return cls._status_code_from_chain(exception)
+
+    @staticmethod
+    def _status_code_from_chain(exception: BaseException, _depth: int = 0) -> int:
+        """The status code of whatever a wrapper is wrapping, 0 if there is none.
+
+        Two wrappers stood between a provider's answer and the code that could read
+        it, and both had to be unwrapped before a rate limit was visible as one:
+
+        * `tenacity.RetryError`, which the @retry decorators raise once their
+          attempts run out. It carries the real error at `.last_attempt.exception()`.
+          Measured on dev 2026-10-03: a 429 that exhausted three internal attempts
+          reached the caller as `LLMError("No LLM provider available")` with no
+          status code at all, so the Phase 2 runner recorded a generic error and
+          never retried or classified it.
+        * `raise ... from` chains, because LLMError is raised from the provider
+          error it is reporting.
+
+        Bounded to six levels: an exception whose cause chain loops or is very
+        deep is a bug elsewhere, and an unbounded walk here would turn a
+        classification helper into a hang.
+        """
+        if _depth >= 6:
+            return 0
+        inner = getattr(exception, "last_attempt", None)
+        inner = getattr(inner, "exception", lambda: None)()
+        if inner is not None and inner is not exception:
+            code = LLMClient._status_code(inner)
+            if code:
+                return code
+        for linked in (exception.__cause__, exception.__context__):
+            if linked is not None and linked is not exception:
+                code = LLMClient._status_code(linked)
+                if code:
+                    return code
+        return 0
+
+    @classmethod
+    def is_rate_limited(cls, exception: BaseException) -> bool:
+        """HTTP 429 -- the provider's per-minute or per-day limit was reached.
+
+        Distinct from BudgetExhausted on purpose: this is the PROVIDER refusing us,
+        so the local cap did its job and the number in the database is still an
+        accurate account of what was spent. Handle it by waiting out the
+        retry-after the provider asked for, not by raising the cap.
+        """
+        return cls._status_code(exception) == 429
+
+    @classmethod
+    def is_out_of_credit(cls, exception: BaseException) -> bool:
+        """HTTP 402 -- the account cannot pay for this call.
+
+        Tyler's rule is $0 always, so this must never be "retried" or worked around:
+        a 402 means a paid tier is configured somewhere, which is a configuration
+        defect to report, not a condition to route around. Callers skip the story
+        and record it.
+        """
+        return cls._status_code(exception) == 402
+
+    @staticmethod
+    def _retry_after_seconds(exception: BaseException, default: float) -> float:
+        """The provider's own retry-after, in seconds, or `default` if absent.
+
+        Read from the exception first (the SDKs expose `.retry_after` / a headers
+        mapping) and only then from the message, because Groq's rate-limit body
+        spells it out in prose ("Please try again in 7.2375s") and a caller that
+        ignored it would either hammer the limit or sleep for a guessed interval.
+        """
+        # Walk the wrapper chain as well as the exception itself. A 429 that
+        # exhausted the client's internal retries arrives as tenacity's RetryError,
+        # whose own message is repr noise -- the provider's "try again in 7.2375s"
+        # is on the error it wraps, so a search that stopped at the top level would
+        # fall back to a guess every time it mattered most.
+        current = exception
+        for _level in range(6):
+            if current is None:
+                break
+            found = LLMClient._retry_after_from_one(current, default)
+            if found != default:
+                return found
+            current = LLMClient._inner_exception(current)
+        return default
+
+    @staticmethod
+    def _inner_exception(exception: BaseException):
+        """The exception `exception` wraps, or None."""
+        inner = getattr(exception, "last_attempt", None)
+        inner = getattr(inner, "exception", lambda: None)()
+        if inner is not None and inner is not exception:
+            return inner
+        for linked in (exception.__cause__, exception.__context__):
+            if linked is not None and linked is not exception:
+                return linked
+        return None
+
+    @staticmethod
+    def _retry_after_from_one(exception, default: float) -> float:
+        """The retry-after this one exception carries, or `default`."""
+        for attr in ("retry_after", "retry_after_seconds"):
+            value = getattr(exception, attr, None)
+            if isinstance(value, (int, float)) and value >= 0:
+                return float(value)
+        headers = getattr(exception, "headers", None)
+        if headers is not None:
+            try:
+                value = headers.get("retry-after")
+            except AttributeError:
+                value = None
+            if value is not None:
+                try:
+                    return max(0.0, float(value))
+                except (TypeError, ValueError):
+                    pass
+        match = re.search(r"try again in\s+([0-9.]+)\s*s", str(exception), re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+        return default
+
     @staticmethod
     def _is_transient_error(exception: BaseException) -> bool:
         """Check if error is transient (rate limit, 5xx, timeout, connection)."""
         if isinstance(exception, (TimeoutException, ConnectError)):
             return True
-        if isinstance(exception, HTTPStatusError):
-            # HTTPStatusError has response attribute with status_code
-            status_code = getattr(exception.response, "status_code", 0)
-            return status_code >= 500 or status_code == 429
-        return False
+        status_code = LLMClient._status_code(exception)
+        return status_code >= 500 or status_code == 429
 
     @staticmethod
     def _is_auth_error(exception: BaseException) -> bool:
         """Check if error is an auth failure (401/403)."""
-        if isinstance(exception, HTTPStatusError):
-            status_code = getattr(exception.response, "status_code", 0)
-            return status_code in (401, 403)
+        if LLMClient._status_code(exception) in (401, 403):
+            return True
         # Also check for auth error in exception message (Groq SDK may raise different types)
         error_msg = str(exception).lower()
         return "invalid api key" in error_msg or "unauthorized" in error_msg or "forbidden" in error_msg
@@ -291,6 +426,7 @@ class LLMClient:
         max_tokens: int = 500,
         temperature: float = 0.3,
         response_format: Optional[Dict[str, str]] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Make a chat completion request to Groq, routed through budget + coalescing."""
         if not self.groq_client:
@@ -300,9 +436,33 @@ class LLMClient:
             kwargs = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
             if response_format:
                 kwargs["response_format"] = response_format
+            # reasoning_effort is not a nicety on a reasoning model: without it
+            # gpt-oss spends max_tokens on its own reasoning and returns an EMPTY
+            # message content with finish_reason="length". Measured on a real
+            # claim-extraction prompt on 2026-10-03: max_tokens=1500 with no
+            # reasoning_effort returned 0 characters on one call and 1,054 on the
+            # next, with identical parameters -- an unusable stage that looks like
+            # it ran. max_tokens=4096 with reasoning_effort="low" returned
+            # finish_reason="stop" and complete JSON on every call. Groq rejects
+            # the literal "none", so "low" is the floor, not "off".
+            if reasoning_effort:
+                kwargs["reasoning_effort"] = reasoning_effort
             response = await self.groq_client.chat.completions.create(**kwargs)
+            message = response.choices[0].message
             return {
-                "choices": [{"message": {"content": response.choices[0].message.content}}]
+                "choices": [{"message": {"content": message.content}}],
+                # The provider's own accounting of what the call cost. Callers
+                # that cap a shared daily token allowance cannot measure it any
+                # other way; everything that ignores this key is unaffected.
+                "usage": {
+                    "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                    "completion_tokens": getattr(response.usage, "completion_tokens", 0),
+                    "total_tokens": getattr(response.usage, "total_tokens", 0),
+                },
+                # finish_reason is the only thing that distinguishes "the model
+                # answered" from "the model ran out of room", and the difference is
+                # invisible once the content is "".
+                "finish_reason": getattr(response.choices[0], "finish_reason", None),
             }
 
         # Route through budget + coalescing
@@ -410,12 +570,14 @@ class LLMClient:
         max_tokens: int,
         temperature: float,
         response_format: Optional[Dict[str, str]] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """One completion from one rung, however that rung is reached."""
         if rung.method == "groq":
             return await self._chat_completion_groq(
                 model_for(rung, self.settings), messages,
                 max_tokens=max_tokens, temperature=temperature, response_format=response_format,
+                reasoning_effort=reasoning_effort,
             )
         if rung.method == "cerebras":
             return await self._chat_completion_cerebras(
@@ -435,6 +597,7 @@ class LLMClient:
         temperature: float,
         response_format: Optional[Dict[str, str]] = None,
         accept: Optional[Callable[[str], Any]] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Optional[Tuple[str, Any]]:
         """Try the roster in order and return (rung name, accepted value), or None.
 
@@ -463,15 +626,28 @@ class LLMClient:
         from src.utils.ingest_stats import STATS
 
         rungs = self._candidates()
+        self._last_walk_error = None
         if not rungs:
             return None
         transient = False
+        # The last transient failure, so the LLMError raised at the bottom of the
+        # walk is a report of what actually went wrong rather than a shrug. A bare
+        # raise here drops the chain, and the chain is the only place the 429
+        # still exists: by the time a rate limit reaches this point it has been
+        # through the retry decorator, so the live exception is tenacity's
+        # RetryError and the status code lives two links down. Without `from e`,
+        # is_rate_limited() and is_out_of_credit() both answer False on a real
+        # provider limit, and the runner cannot tell "you are rate limited" from
+        # "this is a bug". Measured 2026-10-03; the old hand-written chain had the
+        # `from e`, and replacing it with the walk dropped it.
+        last_transient: Optional[BaseException] = None
 
         for rung in rungs:
             try:
                 result = await self._dispatch(
                     rung, messages,
                     max_tokens=max_tokens, temperature=temperature, response_format=response_format,
+                    reasoning_effort=reasoning_effort,
                 )
             except BudgetExhausted as e:
                 logger.warning("%s budget exhausted: %s", rung.name, e)
@@ -492,9 +668,17 @@ class LLMClient:
                     STATS.record(rung.name, "retries_exhausted")
                     self._demote(rung, "retries exhausted")
                     transient = True
+                    last_transient = e
                 else:
                     logger.warning("%s failed, falling through: %s", rung.name, e)
                     self._demote(rung, f"{type(inner).__name__}: {inner}"[:120])
+                # Remembered even when the failure is not transient. A caller with
+                # no degradation to fall back on -- chat_completion -- has to raise,
+                # and a bare raise reports "nothing worked" without saying what. An
+                # out-of-credit 402 arrives on this path: not transient, so it never
+                # sets `transient`, so the walk ends in None, and a $0 rule that
+                # cannot see the 402 cannot enforce itself.
+                last_transient = last_transient or e
                 continue
 
             content = result["choices"][0]["message"]["content"]
@@ -512,8 +696,9 @@ class LLMClient:
                 return rung.name, value
             logger.warning("%s output rejected by the caller, falling through", rung.name)
 
+        self._last_walk_error = last_transient
         if transient:
-            raise LLMError("No LLM provider available")
+            raise LLMError("No LLM provider available") from last_transient
         return None
 
     async def generate_caption(
@@ -655,16 +840,27 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
         messages: List[Dict[str, str]],
         max_tokens: int = 500,
         temperature: float = 0.3,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         General chat completion interface compatible with OpenAI API format.
 
         Returns:
-            Dict with "choices": [{"message": {"content": "..."}}]
+            Dict with "choices": [{"message": {"content": "..."}}], plus "usage"
+            and "finish_reason" from the provider when it reports them.
+
+        reasoning_effort is passed to Groq only. See _chat_completion_groq for why
+        a reasoning model needs it: without it the call can return an empty
+        message while still being counted against every budget.
         """
-        walked = await self._walk(messages, max_tokens=max_tokens, temperature=temperature)
+        walked = await self._walk(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+        )
         if walked is None:
-            raise LLMError("No LLM provider available")
+            raise LLMError("No LLM provider available") from self._last_walk_error
         return {"choices": [{"message": {"content": walked[1]}}]}
 
     def roster_report(self) -> str:
