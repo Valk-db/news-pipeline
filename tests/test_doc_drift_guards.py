@@ -120,6 +120,68 @@ class TestEveryAbsoluteTemplateLinkResolvesToARoute:
             assert any(path_regex(p).fullmatch(target) for p in route_paths()), target
 
 
+class TestReadmeCountsComeFromTheRegistry:
+    """A count in a README rots silently; the registry it came from does not.
+
+    The numbers checked here were rewritten in this batch because the ones they
+    replaced were stale by several sources. Nothing stopped them rotting the same
+    way again except that nobody counted, so the count is now asserted.
+    """
+
+    COMPONENT_LINE = re.compile(
+        r"tier-1 \((\d+) enabled of (\d+) configured\) \+ tier-2 \((\d+) enabled of (\d+)"
+    )
+
+    @staticmethod
+    def _readme() -> str:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "README.md"), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_component_table_matches_the_source_registry(self):
+        from src.ingestion.source_registry import TIER1_SOURCES, TIER2_SOURCES
+
+        claimed = self.COMPONENT_LINE.search(self._readme())
+        assert claimed, "the README component row no longer states tier counts"
+
+        def counts(sources):
+            # (enabled, configured) -- the order the README states them in.
+            return sum(1 for c in sources.values() if c.enabled), len(sources)
+
+        assert tuple(int(g) for g in claimed.groups()) == (
+            *counts(TIER1_SOURCES),
+            *counts(TIER2_SOURCES),
+        )
+
+    def test_the_ownership_group_count_matches_units_py(self):
+        """Checked because a previous batch reported this pair as inverted.
+
+        OWNERSHIP_GROUPS is domain -> group, so 123 is the DOMAIN count and 118
+        the number of distinct groups. Getting that pair backwards is the exact
+        error the earlier docs batch made, so it is pinned here.
+        """
+        from src.verification.units import OWNERSHIP_GROUPS
+
+        text = self._readme()
+        match = re.search(r"\((\d+) domains\s*→\s*(\d+) groups\)", text)
+        assert match, "README no longer states the ownership-group counts"
+        assert tuple(int(g) for g in match.groups()) == (
+            len(OWNERSHIP_GROUPS),
+            len(set(OWNERSHIP_GROUPS.values())),
+        )
+
+    def test_the_readme_names_no_removed_curation_surface(self):
+        text = self._readme()
+        for gone in ("/posts", "**A**pprove", "mark-posted"):
+            assert gone not in text, gone
+
+    def test_the_readme_does_not_describe_pgvector_as_unavailable(self):
+        """The extension shipped in 20261002220200_pgvector_readiness.sql."""
+        text = self._readme().lower()
+        assert "nothing uses pgvector" not in text
+        assert "pgvector available if a column ever needs it" not in text
+
+
 class TestTheSurfaceMapDescribesTheCodeThatExists:
     """curation_ui/main.py's module map is the map a reader trusts."""
 
