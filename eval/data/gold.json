@@ -1,0 +1,412 @@
+{
+ "gold_version": "evalset-gold/v1",
+ "labeler": "stealth (opencode, openrouter-free/stealth/space-bunny-alpha), batch procmon/batch-evalset",
+ "labeling_method": [
+  "Read the article text EXACTLY as the model receives it: the first 8000 characters of dev raw_articles.body_text, which is the truncation at src/enrichment/snippet_extractor.py:40. The tail of a long article is deliberately NOT labeled, because the model never sees it.",
+  "For each article, pick the snippets a careful human editor would keep under the four criteria the production prompt itself states (snippet_extractor.py:44-48): direct quotes from NAMED sources, key statistics with context, important factual claims, definitive statements about events. At most 5, matching max_snippets=5.",
+  "Label every field the prompt asks for: type (one of the 5 the prompt enumerates, never a new value), entities (names that the snippet is actually about), confidence (0-100, how sure a human is that this belongs in the article), position (0-1 fraction into the 8000-char window, estimated from the character offset).",
+  "Labels were written WITHOUT looking at any pipeline output, so they do not encode the pipeline's current behaviour. The article text is the only input.",
+  "Reproduction: for a given article_id, the label is a deterministic function of the text. A second labeller needs only eval/data/corpus.json, the dev row, the four criteria quoted above, the five type values from the prompt, and the field definitions in eval/README.md. Agreement is measurable per field because the harness scores one field at a time."
+ ],
+ "known_limitations": [
+  "Inter-annotator agreement is NOT measured: there is only one labeller (me). Every number here should be read as a single-annotator baseline, not a ceiling. The first honest follow-up is a second labeller over 10 of these 30 and a per-field kappa.",
+  "The gold is a judgement about 'the snippets a human would keep'. A defensible alternative labeller would choose different sentences. Snippet_found recall is therefore bounded above by annotator agreement, not by 1.0.",
+  "For non-English articles, entities are labeled in the source language (as the prompt's 'exact snippet text' requires). If the model answers in English, snippet_found collapses to 0 -- which is a real finding about the field, not a matching artifact, and the harness reports a script_overlap diagnostic so the two can be told apart."
+ ],
+ "items": {
+  "000413bd-fc2b-4977-991f-a1dac4b66049": {
+   "labeler_notes": "en-short; 399 chars. A Guardian video stub. The only two sentences that carry information are the who/what and the quoted stance.",
+   "snippets": [
+    {
+     "text": "The UK prime minister, Andy Burnham, speaks to the Guardian's political editor, Pippa Crerar, about how to change the public's perception of politics after a difficult fiscal period.",
+     "type": "fact",
+     "entities": [
+      "Andy Burnham",
+      "Pippa Crerar",
+      "the Guardian"
+     ],
+     "confidence": 80,
+     "position": 0.15,
+     "note": "Sets up the piece; names the actor and the interviewer."
+    },
+    {
+     "text": "He says he is prepared to make changes on the issues people are worried about, 'rather than constantly playing the political game'",
+     "type": "quote",
+     "entities": [
+      "Andy Burnham"
+     ],
+     "confidence": 85,
+     "position": 0.55,
+     "note": "The only attributed quote and the actual news."
+    }
+   ]
+  },
+  "25c0a5d0-a51e-4f61-b06f-26b2c7399f2a": {
+   "labeler_notes": "en-short; templated GDACS bulletin. Highest-value fields are the event identity, the severity/alert level and the casualty/impact counts.",
+   "snippets": [
+    {
+     "text": "GDACS reported a flood event (FL1104178). Alert level: Green. Severity: Magnitude 0. Country: Guinea (GIN).",
+     "type": "fact",
+     "entities": [
+      "GDACS",
+      "Guinea"
+     ],
+     "confidence": 90,
+     "position": 0.05,
+     "note": "Event id, alert level, country: the identifying header of the bulletin."
+    },
+    {
+     "text": "On 18/09/2026, a flood started in Guinea, lasting until 29/09/2026 (last update).",
+     "type": "fact",
+     "entities": [
+      "Guinea"
+     ],
+     "confidence": 85,
+     "position": 0.45,
+     "note": "Onset and duration with context."
+    },
+    {
+     "text": "The flood caused 1 deaths and 269 displaced .",
+     "type": "stat",
+     "entities": [
+      "Guinea"
+     ],
+     "confidence": 90,
+     "position": 0.7,
+     "note": "The only impact numbers in the bulletin."
+    }
+   ]
+  },
+  "8a5bb853-23e1-4993-aa94-5b6b6dab170b": {
+   "labeler_notes": "en-short; 399 chars of Al Jazeera NewsFeed stub with a duplicated headline. Substance is the lawyer's quoted condition and the commutation request.",
+   "snippets": [
+    {
+     "text": "A lawyer for US death row inmate Christa Pike says she is in \"critical condition, receiving life-saving care\" after two failed attempts to give her a lethal injection.",
+     "type": "quote",
+     "entities": [
+      "Christa Pike"
+     ],
+     "confidence": 90,
+     "position": 0.6,
+     "note": "Attributed quote carrying the medical condition and the two failed attempts."
+    },
+    {
+     "text": "Pike’s lawyers are now asking for her sentence to be commuted.",
+     "type": "fact",
+     "entities": [
+      "Christa Pike"
+     ],
+     "confidence": 85,
+     "position": 0.85,
+     "note": "The concrete legal ask: the news."
+    }
+   ]
+  },
+  "f661e434-303d-4941-bb3e-58a94ddbe9ee": {
+   "labeler_notes": "en-medium; NPR reported feature. Every load-bearing sentence is a number, so the gold is stat-heavy with two quotes for the human texture.",
+   "snippets": [
+    {
+     "text": "\"You have a $1,000 deposit already paid, you know — you're turning that down if you're not coming. At least postpone it or do something,\" Clavet recalled telling the guest.",
+     "type": "quote",
+     "entities": [
+      "Richard Clavet",
+      "Richard's Motel"
+     ],
+     "confidence": 85,
+     "position": 0.15,
+     "note": "Named-source quote, with a figure in it."
+    },
+    {
+     "text": "Gandhi said he would typically have 60 to 70 Canadian guests during the snowbird season. Last year, that dropped to 50, and this year he's expecting about 30 guests.",
+     "type": "stat",
+     "entities": [
+      "Jay Gandhi",
+      "Curtis Inn & Suites"
+     ],
+     "confidence": 90,
+     "position": 0.55,
+     "note": "The sharpest single trend number in the piece."
+    },
+    {
+     "text": "flights declined beginning in April of last year, with flights down about 7% for that year and nearly 9% in the first six months of 2026",
+     "type": "stat",
+     "entities": [
+      "Visit Lauderdale",
+      "Fort Lauderdale-Hollywood International Airport"
+     ],
+     "confidence": 90,
+     "position": 0.75,
+     "note": "Independent corroboration of the decline, attributed to the county marketing arm."
+    },
+    {
+     "text": "It polled some 4,000 members and found a 12-percentage-point decline in the number who planned to spend the 2025-2026 winter season in the United States.",
+     "type": "stat",
+     "entities": [
+      "Snowbird Advisor",
+      "United States"
+     ],
+     "confidence": 90,
+     "position": 0.85,
+     "note": "Sample size plus result, with context."
+    },
+    {
+     "text": "\"We're seeing an increasing number of snowbirds going to Central America,\" he said. \"We're also seeing growth in the Caribbean.\"",
+     "type": "quote",
+     "entities": [
+      "Stephen Fine",
+      "Snowbird Advisor"
+     ],
+     "confidence": 80,
+     "position": 0.95,
+     "note": "Named-source quote; the substitution effect."
+    }
+   ]
+  },
+  "6d83ad82-5821-47d8-a8b9-b5f193fb0cb4": {
+   "labeler_notes": "en-medium; UGC submission reporting a Japanese policy announcement. Mix of one hard fact (the agency), one quote, one named-official detail and one unverified espionage allegation.",
+   "snippets": [
+    {
+     "text": "Prime Minister Sanae Takaichi has announced that her government will introduce its first national intelligence strategy that may ultimately lead to the creation of an external intelligence agency of Japan in the line of the Central Intelligence Agency (CIA) of the United States of America.",
+     "type": "fact",
+     "entities": [
+      "Sanae Takaichi",
+      "Central Intelligence Agency",
+      "Liberal Democratic Party"
+     ],
+     "confidence": 90,
+     "position": 0.1,
+     "note": "The lead claim of the whole piece."
+    },
+    {
+     "text": "\"We must strengthen our intelligence capabilities to ensure public safety and protect the national interest,\" Ms. Takaichi said at the inaugural meeting of an expert panel on intelligence capabilities earlier this week.",
+     "type": "quote",
+     "entities": [
+      "Sanae Takaichi"
+     ],
+     "confidence": 90,
+     "position": 0.2,
+     "note": "Direct quote from the named decision-maker."
+    },
+    {
+     "text": "Japan is revising three policy documents on national security, national defence and military supplies (national defence build-up) ahead of time because of the challenges that are emanating from the active battlefields of West Asia and Ukraine",
+     "type": "fact",
+     "entities": [
+      "The Hindu",
+      "Japan",
+      "Ukraine"
+     ],
+     "confidence": 80,
+     "position": 0.5,
+     "note": "Second-order policy fact, attributed to The Hindu."
+    },
+    {
+     "text": "an incident involving an employee of a machinery company. The person concerned allegedly provided secret information to a source who was reportedly a Russian intelligence officer.",
+     "type": "claim",
+     "entities": [
+      "The Yomiuri Shimbun",
+      "Russia"
+     ],
+     "confidence": 75,
+     "position": 0.6,
+     "note": "Allegation, hedged in the source text; labeled claim, not fact."
+    },
+    {
+     "text": "The expert panel discussing Japan’s intelligence overhaul consists of 17 experts and is led by Toshiya Watanabe, a professor emeritus at the University of Tokyo",
+     "type": "fact",
+     "entities": [
+      "Toshiya Watanabe",
+      "University of Tokyo"
+     ],
+     "confidence": 85,
+     "position": 0.8,
+     "note": "Named chair plus panel size: checkable specificity."
+    }
+   ]
+  },
+  "4e060fae-4189-4441-bc64-49e9a3e8f0df": {
+   "labeler_notes": "en-medium; BBC. Classic quote/stat/claim mix around a named prosecutor. The seven-men allegation is the load-bearing claim.",
+   "snippets": [
+    {
+     "text": "\"New information has raised serious questions about how this case was handled, and I've lost faith in the Tompkins County DA's ability to fairly oversee it,\" Hochul said.",
+     "type": "quote",
+     "entities": [
+      "Kathy Hochul",
+      "Tompkins County"
+     ],
+     "confidence": 95,
+     "position": 0.15,
+     "note": "Direct quote explaining the appointment; the reason for the news."
+    },
+    {
+     "text": "Hochul's announcement removes Tompkins County District Attorney Matthew Van Houten from overseeing the case.",
+     "type": "fact",
+     "entities": [
+      "Matthew Van Houten",
+      "Kathy Hochul",
+      "Tompkins County"
+     ],
+     "confidence": 90,
+     "position": 0.22,
+     "note": "The concrete consequence of the appointment."
+    },
+    {
+     "text": "She alleged that she was drugged and raped by seven men at a fraternity house at the university in 2024.",
+     "type": "claim",
+     "entities": [
+      "Jane Doe",
+      "Cornell University"
+     ],
+     "confidence": 90,
+     "position": 0.7,
+     "note": "The central allegation; sourced to the complaint, so claim."
+    },
+    {
+     "text": "Van Houten said his office did not bring charges at the time because he had only seen a statement from Doe implying the incident was consensual and that she had not been drugged.",
+     "type": "claim",
+     "entities": [
+      "Matthew Van Houten",
+      "Jane Doe"
+     ],
+     "confidence": 85,
+     "position": 0.85,
+     "note": "The defence rationale, attributed, so claim rather than fact."
+    },
+    {
+     "text": "Cornell has said it provided evidence to the district attorney's office from its own investigation, including a Snapchat group chat in which fraternity members discussed a \"free\" sexual encounter with Doe on the night of the alleged assault.",
+     "type": "fact",
+     "entities": [
+      "Cornell University",
+      "Snapchat"
+     ],
+     "confidence": 90,
+     "position": 0.88,
+     "note": "The specific documentary evidence, with the university's own attribution."
+    }
+   ]
+  },
+  "2df23db2-6b1b-4577-a131-b801e20c4d16": {
+   "labeler_notes": "en-long; NPR Fresh Air transcript, 46967 chars total, only the first 8000 labeled because that is the whole window the model gets. Transcript dialogue, so quotes dominate.",
+   "snippets": [
+    {
+     "text": "so-called safari hunting drones that identify a person or vehicle as a target, then follow as the target flees in terror. The drone eventually dives and crashes into the target, detonating a deadly explosive charge.",
+     "type": "fact",
+     "entities": [
+      "Russia",
+      "Ukraine"
+     ],
+     "confidence": 85,
+     "position": 0.16,
+     "note": "Description of the new weapon class; a definitive statement about events."
+    },
+    {
+     "text": "Kyiv itself - and this is, I think, really important for people to understand - in the last couple of months, but really the last few weeks, has been under extraordinary bombardment from the Russians. And they are basically trying to make life unlivable in a city of several million people.",
+     "type": "quote",
+     "entities": [
+      "Kyiv",
+      "Russia",
+      "Zanny Minton Beddoes"
+     ],
+     "confidence": 90,
+     "position": 0.68,
+     "note": "The guest's central assessment, spoken, so quote."
+    },
+    {
+     "text": "the Ukrainians have run out of interceptors for ballistic missiles, what are called PAC-3 interceptors produced by the U.S.",
+     "type": "fact",
+     "entities": [
+      "PAC-3",
+      "Ukraine",
+      "United States"
+     ],
+     "confidence": 90,
+     "position": 0.72,
+     "note": "Named weapons system and its origin: checkable."
+    },
+    {
+     "text": "And Ukrainians had built sort of defensive drones that could intercept the Shaheds with a sort of 95% success rate. But now that they have these jet propulsion attached to them, that interception rate has gone down closer to 40%",
+     "type": "stat",
+     "entities": [
+      "Shahed drone",
+      "Ukraine",
+      "Russia"
+     ],
+     "confidence": 95,
+     "position": 0.78,
+     "note": "Two hard numbers, before and after: the most quotable statistic in the piece."
+    },
+    {
+     "text": "There is what Ukrainians call the kill zone, which is now something like 20 to 30 kilometers each way from the contact line, where, essentially, anything that moves will be shot down, shot at by a drone within seconds or minutes.",
+     "type": "fact",
+     "entities": [
+      "Ukraine",
+      "Russia"
+     ],
+     "confidence": 90,
+     "position": 0.93,
+     "note": "Definitive statement about the front, with a range attached."
+    }
+   ]
+  },
+  "494e050b-4843-4b4c-95cb-690b4000590b": {
+   "labeler_notes": "en-long; Foreign Policy interview transcript, 33209 chars, first 8000 labeled. Contains the passage the fetcher duplicated (lines repeat verbatim in the raw body) -- a real data defect worth noting, but the labels are unaffected.",
+   "snippets": [
+    {
+     "text": "Then-National Security Advisor Mike Waltz departed after just 101 days in the job.",
+     "type": "stat",
+     "entities": [
+      "Mike Waltz"
+     ],
+     "confidence": 90,
+     "position": 0.12,
+     "note": "Hard number about a named official."
+    },
+    {
+     "text": "\"President Trump is a New Yorker,\" he told me in a wide-ranging interview on FP Live. \"He appreciates that the entire world—more than 150 prime ministers, presidents, foreign ministers, and CEOs—comes to one place in the world once a year, and it's New York City.\"",
+     "type": "quote",
+     "entities": [
+      "Mike Waltz",
+      "Donald Trump",
+      "New York City"
+     ],
+     "confidence": 90,
+     "position": 0.18,
+     "note": "Direct quote, the memorable line of the interview."
+    },
+    {
+     "text": "The United States has used up precious munitions, including more than a third of its Patriot missile interceptors. The global price of oil has soared, which means Americans are now forking out about 40 percent more for gas",
+     "type": "stat",
+     "entities": [
+      "United States",
+      "Patriot missile"
+     ],
+     "confidence": 90,
+     "position": 0.25,
+     "note": "Two quantified costs of the conflict, asked by the interviewer."
+    },
+    {
+     "text": "The Iranians came and made an offer, and U.S. President Donald Trump and the team didn't think it was a very good offer, to be candid with you. Trump has basically said, \"Not good enough.\"",
+     "type": "quote",
+     "entities": [
+      "Mike Waltz",
+      "Donald Trump",
+      "Abbas Araghchi"
+     ],
+     "confidence": 85,
+     "position": 0.28,
+     "note": "Direct quote on the talks, the reason the interview opened there."
+    },
+    {
+     "text": "One hundred forty-six nations—a U.N. record—have joined us in condemning not only their violations of the U.N. Convention on the Law of the Sea (UNCLOS), but their attacks on innocent civilian shipping and infrastructure around the Persian Gulf.",
+     "type": "stat",
+     "entities": [
+      "United Nations",
+      "Iran"
+     ],
+     "confidence": 90,
+     "position": 0.33,
+     "note": "A count with a superlative attached, attributed to the speaker."
+    }
+   ]
+  }
+ }
+}
