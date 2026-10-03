@@ -32,9 +32,12 @@ Design rules, all deliberate:
   is rejected with a warning: HmacDevSigner proves nothing to a third party
   (see checkpoint.py), so a page that "verified" against a server-held shared
   secret would be theater, not verification.
-- A malformed config never fails closed in a way that hides data: bad entries
-  are skipped loudly, which degrades proofs to the honest
-  "unverified_signature" state rather than to a crash or a false "verified".
+- A malformed config never fails closed in a way that hides data: a bad entry is
+  either skipped loudly (degrading that key to the honest "unverified_signature"
+  state) or, for anything wrong with a specific key entry including its validity
+  bounds, raises TrustedKeyError so the caller refuses outright. A key is never
+  admitted with a bound quietly nulled out -- that is the F6 defect, and it
+  turned a typo into a key that never expires.
 - Verification needs the optional `cryptography` package. When it is absent,
   verifier_for returns None and the page says the signature is unverified
   instead of pretending otherwise.
@@ -109,29 +112,74 @@ def _as_utc(moment: datetime) -> datetime:
     return moment.astimezone(timezone.utc)
 
 
+class TrustedKeyError(ValueError):
+    """A trust store that cannot be loaded safely (F6).
+
+    Raised instead of quietly dropping a bound. A malformed `not_after` used to
+    parse to None, which is not "no bound" but "the bound the operator wrote,
+    ignored" -- and an unbounded key verifies forever, which is the exact failure
+    key validity bounds exist to prevent. Failing the whole load is the
+    fail-closed direction: no store means nothing verifies, and the operator
+    sees an error naming the key and the field.
+    """
+
+
 def _parse_timestamp(key_id: str, field: str, value: object) -> datetime | None:
-    """Parse an ISO-8601 bound, or return None (having warned) if unusable."""
+    """Parse an ISO-8601 bound. None means "field absent"; unparseable RAISES.
+
+    The distinction is the whole point of F6: absent is unbounded on purpose,
+    unparseable is a mistake in the trust store, and treating the second like
+    the first is how a key that should have expired stays trusted.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
         return value
     try:
         return _as_utc(datetime.fromisoformat(str(value).replace("Z", "+00:00")))
-    except ValueError:
-        logger.warning(
-            "Ignoring trusted key %r: %s=%r is not an ISO-8601 timestamp",
-            key_id, field, value,
-        )
+    except ValueError as exc:
+        raise TrustedKeyError(
+            f"trusted key {key_id!r}: {field}={value!r} is not an ISO-8601 timestamp"
+        ) from exc
+
+
+def _parse_max_tree_size(key_id: str, value: object) -> int | None:
+    """Parse a max_tree_size bound. None means absent; unparseable RAISES (F6)."""
+    if value is None:
         return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise TrustedKeyError(
+            f"trusted key {key_id!r}: max_tree_size={value!r} is not an integer"
+        ) from exc
+    if parsed < 0:
+        raise TrustedKeyError(f"trusted key {key_id!r}: max_tree_size must be >= 0, got {parsed}")
+    return parsed
 
 
 def load_trusted_keys(raw: str | None) -> dict[str, TrustedKey]:
     """Parse the TRANSPARENCY_TRUSTED_KEYS JSON into key_id -> TrustedKey.
 
-    Invalid JSON, a non-object document, and malformed entries are skipped
-    with a warning: each skipped entry only shrinks the trusted set, which
-    degrades proofs to "unverified_signature" (the safe direction), never to
-    a false "verified".
+    Entries that cannot be *admitted* (unknown algorithm, bad hex, wrong key
+    length) are skipped with a warning: each skipped entry only shrinks the
+    trusted set, which degrades proofs to "unverified_signature" (the safe
+    direction), never to a false "verified".
+
+    A malformed *validity bound* -- and anything else wrong with a specific key
+    entry -- is different and raises TrustedKeyError (F6). A bound that cannot
+    be parsed is not a key without a bound, it is a key whose expiry the
+    operator believes they set and the loader threw away, and an unbounded key
+    never expires. Rather than null the bound and keep the key, the whole load
+    fails: nothing verifies until the trust store is fixed, which is the
+    direction that cannot be exploited by a typo. Callers that must keep running
+    should catch TrustedKeyError and refuse to sign, not fall back to a
+    partially parsed store.
+
+    Document-level failures (unparseable JSON, a document that is not an object)
+    still return an empty store: no key is admitted, so nothing verifies, which
+    is the same fail-closed outcome without turning a typo in a config value
+    into an exception on the proof page's request path.
     """
     trusted: dict[str, TrustedKey] = {}
     if not raw or not raw.strip():
@@ -146,11 +194,9 @@ def load_trusted_keys(raw: str | None) -> dict[str, TrustedKey]:
         return trusted
     for key_id, spec in data.items():
         if not isinstance(key_id, str) or not key_id:
-            logger.warning("Skipping trusted-key entry with non-string key id %r", key_id)
-            continue
+            raise TrustedKeyError(f"{TRUSTED_KEYS_ENV_VAR} has an entry with a non-string key id {key_id!r}")
         if not isinstance(spec, dict):
-            logger.warning("Skipping trusted key %r: spec must be an object", key_id)
-            continue
+            raise TrustedKeyError(f"trusted key {key_id!r}: spec must be an object")
         algorithm = spec.get("algorithm")
         if algorithm != ED25519_ALGORITHM:
             # Deliberate: only public-key algorithms are publicly verifiable.
@@ -167,38 +213,23 @@ def load_trusted_keys(raw: str | None) -> dict[str, TrustedKey]:
         try:
             public_key = bytes.fromhex(str(public_key_hex))
         except (TypeError, ValueError):
-            logger.warning("Skipping trusted key %r: public_key is not valid hex", key_id)
-            continue
+            raise TrustedKeyError(f"trusted key {key_id!r}: public_key is not valid hex") from None
         if len(public_key) != _ED25519_PUBLIC_KEY_BYTES:
-            logger.warning(
-                "Skipping trusted key %r: ed25519 public key must be %d bytes, got %d",
-                key_id, _ED25519_PUBLIC_KEY_BYTES, len(public_key),
+            raise TrustedKeyError(
+                f"trusted key {key_id!r}: ed25519 public key must be "
+                f"{_ED25519_PUBLIC_KEY_BYTES} bytes, got {len(public_key)}"
             )
-            continue
         not_before = _parse_timestamp(key_id, "not_before", spec.get("not_before"))
         not_after = _parse_timestamp(key_id, "not_after", spec.get("not_after"))
-        raw_max = spec.get("max_tree_size")
-        max_tree_size = None
-        if raw_max is not None:
-            try:
-                max_tree_size = int(raw_max)
-            except (TypeError, ValueError):
-                logger.warning("Ignoring trusted key %r: max_tree_size=%r is not an integer", key_id, raw_max)
-                max_tree_size = None
-            else:
-                if max_tree_size < 0:
-                    logger.warning("Ignoring trusted key %r: max_tree_size must be >= 0", key_id)
-                    max_tree_size = None
+        max_tree_size = _parse_max_tree_size(key_id, spec.get("max_tree_size"))
         if not_before is not None and not_after is not None and not_before > not_after:
-            logger.warning(
-                "Ignoring trusted key %r: not_before is later than not_after, so no checkpoint could verify",
-                key_id,
+            raise TrustedKeyError(
+                f"trusted key {key_id!r}: not_before is later than not_after, so no "
+                "checkpoint could ever verify"
             )
-            continue
         key_name = spec.get("key_name")
         if key_name is not None and not isinstance(key_name, str):
-            logger.warning("Ignoring trusted key %r: key_name must be a string", key_id)
-            key_name = None
+            raise TrustedKeyError(f"trusted key {key_id!r}: key_name must be a string")
         key = TrustedKey(
             key_id=key_id,
             algorithm=algorithm,
@@ -217,6 +248,7 @@ def load_trusted_keys(raw: str | None) -> dict[str, TrustedKey]:
             )
         trusted[key_id] = key
     return trusted
+
 
 
 def _public_key_bytes(key: TrustedKey) -> bytes:

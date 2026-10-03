@@ -13,6 +13,12 @@ import pytest
 
 from src.transparency.anchoring import OTS_CALENDAR_URL, AnchorProvider, OpenTimestampsStubProvider
 from src.transparency.checkpoint import (
+    TREE_SCHEME_CT_V1,
+    TREE_SCHEME_FOR_FORMAT,
+    TREE_SCHEME_RFC6962,
+    FORMAT_C2SP_V2,
+    FORMAT_C2SP_V3,
+    FORMAT_JSON_V1,
     Checkpoint,
     HmacDevSigner,
     Signer,
@@ -21,6 +27,8 @@ from src.transparency.checkpoint import (
     ed25519_available,
     generate_ed25519_signer,
     merkle_root,
+    root_for_scheme,
+    rfc6962_root,
     sign_checkpoint,
     verify_checkpoint,
 )
@@ -374,3 +382,63 @@ class TestInterface:
         assert checkpoint.signing_bytes() != dataclasses.replace(
             checkpoint, tree_size=2
         ).signing_bytes()
+
+class TestTreeSchemes:
+    """F9: the v3 tree is real RFC 6962, and the two schemes are told apart.
+
+    The single most important assertion here is
+    ``test_the_legacy_collision_is_exactly_the_bug_f9_fixes``: it pins the
+    defect (legacy ``[a,b,c]`` and ``[a,b,c,c]`` share a root) alongside its
+    absence in the new scheme. Without the first half there is no proof the
+    finding was real; without the second half there is no proof it was fixed.
+    Reverting ``rfc6962_levels`` back to duplicating the odd node turns the
+    second assertion red.
+    """
+
+    @staticmethod
+    def _leaves(count: int) -> list[bytes]:
+        return [hashlib.sha256(f"n1:leaf:{i}".encode()).digest() for i in range(count)]
+
+    def test_the_legacy_collision_is_exactly_the_bug_f9_fixes(self):
+        three = self._leaves(3)
+        # [a,b,c,c]: the legacy tree duplicates its odd level's last node, so
+        # level 2 of [a,b,c] is [H(a,b), c, c] and of [a,b,c,c] is
+        # [H(a,b), H(c,c)] -- which the next round down flattens to the same
+        # two values. Same root, two different histories.
+        assert merkle_root(three) == merkle_root(three + [three[-1]])
+        # The new scheme carries the odd node up instead of copying it, so the
+        # two histories diverge.
+        assert rfc6962_root(three) != rfc6962_root(three + [three[-1]])
+
+    def test_every_distinct_prefix_of_distinct_leaves_gets_a_distinct_root(self):
+        # Stronger than the one collision: sweep the small sizes and assert
+        # injectivity over every ordering-preserving extension.
+        for size in range(1, 9):
+            leaves = self._leaves(size)
+            roots = {rfc6962_root(leaves[:n]) for n in range(1, size + 1)}
+            assert len(roots) == size, f"prefixes collide at size {size}"
+
+    def test_the_two_schemas_disagree_on_identical_leaves(self):
+        # If they agreed, the scheme need not travel with the root and the
+        # new NOT NULL tree_scheme column would be decorative. It is not.
+        leaves = self._leaves(5)
+        assert merkle_root(leaves) != rfc6962_root(leaves)
+
+    def test_root_for_scheme_dispatches_to_both(self):
+        leaves = self._leaves(4)
+        assert root_for_scheme(leaves, TREE_SCHEME_CT_V1) == merkle_root(leaves)
+        assert root_for_scheme(leaves, TREE_SCHEME_RFC6962) == rfc6962_root(leaves)
+
+    def test_an_unknown_scheme_is_refused_rather_than_guessed(self):
+        # Silently defaulting to one scheme here is the same downgrade hole the
+        # signer had: a row labelled with a scheme we cannot compute would be
+        # compared against a root it did not produce.
+        with pytest.raises(ValueError):
+            root_for_scheme(self._leaves(3), "sha512-maybe")
+
+    def test_the_scheme_is_a_pure_function_of_the_format(self):
+        # F11 depends on this: the unique index is (tree_size, format), and it
+        # only constrains roots-per-scheme because of this mapping.
+        assert TREE_SCHEME_FOR_FORMAT[FORMAT_JSON_V1] == TREE_SCHEME_CT_V1
+        assert TREE_SCHEME_FOR_FORMAT[FORMAT_C2SP_V2] == TREE_SCHEME_CT_V1
+        assert TREE_SCHEME_FOR_FORMAT[FORMAT_C2SP_V3] == TREE_SCHEME_RFC6962

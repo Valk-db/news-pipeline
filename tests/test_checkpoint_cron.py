@@ -36,7 +36,9 @@ def _seed(label: str) -> bytes:
     return hashlib.sha256(f"test-seed:{label}".encode()).digest()
 
 
-TOKEN = "test-cron-token-value"
+# 32+ characters: F12 added a minimum token length, so a short fixture token
+# would be rejected as "not configured" and every auth test would 503.
+TOKEN = "test-cron-token-value-not-a-real-secret"
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +66,28 @@ def _client() -> TestClient:
 
 def _authorize() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
+
+
+def _raw_request(authorization: str):
+    """A Starlette Request carrying exactly the header bytes given.
+
+    TestClient cannot be used for this: httpx encodes header values as ASCII and
+    raises UnicodeEncodeError before the request is sent, so the F12 crash could
+    not be provoked through it at all.
+    """
+    from starlette.requests import Request
+
+    raw = [(b"authorization", authorization.encode("latin-1"))]
+    return Request(
+        {"type": "http", "method": "GET", "path": "/", "headers": raw, "query_string": b""}
+    )
+
+
+def _run(coro):
+    """Drive one coroutine to completion (the routes are plain async functions)."""
+    import asyncio
+
+    return asyncio.run(coro)
 
 
 class TestCronAuth:
@@ -101,18 +125,107 @@ class TestCronAuth:
         read from there, a rotation would either keep accepting the old value or
         need a redeploy to take effect.
         """
-        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, "old-token")
+        # Both tokens meet F12's minimum length, so this test measures rotation
+        # and nothing else.
+        old_token = "old-cron-token-aaaaaaaaaaaaaaaaa"
+        new_token = "new-cron-token-bbbbbbbbbbbbbbbbbb"
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, old_token)
         client = _client()
         assert client.get(
-            "/api/cron/checkpoint", headers={"Authorization": "Bearer old-token"}
+            "/api/cron/checkpoint", headers={"Authorization": f"Bearer {old_token}"}
         ).status_code != 401
-        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, "new-token")
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, new_token)
         assert client.get(
-            "/api/cron/checkpoint", headers={"Authorization": "Bearer old-token"}
+            "/api/cron/checkpoint", headers={"Authorization": f"Bearer {old_token}"}
         ).status_code == 401
         assert client.get(
-            "/api/cron/checkpoint", headers={"Authorization": "Bearer new-token"}
+            "/api/cron/checkpoint", headers={"Authorization": f"Bearer {new_token}"}
         ).status_code != 401
+
+    def test_a_non_ascii_token_is_rejected_not_a_crash(self, monkeypatch):
+        """F12: secrets.compare_digest raises TypeError on a non-ASCII str.
+
+        Both operands used to be str, so a header carrying a non-ASCII byte hit
+        "comparing strings with non-ASCII characters is not supported" and
+        escaped as an unhandled 500 -- reachable by anyone, on an endpoint whose
+        whole purpose is to be unattended, and a 500 reads as "the signer is
+        broken" rather than "you sent nonsense". The comparison now runs on
+        encoded bytes, which is total over every possible input and still
+        constant-time.
+
+        Driven through require_cron_token directly rather than through
+        TestClient: httpx encodes header values as ASCII and would refuse to
+        send the request at all, which would make this test pass for the wrong
+        reason. A real HTTP server is more permissive -- Starlette decodes header
+        bytes as latin-1, so a raw 0xE9 byte arrives as U+00E9 and is exactly the
+        str that used to crash compare_digest. The scope dict is the minimum
+        client_key(request) needs.
+        """
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, TOKEN)
+        for raw in (b"\xe9", b"\xff\xfe", "токен".encode(), b"caf\xe9"):
+            request = _raw_request(f"Bearer {raw.decode('latin-1')}")
+            with pytest.raises(HTTPException) as excinfo:
+                _run(cron_module.require_cron_token(request))
+            assert excinfo.value.status_code == 401, raw
+            assert not isinstance(excinfo.value, TypeError)
+
+    def test_a_non_ascii_token_against_a_non_ascii_configured_one_still_compares(
+        self, monkeypatch
+    ):
+        """The other direction: a configured token that is itself non-ASCII.
+
+        Encoding only the presented token would fix the crash and break
+        correctness here, so both sides go through the same encoder.
+        """
+        unicode_token = "jeton-transparence-non-ascii-écure"
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, unicode_token)
+        assert (
+            _run(cron_module.require_cron_token(_raw_request(f"Bearer {unicode_token}")))
+            == "cron"
+        )
+        with pytest.raises(HTTPException) as excinfo:
+            _run(
+                cron_module.require_cron_token(
+                    _raw_request(f"Bearer {unicode_token[:-1]}X")
+                )
+            )
+        assert excinfo.value.status_code == 401
+
+    def test_a_short_configured_token_refuses_everyone(self, monkeypatch, caplog):
+        """F12: no minimum token length existed.
+
+        Any non-empty string authenticated the transparency cron, so a placeholder
+        like "x" -- the shape a half-finished deploy leaves behind -- was a
+        working credential for the endpoint that publishes signed checkpoints.
+        There is no way to tell a placeholder from a deliberate weak token from
+        inside the process, so a short one is treated as not configured at all and
+        the answer is the 503 that says the deployment is not ready, not a 401
+        that implies the caller was wrong.
+
+        Driven through require_cron_token directly, not the route: with the floor
+        removed the route still returns 503, because the next thing it does is
+        notice that no signing key is configured. Through the HTTP layer this test
+        passes for the wrong reason and pins nothing.
+        """
+        for short in ("x", "changeme", "a" * (cron_module.MIN_CRON_TOKEN_LENGTH - 1)):
+            monkeypatch.setenv(CRON_TOKEN_ENV_VAR, short)
+            with caplog.at_level("ERROR"):
+                with pytest.raises(HTTPException) as excinfo:
+                    _run(
+                        cron_module.require_cron_token(
+                            _raw_request(f"Bearer {short}")
+                        )
+                    )
+            assert excinfo.value.status_code == 503, short
+        assert "is not a secret" in caplog.text
+
+    def test_a_token_at_exactly_the_minimum_length_is_accepted(self, monkeypatch):
+        """The floor is a floor, not a near-miss check."""
+        exact = "a" * cron_module.MIN_CRON_TOKEN_LENGTH
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, exact)
+        assert (
+            _run(cron_module.require_cron_token(_raw_request(f"Bearer {exact}"))) == "cron"
+        )
 
     def test_repeated_failures_are_throttled(self, monkeypatch):
         monkeypatch.setenv(CRON_TOKEN_ENV_VAR, TOKEN)
@@ -344,6 +457,9 @@ class TestWatchdogRoute:
         @asynccontextmanager
         async def fake_session(_url):
             class FakeSession:
+                async def rollback(self):
+                    return None
+
                 async def execute(self, statement):
                     class Result:
                         def all(self):
@@ -364,6 +480,14 @@ class TestWatchdogRoute:
             return 30.0
 
         monkeypatch.setattr(signing, "checkpoint_age_hours", age)
+
+        async def lag(_session):
+            # 2 entries waiting, so "stale" and not "idle" (F13): an old
+            # checkpoint is only the signer having died if there is something
+            # left for it to sign.
+            return 3, 5
+
+        monkeypatch.setattr(signing, "checkpoint_lag", lag)
         return None
 
     def test_a_stale_checkpoint_reports_unhealthy(self, stubbed_session):
@@ -373,9 +497,96 @@ class TestWatchdogRoute:
         assert response.status_code == 200
         body = response.json()
         assert body["verdict"] == "unhealthy"
+        assert body["state"] == "stale"
         assert body["checkpoint_age_hours"] == 30.0
         assert "26.0h interval" in body["reason"]
+        assert body["published_tree_size"] == 3
+        assert body["log_size"] == 5
         assert body["recent_alerts"][0]["kind"] == "inconsistent_history"
+
+    def test_an_old_checkpoint_on_an_idle_log_is_not_unhealthy(self, monkeypatch):
+        """F13: idle and dead are different states and an operator acts on them
+        differently.
+
+        A log with no new entries has nothing to sign, so an old checkpoint there
+        is the pipeline being quiet. Reporting that as unhealthy is how people
+        learn to ignore the watchdog, which defeats the dead man's switch.
+        """
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def fake_session(_url):
+            class FakeSession:
+                async def rollback(self):
+                    return None
+
+                async def execute(self, statement):
+                    class Result:
+                        def all(self):
+                            return []
+
+                    return Result()
+
+            yield FakeSession()
+
+        monkeypatch.setattr(cron_module, "get_session_for_url", fake_session)
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, TOKEN)
+        monkeypatch.setenv("TRANSPARENCY_SIGNER_DATABASE_URL", "postgresql://stub/db")
+
+        async def age(_session, *, now=None):
+            return 900.0
+
+        async def lag(_session):
+            return 3, 3  # checkpoint covers every entry: nothing waiting
+
+        monkeypatch.setattr(signing, "checkpoint_age_hours", age)
+        monkeypatch.setattr(signing, "checkpoint_lag", lag)
+        body = _client().get("/api/cron/checkpoint/watchdog", headers=_authorize()).json()
+        assert body["state"] == "idle"
+        assert body["verdict"] == "ok"
+
+    def test_a_read_failure_does_not_turn_the_watchdog_into_a_500(self, monkeypatch):
+        """F13: the re-query after an aborted transaction was the 500.
+
+        A failed statement leaves the Postgres transaction aborted, so the old
+        code's `except: age_hours = await checkpoint_age_hours(session)` raised
+        InFailedSqlTransaction and the "graceful degradation" path was itself
+        the crash. This pins the fix: every read rolls back and reports its own
+        failure, and the endpoint still answers with state "unknown".
+        """
+        from contextlib import asynccontextmanager
+
+        rollbacks = []
+
+        @asynccontextmanager
+        async def fake_session(_url):
+            class FakeSession:
+                async def rollback(self):
+                    rollbacks.append(1)
+
+                async def execute(self, statement):
+                    raise RuntimeError("InFailedSqlTransaction")
+
+            yield FakeSession()
+
+        monkeypatch.setattr(cron_module, "get_session_for_url", fake_session)
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, TOKEN)
+        monkeypatch.setenv("TRANSPARENCY_SIGNER_DATABASE_URL", "postgresql://stub/db")
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("relation does not exist")
+
+        monkeypatch.setattr(signing, "checkpoint_age_hours", boom)
+        monkeypatch.setattr(signing, "checkpoint_lag", boom)
+        response = _client().get("/api/cron/checkpoint/watchdog", headers=_authorize())
+        assert response.status_code == 200
+        body = response.json()
+        assert body["state"] == "unknown"
+        assert body["checkpoint_age_hours"] is None
+        assert body["recent_alerts"] == []
+        # One rollback per failed read. Reusing the aborted session without one
+        # is the defect; this is the guard against it coming back.
+        assert len(rollbacks) == 3
 
     def test_the_watchdog_is_itself_behind_the_token(self, stubbed_session):
         assert _client().get("/api/cron/checkpoint/watchdog").status_code == 401

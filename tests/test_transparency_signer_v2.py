@@ -34,10 +34,11 @@ from src.transparency.checkpoint import (
     ed25519_available,
     generate_ed25519_signer,
     merkle_root,
+    rfc6962_root,
     sign_checkpoint,
     verify_checkpoint,
 )
-from src.transparency.keys import TrustedKey, load_trusted_keys, verifier_for
+from src.transparency.keys import TrustedKey, TrustedKeyError, load_trusted_keys, verifier_for
 from src.transparency.log import InMemoryMerkleLog, TransparencyBase
 from src.transparency.signed_note import (
     ED25519_NOTE_SIG_TYPE,
@@ -524,16 +525,49 @@ class TestKeyBounds:
         assert not keys["k1"].has_bounds()
         assert any("no validity bounds" in record.getMessage() for record in caplog.records)
 
-    def test_an_unparseable_bound_is_ignored_not_fatal(self):
-        keys = load_trusted_keys(self._raw(not_before="yesterday", max_tree_size="many"))
+    def test_an_unparseable_bound_refuses_the_whole_store(self):
+        """F6 INVERTED THIS TEST. It used to be
+        `test_an_unparseable_bound_is_ignored_not_fatal` and asserted that
+        not_before=None and max_tree_size=None -- i.e. that a bound the operator
+        wrote and got wrong was silently dropped.
+
+        Dropping it is not "no bound", it is "no bound, because the bound you
+        wrote could not be read". The two look identical to every downstream
+        check, and the consequence is that a key the operator intended to expire
+        verifies forever. F6 fails the load closed instead: no trust store means
+        nothing verifies, and the signer refuses loudly rather than publishing to
+        a key that was never actually bounded.
+        """
+        with pytest.raises(TrustedKeyError, match="not_before"):
+            load_trusted_keys(self._raw(not_before="yesterday", max_tree_size="many"))
+        with pytest.raises(TrustedKeyError, match="max_tree_size"):
+            load_trusted_keys(self._raw(max_tree_size="many"))
+
+    def test_an_absent_bound_is_still_absent_not_fatal(self):
+        """The other half of F6, and the reason it is not just "raise on
+        everything": a key with no bound written is unbounded on purpose. That is
+        a first key's normal state and must keep loading.
+        """
+        keys = load_trusted_keys(self._raw())
         assert keys["k1"].not_before is None
+        assert keys["k1"].not_after is None
         assert keys["k1"].max_tree_size is None
 
-    def test_an_inverted_window_is_refused_entirely(self, caplog):
-        with caplog.at_level("WARNING"):
-            keys = load_trusted_keys(self._raw(not_before="2027-01-01T00:00:00Z", not_after="2026-01-01T00:00:00Z"))
-        assert keys == {}
-        assert any("not_before is later" in record.getMessage() for record in caplog.records)
+    def test_an_inverted_window_refuses_the_whole_store(self):
+        """F6 CHANGED THIS from "refused entirely" returning {} with a warning.
+
+        It already refused that key; F6's point is that refusing SILENTLY is the
+        same failure as not refusing. An empty store and a store that failed to
+        load look identical to the signer, so the operator never learns their
+        published key document is broken. It raises now.
+        """
+        with pytest.raises(TrustedKeyError, match="not_before is later"):
+            load_trusted_keys(
+                self._raw(
+                    not_before="2027-01-01T00:00:00Z",
+                    not_after="2026-01-01T00:00:00Z",
+                )
+            )
 
     def test_bounds_are_checked_against_the_checkpoints_own_fields(self):
         key = TrustedKey(
@@ -592,7 +626,10 @@ class TestSignerRefusals:
         assert result.tree_size == 4
         assert result.previous_digest is None
         assert result.signed is not None
-        assert result.signed.checkpoint.format == FORMAT_C2SP_V2
+        # F9 moved the signer's published format to v3 (the RFC 6962 note). This
+        # test's contract is that the run signs and chains, not which label it
+        # carries, so it asserts the signer's own format constant.
+        assert result.signed.checkpoint.format == signing.SIGNER_FORMAT
         assert verify_checkpoint(result.signed, signer)
         # The note a third party would check.
         document = result.signed.signed_note_document()
@@ -670,8 +707,17 @@ class TestSignerRefusals:
         assert result.status == "signed", result.reason
         assert result.tree_size == 3
         assert result.signed is not None
-        assert result.signed.checkpoint.format == FORMAT_C2SP_V2
-        assert result.signed.checkpoint.merkle_root.hex() == v1.merkle_root.hex()
+        assert result.signed.checkpoint.format == signing.SIGNER_FORMAT
+        # F9 CHANGED THIS ASSERTION, and the change is the finding. The v1 row
+        # above carries the legacy CT root over these same leaves; the new
+        # checkpoint carries the RFC 6962 root. Those are different numbers BY
+        # DESIGN -- the legacy construction is the one where [a,b,c] and
+        # [a,b,c,c] collide -- which is exactly why the scheme has to travel
+        # with the root and why tree_scheme is NOT NULL in the v3 migration.
+        assert result.signed.checkpoint.merkle_root.hex() == rfc6962_root(
+            [e.leaf_hash for e in await log.entries()]
+        ).hex()
+        assert result.signed.checkpoint.merkle_root.hex() != v1.merkle_root.hex()
         # previous_digest is None, NOT the v1 digest, and that is the honest
         # consequence of quarantining: a quarantined row is excluded from the
         # chain entirely, so the first v2 checkpoint after it is the first
@@ -691,9 +737,10 @@ class TestSignerRefusals:
         assert again.status == signing.REFUSAL_ALREADY_SIGNED
         rows = await db_session.execute(__import__("sqlalchemy").select(TransparencyCheckpoint))
         assert len(rows.scalars().all()) == 2
-        # already_signed hands back the v2 row, so the caller can publish a note.
+        # already_signed hands back the row it found, so the caller can publish
+        # a note.
         assert again.signed is not None
-        assert again.signed.checkpoint.format == FORMAT_C2SP_V2
+        assert again.signed.checkpoint.format == signing.SIGNER_FORMAT
         assert again.signed.signed_note_document() is not None
 
     @needs_cryptography
@@ -796,8 +843,17 @@ class TestSignerRefusals:
         # LogEntry is frozen, so the entry is replaced rather than mutated --
         # which is itself the point: the log gives no way to edit one in place.
         log._entries[1] = dataclasses.replace(log._entries[1], chain_hash=b"\xff" * 32)
-        with pytest.raises(ValueError, match="intact chain"):
-            await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True)
+        result = await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False, trusted_keys=_trusted(signer), genesis_confirmed=True)
+        # F10 CHANGED THIS TEST. This used to assert that build_checkpoint's
+        # ValueError escaped sign_next_checkpoint, which was the bug: a tampered
+        # log became an unhandled 500 with nothing on the alert table, so the
+        # operator saw "server error" and every later run failed identically with
+        # no record of why. The chain check still runs -- that is what this test
+        # is for -- but its ValueError is now caught and reported as a refusal,
+        # which is the observable difference.
+        assert result.status == "refused"
+        assert result.reason == signing.REFUSAL_CHAIN_INVALID
+        assert "intact chain" in result.detail["detail_problem"]
 
 
 class TestWatchdog:
