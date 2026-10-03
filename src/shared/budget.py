@@ -39,7 +39,7 @@ import asyncio
 import logging
 from datetime import date, datetime, timezone
 
-from sqlalchemy import text
+from sqlalchemy import BigInteger, bindparam, text
 
 from src.shared.database import _get_engine
 
@@ -149,6 +149,25 @@ _SPEND = text(
         WHERE budget_counters.used + :amount <= :cap
     RETURNING used
     """
+).bindparams(
+    # The two numeric parameters are TYPED, and that is load-bearing rather than
+    # tidiness. Postgres deduces a parameter's type at parse time and refuses the
+    # statement outright when two uses of one parameter deduce differently: in the
+    # SELECT list `:amount` is the target column (bigint), while in `:amount <= :cap`
+    # both sides are untyped literals, which Postgres resolves as integer. The
+    # statement therefore never parsed on Postgres -- it raised
+    # `ProgrammingError: inconsistent types deduced for parameter $3` -- and every
+    # spend() on a real database returned None, which this module reads as "cap
+    # spent" and which RequestBudget reads as "do not spend". Measured live on dev
+    # 2026-10-03 through the pg tunnel, against postgresql+asyncpg.
+    #
+    # SQLite is why 2,000+ tests could not see it: aiosqlite passes the bound values
+    # straight through and never asks Postgres-style type inference to happen, so the
+    # whole suite was green against a statement that cannot run where it runs in
+    # production. Every numeric parameter is cast at every use site by this
+    # bindparam, which is the one shape both dialects accept.
+    bindparam("amount", type_=BigInteger),
+    bindparam("cap", type_=BigInteger),
 )
 
 _USED = text("SELECT used FROM budget_counters WHERE name = :name AND day = :day")
