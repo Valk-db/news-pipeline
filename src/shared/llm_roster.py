@@ -35,17 +35,27 @@ known to hold in CI, and the backlog's proposal to make a free OpenRouter model 
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Iterable
 
 import httpx
+from sqlalchemy import text
 
 from src.shared.budget import (
     CEREBRAS_REQUESTS,
     GROQ_REQUESTS,
     OPENROUTER_GEMMA_REQUESTS,
     OPENROUTER_NEMOTRON_REQUESTS,
+    today,
+    token_counter_name,
+    unpriced_calls_counter_name,
 )
+from src.shared.config import get_settings
+from src.shared.database import _get_engine
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -86,6 +96,20 @@ class LLMRung:
     daily_cap_attr: str = ""
     minute_cap_attr: str = ""
 
+    daily_token_cap_attr: str = ""
+    """Settings field holding this rung's daily allowance in TOKENS.
+
+    Separate from `daily_cap_attr` because the provider enforces two different
+    limits with two different numbers, and capping only one of them is not a
+    budget. Groq's free tier for openai/gpt-oss-20b publishes RPD 1,000 and TPD
+    200,000 (https://console.groq.com/docs/rate-limits, checked 2026-10-03, with
+    the TPD figure confirmed by a live 429 body rather than trusted from the
+    docs): at 1,000 requests/day and a measured 1,742-4,962 tokens per call,
+    requests run out first on paper and tokens run out first in practice. Which
+    one binds is a measurement, not an assumption -- on 2026-10-03 dev's
+    `groq_requests` read 28 while the day's 200,000 tokens were fully spent.
+    """
+
     free_tier: bool = False
 
     label: str = ""
@@ -109,6 +133,7 @@ ROSTER: tuple[LLMRung, ...] = (
         model_attr="groq_model",
         model="openai/gpt-oss-20b",
         daily_cap_attr="groq_daily_request_budget",
+        daily_token_cap_attr="groq_daily_token_cap",
         minute_cap_attr="groq_requests_per_minute",
         label="Groq",
     ),
@@ -121,6 +146,7 @@ ROSTER: tuple[LLMRung, ...] = (
         model_attr="openrouter_gemma_model",
         model="google/gemma-4-26b-a4b-it:free",
         daily_cap_attr="openrouter_gemma_daily_request_budget",
+        daily_token_cap_attr="openrouter_gemma_daily_token_cap",
         minute_cap_attr="openrouter_requests_per_minute",
         free_tier=True,
         label="OpenRouter gemma",
@@ -139,6 +165,7 @@ ROSTER: tuple[LLMRung, ...] = (
         # returns empty content -- the failure the groq-translate batch already hit.
         model="nvidia/nemotron-3-super-120b-a12b:free",
         daily_cap_attr="openrouter_nemotron_daily_request_budget",
+        daily_token_cap_attr="openrouter_nemotron_daily_token_cap",
         minute_cap_attr="openrouter_requests_per_minute",
         free_tier=True,
         label="OpenRouter nemotron",
@@ -152,6 +179,7 @@ ROSTER: tuple[LLMRung, ...] = (
         model_attr="cerebras_model",
         model="gpt-oss-120b",
         daily_cap_attr="cerebras_daily_request_budget",
+        daily_token_cap_attr="cerebras_daily_token_cap",
         minute_cap_attr="cerebras_requests_per_minute",
         label="Cerebras",
     ),
@@ -303,9 +331,139 @@ def roster_summary(settings: Any) -> str:
     lines = []
     for rung in ROSTER:
         cap = _setting(settings, rung.daily_cap_attr)
+        tcap = _setting(settings, rung.daily_token_cap_attr)
         rpm = _setting(settings, rung.minute_cap_attr)
         lines.append(
             f"  {rung.name:<22} {model_for(rung, settings):<44}"
-            f" budget={rung.budget_name} cap={cap} rpm={rpm}"
+            f" budget={rung.budget_name} cap={cap} rpm={rpm} token_budget={token_counter_name(rung.budget_name)} token_cap={tcap}"
         )
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------- daily cost
+
+# Every row for the day, not a name filter. budget_counters holds a handful of rows
+# per day, and a `name LIKE` filter here would be wrong twice over: LIKE has no
+# alternation (so a `%a|%b` pattern is a literal), and `_` in a LIKE pattern is a
+# single-character wildcard, so `%_requests` also matches `groqXrequests`. The
+# interesting part of this query is which rows are NOT the roster's, so the
+# selection belongs in Python where it can be read.
+_COST_QUERY = text("SELECT name, used FROM budget_counters WHERE day = :day")
+
+
+@dataclass(frozen=True)
+class RungCost:
+    """What one rung cost on one day. `None` means the counter could not be read."""
+
+    rung: str
+    requests: int | None
+    request_cap: int
+    tokens: int | None
+    token_cap: int
+    unpriced_calls: int | None
+
+    @property
+    def spend_is_lower_bound(self) -> bool:
+        """True when part of this rung's cost is not in the token figure.
+
+        A day's token count with unpriced calls on it is a floor, not a total.
+        Reporting it as a total is how a cap ends up looking respected while the
+        real spend is unknown.
+        """
+        return bool(self.unpriced_calls)
+
+
+@dataclass(frozen=True)
+class DailyRosterCost:
+    day: str
+    rungs: tuple[RungCost, ...]
+    unknown_counters: tuple[str, ...]
+    """Counter names present for this day that belong to no rung in the roster."""
+
+    def render(self) -> str:
+        head = f"Roster cost for {self.day}"
+        if self.unknown_counters:
+            head += f" (also on this day, not a roster rung: {', '.join(self.unknown_counters)})"
+        lines = [head]
+        for rung in self.rungs:
+            lines.append(
+                f"  {rung.rung:<22} requests {_fmt(rung.requests):>10} / {rung.request_cap:<8}"
+                f" tokens {_fmt(rung.tokens):>10} / {rung.token_cap:<8}"
+            )
+            if rung.unpriced_calls:
+                # Printed, not summarised: a token figure that is a lower bound has
+                # to announce itself wherever it is read.
+                lines.append(
+                    f"  {'':<22} ^ {rung.unpriced_calls} call(s) reported no usable usage;"
+                    f" the token figure is a LOWER BOUND, not the real cost"
+                )
+        return "\n".join(lines)
+
+
+def _fmt(value: int | None) -> str:
+    return "unreadable" if value is None else f"{value:,}"
+
+
+async def daily_roster_cost(day: date | None = None, settings: Any = None) -> DailyRosterCost:
+    """What the roster cost on one day: tokens, requests, per rung.
+
+    `budget_counters` already answers this, so this is a query and not a schema
+    change and not a reporting module: one SELECT over the day's rows, folded
+    against ROSTER in Python. Everything the answer needs is already a column --
+    the reason a per-rung breakdown is possible at all is that batch-freemodel
+    stopped sharing one request row between rungs.
+
+    Unreadable counters are reported as None and never as 0. 0 would answer "this
+    rung spent nothing", which is a claim about a provider this function did not
+    reach; None answers "we do not know", which is what a failed query means.
+
+    `unknown_counters` is the converse check: rows on the day that belong to no
+    rung here (translation, Phase 2, MyMemory) are named rather than silently
+    dropped, so a reader asking "what did the roster cost" cannot mistake "the
+    roster cost nothing" for "the roster is not the only thing that spent".
+    """
+    settings = settings if settings is not None else get_settings()
+    target = day or today()
+    engine = _get_engine()
+    rows: dict[str, int] = {}
+    readable = True
+    try:
+        # engine is None -> AttributeError -> caught below as unreadable, which is
+        # the answer an unconfigured database deserves. Not an exception the caller
+        # has to distinguish from "the day cost nothing".
+        async with engine.connect() as conn:
+            for name, used_amount in (await conn.execute(
+                _COST_QUERY, {"day": target}
+            )).all():
+                rows[str(name)] = int(used_amount)
+    except Exception as exc:  # noqa: BLE001 - every counter becomes unreadable, not zero
+        logger.warning("daily_roster_cost unreadable: %s", type(exc).__name__)
+        rows, readable = {}, False
+
+    def read(name: str) -> int | None:
+        # A row that does not exist for the day is a real 0 -- nothing was spent
+        # against that counter. A counter that could not be READ is None. Folding
+        # those two together is the mistake this function exists to avoid: a
+        # failed query would otherwise report a confident, entirely fictional
+        # "the roster spent 0 tokens today".
+        return rows.get(name, 0) if readable else None
+
+    rungs = tuple(
+        RungCost(
+            rung=rung.name,
+            requests=read(rung.budget_name),
+            request_cap=int(_setting(settings, rung.daily_cap_attr) or 0),
+            tokens=read(token_counter_name(rung.budget_name)),
+            token_cap=int(_setting(settings, rung.daily_token_cap_attr) or 0),
+            unpriced_calls=read(unpriced_calls_counter_name(token_counter_name(rung.budget_name))),
+        )
+        for rung in ROSTER
+    )
+    mine = {r.budget_name for r in ROSTER}
+    mine |= {token_counter_name(r.budget_name) for r in ROSTER}
+    mine |= {unpriced_calls_counter_name(token_counter_name(r.budget_name)) for r in ROSTER}
+    return DailyRosterCost(
+        day=target.isoformat(),
+        rungs=rungs,
+        unknown_counters=tuple(sorted(n for n in rows if n not in mine)),
+    )

@@ -82,6 +82,56 @@ class Settings(BaseSettings):
     openrouter_gemma_daily_request_budget: int = 200
     openrouter_nemotron_daily_request_budget: int = 200
 
+    # ------------------------------------------------------------------
+    # Token-denominated daily caps, one per rung, enforced alongside the
+    # request caps above rather than instead of them.
+    #
+    # Each is sized under the provider's own published daily allowance, and the
+    # provider number is written next to the cap so the next reader does not have
+    # to go looking. The margin is not decoration: TokenBudget.ensure_headroom()
+    # refuses a call whose UPPER BOUND does not fit, so the only way to cross a
+    # cap is for the estimate to be too low, and the headroom is what absorbs the
+    # one call that crosses it before the next call is refused. Sizing a cap at
+    # the provider's limit would mean the overshoot is the overspend.
+    #
+    # GROQ -- provider limit 200,000 tokens/day (openai/gpt-oss-20b free tier,
+    # https://console.groq.com/docs/rate-limits, re-checked 2026-10-03; the figure
+    # was confirmed by a live 429 reading `TPD: Limit 200000, Used 199337,
+    # Requested 4388` rather than trusted from the docs).
+    #   120,000 is 60% of it, leaving 80,000 of headroom against this cap alone --
+    #   16x the largest single call ever measured on this rung (4,962 total tokens
+    #   at reasoning_effort 10; 2,437 at 5; 1,742 at 3).
+    #   THE ARITHMETIC THAT MATTERS: Phase 2 draws on the SAME 200,000 through its
+    #   own counter (phase2_daily_token_cap = 40,000), and two counters do not
+    #   sum-enforce one provider limit -- nothing in this module stops the roster
+    #   spending 120,000 and Phase 2 spending 40,000 on the same day. 160,000 of
+    #   200,000 is the design point and the remaining 40,000 (20%) is the shared
+    #   margin. If Phase 2's cap is raised, this one has to come down to keep the
+    #   sum under 200,000; that is a coordinator decision, not a config tweak.
+    groq_daily_token_cap: int = 120_000
+    #
+    # CEREBRAS -- this rung had NO counter of any kind until batch-freemodel added
+    # the request row, so there is no measured daily token limit to size against.
+    # The cap is deliberately large: a number invented to look precise would be
+    # worse than a stated-unknown one. It is here to make Cerebras spend visible
+    # and stoppable, not to enforce a limit Cerebras has not published here. Set
+    # it to 0 to disable the token axis for a provider whose limits are unknown.
+    cerebras_daily_token_cap: int = 500_000
+    #
+    # OPENROUTER free tiers -- provider limits are NOT published per-model for the
+    # ":free" pool: the account shares one upstream pool across every OpenRouter
+    # user, which is exactly why these rungs 429 independently
+    # (`limit_source: upstream_provider_shared_pool`) and why they get one counter
+    # row each. There is no trustworthy published number to sit under, so these
+    # are our own bounds chosen to be reachable rather than pretending to mirror a
+    # quota: 200,000 is roughly 1,000 caption-or-classification calls at the
+    # measured ~200 tokens, which is about 20x the 200/day request cap above, so
+    # the request cap is the one that will bind and the token counter is here to
+    # make the day's actual cost readable. Revisit if a measured free-tier daily
+    # allowance ever appears.
+    openrouter_gemma_daily_token_cap: int = 200_000
+    openrouter_nemotron_daily_token_cap: int = 200_000
+
     # Phase 2 (claim extraction on gate-passed PENDING stories) budget and pacing.
     #
     # The cap is in tokens/day because tokens/day is what binds: Groq's free plan

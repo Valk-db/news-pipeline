@@ -89,24 +89,56 @@ class RecordingSpend:
 
     def __init__(self):
         self.spends = 0
+        # By counter name, not just a total. There are now two rows per rung (the
+        # request counter and the token counter), so a bare total cannot say which
+        # one was wrong -- "2 spends" reads the same as "reserved twice" and as
+        # "one request and one call's tokens", and only the second is correct.
+        self.by_name: dict[str, int] = {}
 
     async def __call__(self, key, n, limit):
         self.spends += 1
+        self.by_name[key] = self.by_name.get(key, 0) + 1
         return 1
 
 
 SPEND = RecordingSpend()
 
 
+class RecordingUsed:
+    """The other half of the counter seam.
+
+    Added with the token-denominated budgets, and it is the second form of the
+    same fixture hazard: patching `spend` alone leaves `used` reaching for a real
+    engine, an unreachable counter reads as SPENT (the one-way failure rule in
+    budget.py), so every call was refused as "budget exhausted" and these tests
+    reported an extraction failure while the provider had never been asked.
+    """
+
+    def __init__(self):
+        self.reads = 0
+
+    async def __call__(self, name, *, day=None):
+        self.reads += 1
+        return 0
+
+
+USED = RecordingUsed()
+
+
 @pytest.fixture(autouse=True)
 def _no_budget_db(monkeypatch):
-    """The real RequestBudget, with only the budget_counters row faked out.
+    """The real RequestBudget and TokenBudget, with only the budget_counters row faked out.
 
-    Patching llm_budget.spend (not RequestBudget) keeps the real reserve-then-dispatch
-    order and the real in-flight coalescing in the path these tests exercise.
+    Patching llm_budget.spend and llm_budget.used (not the budget classes) keeps the
+    real reserve-then-dispatch order, the real in-flight coalescing and the real
+    unreadable-counter-is-spent rule in the path these tests exercise. Both seams are
+    needed now that there are two counter rows per rung.
     """
     SPEND.spends = 0
+    SPEND.by_name = {}
+    USED.reads = 0
     monkeypatch.setattr("src.shared.llm_budget.spend", SPEND)
+    monkeypatch.setattr("src.shared.llm_budget.used", USED)
 
 
 def make_client(transport: FakeTransport) -> tuple[LLMClient, RecordingSpend]:
@@ -116,7 +148,22 @@ def make_client(transport: FakeTransport) -> tuple[LLMClient, RecordingSpend]:
         groq_api_key="k",
         cerebras_api_key=None,
         cerebras_model=None,
+        # Every rung's DAILY caps, not just Groq's. `_cap()` returns its default of
+        # 0 for an attribute that is absent, and a daily cap of 0 refuses every
+        # call -- so the missing `groq_daily_token_cap` below showed up as 13 tests
+        # reporting an extraction failure while the provider had never been asked.
+        # The other three rungs are unreachable in this fixture (no key, no client),
+        # so their absence is harmless today and silently load-bearing the day one
+        # of them is switched on. Asserted by tests/test_llm_client_fixture_fields.py,
+        # which walks ROSTER rather than trusting this list.
         groq_daily_request_budget=900,
+        groq_daily_token_cap=120000,
+        cerebras_daily_request_budget=900,
+        cerebras_daily_token_cap=500000,
+        openrouter_gemma_daily_request_budget=200,
+        openrouter_gemma_daily_token_cap=200000,
+        openrouter_nemotron_daily_request_budget=200,
+        openrouter_nemotron_daily_token_cap=200000,
     )
     client.groq_client = transport
     client.cerebras_client = None
@@ -132,6 +179,10 @@ def make_client(transport: FakeTransport) -> tuple[LLMClient, RecordingSpend]:
     # __init__ when the client grows a field.
     client._budgets: dict = {}
     client._minute_limiters: dict = {}
+    # Added with the token-denominated budgets. test_llm_client_fixture_fields.py
+    # walks __init__'s real bytecode and FAILS if a field exists here that is not
+    # set here, so this line and that test cannot drift apart.
+    client._token_budgets: dict = {}
     client._pinned = None
     client._last_walk_error = None
     client._demoted: set = set()
@@ -192,7 +243,12 @@ async def test_snippet_body_returns_a_real_snippet():
     assert SNIPPET_MAX_TOKENS == 3000
     assert transport.calls[0]["max_tokens"] == 3000
     assert transport.calls[0]["temperature"] == 0.1
-    assert spend.spends == 1  # real RequestBudget reserved exactly one request
+    # Exactly one reservation per counter row, named: the real RequestBudget
+    # reserved one request, and the token budget recorded that one call's usage.
+    # Pinning the literal names rather than a total is what makes this able to fail
+    # if either counter starts being written twice or stops being written at all.
+    assert spend.spends == 2
+    assert spend.by_name == {"groq_requests": 1, "groq_tokens": 1}
 
     # and the counter is the signature the function actually uses: n=, positional
     assert stats.events == [("snippets", "extracted", 1)]

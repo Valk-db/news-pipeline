@@ -66,6 +66,31 @@ CEREBRAS_REQUESTS = "cerebras_requests"
 OPENROUTER_GEMMA_REQUESTS = "openrouter_gemma_requests"
 OPENROUTER_NEMOTRON_REQUESTS = "openrouter_nemotron_requests"
 
+# Naming is a function, not a convention, for the reason in the token-counter
+# block below: a hand-written token name can drift from its request name, and the
+# drift is silent -- two rungs end up sharing a token row, or one rung's spend
+# lands in a row nobody reads. Deriving both from the same string makes that
+# impossible to write by accident. `groq_requests` -> `groq_tokens`.
+def token_counter_name(request_counter: str) -> str:
+    """The token-denominated counterpart of a request counter's row name."""
+    return (request_counter[:-len("_requests")] if request_counter.endswith("_requests")
+            else request_counter) + "_tokens"
+
+
+def unpriced_calls_counter_name(token_counter: str) -> str:
+    """The row that counts calls whose token cost could not be read.
+
+    A separate row rather than a flag on the token row, because the token row is
+    a quantity in the provider's unit and this is a count of calls. Recording a
+    missing `usage` as zero would be the dishonest answer -- zero is a claim that
+    the call was free, and a wrong zero is how a cap silently stops capping. A
+    separate count makes "this day is 12,400 tokens across 41 calls, 3 of which
+    could not be priced" answerable, instead of the token figure silently being
+    a lower bound with nothing to say so.
+    """
+    return (token_counter[:-len("_tokens")] if token_counter.endswith("_tokens")
+            else token_counter) + "_unpriced_calls"
+
 # Phase 2 (claim extraction on gate-passed PENDING stories, src/verification/phase2.py)
 # counts TOKENS, not requests, and that is not a preference.
 #
@@ -83,6 +108,37 @@ OPENROUTER_NEMOTRON_REQUESTS = "openrouter_nemotron_requests"
 # would make caption/classification work silently disappear on the day Phase 2
 # filled the shared counter.
 GROQ_PHASE2_TOKENS = "groq_phase2_tokens"
+
+# Token-denominated counterparts of the request counters above, one per rung.
+#
+# NOT DERIVED BY HAND, and not a second table. `budget_counters` is
+# `(name TEXT NOT NULL, day DATE, used BIGINT)` with no CHECK on `name` and no
+# foreign key to a budget registry, so a new name is free and a schema change is
+# not: token_counter_name() below computes each name from the rung's existing
+# request counter, which means two rungs cannot collide on tokens unless they
+# already collide on requests -- the exact defect batch-freemodel fixed for
+# requests (one shared row let one provider's spend silently disable another's)
+# cannot come back through this door.
+#
+# Why a token counter is not redundant with the request one: on 2026-10-03 dev's
+# `groq_requests` read 28 against a fully spent 200,000-token day, the crossing
+# request reading `TPD: Limit 200000, Used 199337, Requested 4388`. A
+# request-denominated cap read 97% unspent while the quota was gone. Both limits
+# are real and they have different numbers, so both are counted and both are
+# capped.
+#
+# `GROQ_PHASE2_TOKENS` above is deliberately NOT this mechanism: Phase 2 calls
+# Groq through src/verification/claims.py, not through LLMClient._walk, so it
+# never reaches the code that records these. Sharing one row would have made
+# Phase 2's spend visible to the roster's cap, which is the starvation the
+# separate row exists to prevent. The two counters are two different callers of
+# one provider allowance, and see the config comments for how the arithmetic is
+# sized so their sum stays under the provider's limit.
+
+CEREBRAS_TOKENS = token_counter_name(CEREBRAS_REQUESTS)
+OPENROUTER_GEMMA_TOKENS = token_counter_name(OPENROUTER_GEMMA_REQUESTS)
+OPENROUTER_NEMOTRON_TOKENS = token_counter_name(OPENROUTER_NEMOTRON_REQUESTS)
+GROQ_TOKENS = token_counter_name(GROQ_REQUESTS)
 
 _SPEND = text(
     """
