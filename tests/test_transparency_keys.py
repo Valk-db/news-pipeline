@@ -5,12 +5,25 @@ rejected, malformed entries skipped loudly) and verifier lookup (unknown key
 id, algorithm mismatch, and missing `cryptography` package all yield None,
 never a false pass).
 """
+import hashlib
 import json
 
 import pytest
 
 from src.transparency.checkpoint import ED25519_ALGORITHM, ed25519_available
 from src.transparency.keys import TRUSTED_KEYS_ENV_VAR, TrustedKey, load_trusted_keys, verifier_for
+
+
+def _seed(label: str) -> bytes:
+    """A deterministic >= 32-byte signing seed for a test.
+
+    generate_ed25519_signer refuses a seed shorter than MIN_SIGNING_SEED_BYTES,
+    so tests that need a reproducible key pair cannot use a short label. This
+    hashes the label to exactly 32 bytes, which is deterministic per label and
+    satisfies the production constraint rather than bypassing it.
+    """
+    return hashlib.sha256(f"test-seed:{label}".encode()).digest()
+
 
 
 def _raw(entries):
@@ -80,7 +93,7 @@ class TestVerifierFor:
     def test_known_ed25519_key_yields_verifier(self):
         from src.transparency.checkpoint import generate_ed25519_signer
 
-        signer = generate_ed25519_signer(seed=b"keys-test")
+        signer = generate_ed25519_signer(seed=_seed("keys-test"))
         trusted = {
             signer.key_id: TrustedKey(signer.key_id, ED25519_ALGORITHM, signer.public_key_bytes())
         }
