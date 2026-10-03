@@ -14,18 +14,15 @@ link fails the suite.
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
 import pytest
 from fastapi.routing import APIRoute
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://u:p@127.0.0.1:1/none")
-
-from curation_ui.app_state import BASE_DIR  # noqa: E402
-from curation_ui.main import app  # noqa: E402
-from tests.test_route_table import iter_routes  # noqa: E402
+from curation_ui.app_state import BASE_DIR
+from curation_ui.main import app
+from tests.test_route_table import iter_routes
 
 TEMPLATE_DIR = Path(BASE_DIR) / "templates"
 STATIC_DIR = Path(BASE_DIR) / "static"

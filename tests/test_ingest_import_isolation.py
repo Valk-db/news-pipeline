@@ -27,7 +27,8 @@ recoverable; silent loss of tamper evidence is not.
 Both directions are driven by a real import failure, not a mock: a meta_path
 finder raises ImportError for src.transparency.log, exactly as a syntax error or
 a missing dependency in that file would, and the evidence adapter's module
-entries are dropped from sys.modules first so the chain genuinely re-executes.
+entries are evicted from sys.modules *and* from their parent packages first so
+the chain genuinely re-executes.
 """
 
 from __future__ import annotations
@@ -69,8 +70,22 @@ class _Settings:
 
 @pytest.fixture
 def transparency_log_unimportable(monkeypatch):
-    """Make importing src.transparency.log raise, and undo it afterwards."""
+    """Make importing src.transparency.log raise, and undo it afterwards.
+
+    Evicting a module from sys.modules is not enough to make a `from package
+    import submodule` statement re-execute it: the parent package object keeps
+    the attribute it was set to on the first import, and _handle_fromlist
+    returns that attribute without consulting sys.modules or meta_path at all.
+    So both the sys.modules entry and the parent attribute have to go. Forget the
+    second half and this fixture silently stops blocking -- which is exactly what
+    happened the first time round, and it only showed up in a full-suite run
+    where an earlier test had already imported the chain.
+    """
     for name in EVIDENCE_CHAIN:
+        parent_name, _, attr = name.rpartition(".")
+        parent = sys.modules.get(parent_name)
+        if parent is not None and getattr(parent, attr, None) is sys.modules.get(name):
+            monkeypatch.delattr(parent, attr, raising=False)
         monkeypatch.delitem(sys.modules, name, raising=False)
     monkeypatch.setattr(sys, "meta_path", [_Blocker()] + list(sys.meta_path))
 
