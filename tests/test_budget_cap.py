@@ -108,6 +108,9 @@ class TestTheStatementParsesOnTheDatabaseItActuallyRunsOn:
         # $1 is :name and $2 is :day -- the only two parameters Postgres can type for
         # itself. Everything numeric has to arrive already typed.
         assert uncast <= {"1", "2"}, f"untyped bind parameters ${{{uncast}}} in:\n{compiled}"
-        assert len(re.findall(r"\$\d+::BIGINT", compiled)) == 5, (
-            f"expected :amount three times and :cap twice, got:\n{compiled}"
-        )
+        # :amount is bound once and used four times (the SELECT list, the insert's own
+        # cap check, and twice in the ON CONFLICT arm); :cap is used twice. Counting
+        # the use sites catches a fix that casts one comparison and leaves the other,
+        # which parses on Postgres and is still wrong.
+        assert compiled.count("$3::BIGINT") == 4, compiled
+        assert compiled.count("$4::BIGINT") == 2, compiled
