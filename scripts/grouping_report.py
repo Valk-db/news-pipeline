@@ -19,6 +19,8 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
+from src.shared.database import prepare_database_url
+
 from src.schema.models import (
     RawArticle, ReportingUnit, Story, StoryUnitLink, SourceTier,
 )
@@ -39,8 +41,10 @@ async def run_report(hours: int = 48):
         return
 
     print("Connecting to database...")
-    # Supabase pooler uses pgbouncer which doesn't support prepared statements
-    engine = create_async_engine(database_url, echo=False, connect_args={"statement_cache_size": 0})
+    # Supabase pooler uses pgbouncer which doesn't support prepared statements.
+    # prepare_database_url normalizes the driver to asyncpg.
+    url, connect_args = prepare_database_url(database_url)
+    engine = create_async_engine(url, echo=False, connect_args=connect_args)
     async_session = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)

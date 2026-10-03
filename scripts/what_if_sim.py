@@ -11,6 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
+from src.shared.database import prepare_database_url
+
 from src.schema.models import ReportingUnit, RawArticle, StoryUnitLink
 
 load_dotenv()
@@ -18,7 +20,10 @@ load_dotenv()
 
 async def what_if_simulation():
     database_url = os.getenv('DATABASE_URL')
-    engine = create_async_engine(database_url, echo=False, connect_args={'statement_cache_size': 0})
+    # Normalize the driver to asyncpg (the secret URL may be plain postgresql://
+    # or psycopg2, neither of which create_async_engine accepts).
+    url, connect_args = prepare_database_url(database_url)
+    engine = create_async_engine(url, echo=False, connect_args=connect_args)
     async_session = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
