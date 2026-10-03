@@ -85,9 +85,11 @@ vercel env add REDDIT_USER_AGENT
 `CURATION_USER` + `CURATION_PASSWORD` are what `require_auth` checks
 (`curation_ui/security.py`); with either one missing it raises 503
 "Curation UI not configured" instead of authenticating, so the UI is unusable
-without them. The LLM keys are genuinely optional: `check_llm_available` falls
-back to a deterministic caption and tells the curator, and `/healthz` works with
-no database at all (it reports `degraded`).
+without them. The LLM keys are genuinely optional: nothing on a served route
+reads them, and `/healthz` works with no database at all (it reports `degraded`).
+It used to be otherwise — the approve/edit routes fell back to a deterministic
+LLM-free caption — and those routes are gone, so the availability check that
+handled the fallback went with them.
 
 ## 3. Deploy to Vercel
 

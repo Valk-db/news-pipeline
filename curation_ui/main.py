@@ -69,28 +69,6 @@ def check_database_available() -> tuple[bool, str]:
     return True, ""
 
 
-def check_llm_available() -> tuple[bool, str]:
-    """Check if LLM is available, return (available, error_message).
-
-    Availability is either a configured provider API key, or an already
-    -initialized/injected client (e.g. the mock LLMClient tests set on
-    src.shared.llm._llm_client). Gating on settings.has_llm alone made this
-    return False even when a working client was already in place.
-
-    A False result is not fatal. It used to be non-fatal for a specific reason
-    that no longer applies: approve and edit fell back to deterministic,
-    LLM-free captions and told the curator. Those routes are gone, so nothing
-    in the app consults this any more -- see the note in DECISIONS.md. It is
-    left in place because the same check is worth having the moment any
-    generated surface comes back, and deleting it would take the only place
-    that can tell "no LLM configured" from "LLM configured and broken".
-    """
-    import src.shared.llm as llm_module
-    if not settings.has_llm and llm_module._llm_client is None:
-        return False, "No LLM configured. Set GROQ_API_KEY or CEREBRAS_API_KEY environment variable."
-    return True, ""
-
-
 # Router order matches the order the routes appeared when they all lived here, so
 # a path that used to be matched by an earlier literal still is. No two of these
 # patterns overlap, so the order is a readability property rather than a dispatch
@@ -103,12 +81,11 @@ app.include_router(globe_router)
 app.include_router(map_router)
 app.include_router(public_pages_router)
 
-# The routers cannot import this module (it imports them), so they reach the two
-# availability checks through app.state. Assigning the functions, not a snapshot
-# of their results, keeps them reading main's module-level `settings` — which the
-# test suite replaces after import — at call time.
+# The routers cannot import this module (it imports them), so they reach the
+# database availability check through app.state. Assigning the function, not a
+# snapshot of its result, keeps it reading main's module-level `settings` —
+# which the test suite replaces after import — at call time.
 app.state.check_database_available = check_database_available
-app.state.check_llm_available = check_llm_available
 
 # Content-Security-Policy for every response.
 #
