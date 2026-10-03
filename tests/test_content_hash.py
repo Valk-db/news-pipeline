@@ -1,13 +1,37 @@
-"""Tests for content hash deduplication at ingest time."""
+"""Tests for content hash deduplication at ingest time.
+
+The four ``TestRunIngestionDedup`` tests run ``run_ingestion`` against a real
+in-memory SQLite database and assert on the rows that actually land in
+``raw_articles``. They used to assert on a count produced by three adapters
+raising ``RuntimeError: Database not configured``; see
+``tests/ingestion_harness.py`` for why the old harness could not have been
+exercising the dedup rule, and why pointing it at a fake DATABASE_URL would
+have hidden the problem rather than fixed it.
+"""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-import uuid
+
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 from src.utils.trafilatura_extract import compute_content_hash, compute_url_hash
+from src.ingestion import run as run_module
 from src.ingestion.run import run_ingestion
-from src.schema.models import RawArticle, SourceTier
+from src.schema.models import Base, RawArticle, SourceTier
 from src.shared.config import Settings
+
+from tests.ingestion_harness import (
+    bind_get_session_everywhere,
+    make_article,
+    session_factory_for,
+    settings_for,
+    silence_post_ingest_phases,
+    silence_translation,
+    stored_rows,
+    stub_adapters,
+)
 
 
 class TestContentHash:
@@ -44,266 +68,310 @@ class TestContentHash:
         assert compute_url_hash(url) == compute_url_hash(url.upper())
 
 
+class DedupEnv:
+    """One dedup test's world: a real database, real adapter selection.
+
+    ``seed`` writes rows into ``raw_articles`` the way a previous run would
+    have, so the dedup path under test compares against real stored rows rather
+    than a mock's idea of them. ``fetch`` declares what the adapters return and
+    re-stubs them, so each test states its own batch in its own body.
+    """
+
+    def __init__(self, engine, monkeypatch, module):
+        self.engine = engine
+        self._monkeypatch = monkeypatch
+        self._module = module
+        self.run = None
+        self.patched_modules: list[str] = []
+
+    def fetch(self, articles_by_adapter, health_by_adapter=None):
+        """Declare each adapter's return value and record the resulting run."""
+        self.run = stub_adapters(
+            self._monkeypatch,
+            self._module,
+            articles_by_adapter,
+            health_by_adapter,
+        )
+        self.run.patched_modules = self.patched_modules
+        return self.run
+
+    async def seed(self, *articles: RawArticle) -> None:
+        """Insert articles directly, standing in for an earlier ingest run."""
+        maker = async_sessionmaker(
+            self.engine, class_=AsyncSession, expire_on_commit=False
+        )
+        async with maker() as session:
+            session.add_all(list(articles))
+            await session.commit()
+
+    async def ingest(self, dry_run: bool = False) -> dict:
+        return await run_ingestion(dry_run=dry_run)
+
+    async def rows(self) -> list[tuple]:
+        """(url, url_hash, content_hash, source_domain) for every stored row."""
+        return await stored_rows(self.engine)
+
+
+@pytest.fixture
+async def dedup_env(monkeypatch):
+    """A real SQLite database wired in at every ``get_session`` binding.
+
+    The real ``build_adapters`` runs, so adapter selection is production logic.
+    Only each adapter's ``fetch()`` is replaced, because that is the one thing
+    here that would touch the network.
+    """
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    env = DedupEnv(engine, monkeypatch, run_module)
+    env.patched_modules = bind_get_session_everywhere(
+        monkeypatch, session_factory_for(engine)
+    )
+    monkeypatch.setattr(run_module, "get_settings", lambda: settings_for())
+    silence_post_ingest_phases(monkeypatch, run_module)
+    silence_translation(monkeypatch)
+
+    # The seam is only trustworthy if it actually covered the modules that open
+    # sessions. Asserting it at fixture setup means a future module that binds
+    # get_session by name is a loud failure here, not a silent hole in a test.
+    assert "src.ingestion.run" in env.patched_modules
+    assert "src.shared.database" in env.patched_modules
+
+    yield env
+    await engine.dispose()
+
+
 class TestRunIngestionDedup:
-    """Tests for run_ingestion content hash deduplication."""
+    """Dedup at ingest, asserted on the rows that land in raw_articles.
+
+    Each test seeds real rows, runs a known batch through the real
+    ``run_ingestion`` dedup code, and reads the table back. The counters in the
+    results dict are asserted too, but they are the summary -- the rows are the
+    evidence, because a count can come out right while the wrong rows survived.
+    """
 
     @pytest.mark.asyncio
-    async def test_url_hash_dedup(self):
-        """Articles with same URL hash are deduplicated."""
-        mock_session = AsyncMock()
-        mock_session.__aenter__.return_value = mock_session
-        mock_session.__aexit__.return_value = None
-
-        # Create articles with same URL hash (different objects)
-        # article1 is "new" - not in DB yet
-        article1 = RawArticle(
-            id=uuid.uuid4(),
-            url="https://apnews.com/article/1",
-            url_hash=compute_url_hash("https://apnews.com/article/1"),
-            title="Article 1",
-            body_text="Body text for article 1 that is long enough to pass the minimum length requirement for article extraction.",
-            source_domain="apnews.com",
-            source_tier=SourceTier.TIER1,
-            content_hash=compute_content_hash("Body text for article 1 that is long enough to pass the minimum length requirement for article extraction."),
+    async def test_url_hash_dedup(self, dedup_env):
+        """An article whose url_hash is already stored is not inserted again."""
+        stored_body = "Body of the article that was ingested by an earlier run."
+        await dedup_env.seed(
+            make_article("https://apnews.com/article/1", stored_body, "apnews.com")
         )
 
-        # article2 is the duplicate - same URL, so same url_hash
-        article2 = RawArticle(
-            id=uuid.uuid4(),
-            url="https://apnews.com/article/1",  # Same URL
-            url_hash=compute_url_hash("https://apnews.com/article/1"),
-            title="Article 1 Duplicate",
-            body_text="Body text for article 1 duplicate that is long enough to pass the minimum length requirement for article extraction.",
-            source_domain="apnews.com",
-            source_tier=SourceTier.TIER1,
-            content_hash=compute_content_hash("Body text for article 1 duplicate that is long enough to pass the minimum length requirement for article extraction."),
+        # Same URL, so the same url_hash: a correction or republish of a story
+        # we already hold. A different body, so content dedup could not catch
+        # it -- only the url_hash rule can.
+        dedup_env.fetch(
+            {
+                "rss_tier1": [
+                    make_article(
+                        "https://apnews.com/article/1",
+                        "A completely different body for the same URL, as a correction would be.",
+                        "apnews.com",
+                    )
+                ]
+            }
         )
 
-        # Mock DB: first call returns EXISTING url_hashes (article1's hash is already in DB)
-        # But wait - the test runs with article1 from RSS and article2 from GDELT
-        # The DB check happens on ALL articles at once
-        # So we need to return article1's url_hash as "existing" to make article1 a dup
-        # But we want article1 to be new and article2 to be dup...
-        # Actually: we want to test that the SECOND article with same URL is dedupped
-        # So we should only return article2's url_hash as existing
-        # But both have same url_hash. The logic checks if url_hash IN existing
-        # So we need to have the url_hash in existing BEFORE processing
-        # But then both would be skipped. Let me rethink...
+        results = await dedup_env.ingest()
 
-        # The test should simulate: article1 is already in DB, article2 comes in as new
-        # But both are in all_articles. The dedup checks against DB.
-        # So we should only have article2 in the incoming list, and DB has article1's hash
+        ingestion = results["phases"]["ingestion"]
+        assert ingestion["total_new"] == 0
+        assert ingestion["total_fetched"] == 1
+        assert ingestion["url_duplicates_skipped"] == 1
+        assert ingestion["content_duplicates_skipped"] == 0
 
-        mock_result = MagicMock()
-        # DB already has article1's url_hash
-        mock_result.scalars.return_value.all.return_value = [article1.url_hash]
-        mock_session.execute.return_value = mock_result
-        mock_session.commit = AsyncMock()
-
-        # Only ingest article2 (the duplicate)
-        with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[]), \
-             patch("src.ingestion.gdelt.ingest_gdelt", return_value=([article2], {"succeeded": ["apnews.com"], "failed": [], "skipped": []})), \
-             patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
-             patch("src.ingestion.run.get_session", return_value=mock_session), \
-             patch("src.ingestion.run.log_status"), \
-             patch("src.ingestion.run.build_reporting_units", return_value=0), \
-             patch("src.ingestion.run.build_stories", return_value=[]), \
-             patch("src.ingestion.run.apply_dynamic_gate", return_value={"queued": 0, "blocked": 0}):
-
-            results = await run_ingestion(dry_run=True)
-
-            # Should have 0 new articles (article2 is duplicate of existing in DB)
-            assert results["phases"]["ingestion"]["total_new"] == 0
-            assert results["phases"]["ingestion"]["total_fetched"] == 1
-            assert results["phases"]["ingestion"]["url_duplicates_skipped"] == 1
+        # The artifact: the table still holds exactly the originally stored row.
+        # The republished body did NOT overwrite it.
+        rows = await dedup_env.rows()
+        assert len(rows) == 1
+        ((url, url_hash, content_hash, domain),) = rows
+        assert url == "https://apnews.com/article/1"
+        assert url_hash == compute_url_hash("https://apnews.com/article/1")
+        assert content_hash == compute_content_hash(stored_body)
+        assert domain == "apnews.com"
 
     @pytest.mark.asyncio
-    async def test_content_hash_dedup_same_domain(self):
-        """Same content, same source_domain, different URL -> deduped (republish/correction)."""
-        mock_session = AsyncMock()
-        mock_session.__aenter__.return_value = mock_session
-        mock_session.__aexit__.return_value = None
-
+    async def test_content_hash_dedup_same_domain(self, dedup_env):
+        """Same body, same outlet, new URL -> dropped as a republish."""
         body = "This is the exact same body text appearing twice under the same outlet."
-        content_hash = compute_content_hash(body)
-
-        url_hash_result = MagicMock()
-        url_hash_result.scalars.return_value.all.return_value = []
-        content_hash_result = MagicMock()
-        content_hash_result.all.return_value = [(content_hash, "apnews.com")]
-        mock_session.execute = AsyncMock(side_effect=[url_hash_result, content_hash_result])
-        mock_session.commit = AsyncMock()
-
-        article = RawArticle(
-            id=uuid.uuid4(),
-            url="https://apnews.com/article/1-corrected",
-            url_hash=compute_url_hash("https://apnews.com/article/1-corrected"),
-            title="Article from AP (corrected)",
-            body_text=body,
-            source_domain="apnews.com",
-            source_tier=SourceTier.TIER1,
-            content_hash=content_hash,
+        await dedup_env.seed(
+            make_article("https://apnews.com/article/1-original", body, "apnews.com")
         )
 
-        with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[]), \
-             patch("src.ingestion.gdelt.ingest_gdelt", return_value=([article], {"succeeded": ["apnews.com"], "failed": [], "skipped": []})), \
-             patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
-             patch("src.ingestion.run.get_session", return_value=mock_session), \
-             patch("src.ingestion.run.log_status"), \
-             patch("src.ingestion.run.build_reporting_units", return_value=0), \
-             patch("src.ingestion.run.build_stories", return_value=[]), \
-             patch("src.ingestion.run.apply_dynamic_gate", return_value={"queued": 0, "blocked": 0}):
+        dedup_env.fetch(
+            {
+                "rss_tier1": [
+                    make_article(
+                        "https://apnews.com/article/1-corrected", body, "apnews.com"
+                    )
+                ]
+            }
+        )
 
-            results = await run_ingestion(dry_run=True)
-            assert results["phases"]["ingestion"]["total_new"] == 0
+        results = await dedup_env.ingest()
 
+        ingestion = results["phases"]["ingestion"]
+        assert ingestion["total_new"] == 0
+        assert ingestion["url_duplicates_skipped"] == 0
+        assert ingestion["content_duplicates_skipped"] == 1
+
+        # The artifact: the ORIGINAL url survived. A dedup that dropped the new
+        # row but recorded the new url's identity would look identical on the
+        # counters alone.
+        rows = await dedup_env.rows()
+        assert len(rows) == 1
+        ((url, _url_hash, content_hash, domain),) = rows
+        assert url == "https://apnews.com/article/1-original"
+        assert content_hash == compute_content_hash(body)
+        assert domain == "apnews.com"
 
     @pytest.mark.asyncio
-    async def test_content_hash_same_across_domains_not_deduped(self):
-        """Same content, different source_domain (syndication) -> both kept, so the
-        tier-1 gate can still see distinct owners for the same wire story."""
-        mock_session = AsyncMock()
-        mock_session.__aenter__.return_value = mock_session
-        mock_session.__aexit__.return_value = None
+    async def test_content_hash_same_across_domains_not_deduped(self, dedup_env):
+        """Same wire body, different outlet -> BOTH kept.
 
+        This is the negative assertion, and it was the worthless one: the old
+        harness asserted ``total_new == 1`` on a path where three adapters had
+        already raised, so the number described debris rather than policy.
+        Syndication across outlets is how a story acquires distinct owners, and
+        the tier-1 gate cannot see a second owner it never stored, so dropping
+        these would quietly starve the gate of exactly the evidence it needs.
+        """
         body = "This is the exact same wire body syndicated across two different outlets."
-        content_hash = compute_content_hash(body)
-
-        url_hash_result = MagicMock()
-        url_hash_result.scalars.return_value.all.return_value = []
-        content_hash_result = MagicMock()
-        content_hash_result.all.return_value = [(content_hash, "apnews.com")]
-        mock_session.execute = AsyncMock(side_effect=[url_hash_result, content_hash_result])
-        mock_session.commit = AsyncMock()
-
-        article = RawArticle(
-            id=uuid.uuid4(),
-            url="https://reuters.com/article/2",
-            url_hash=compute_url_hash("https://reuters.com/article/2"),
-            title="Article from Reuters",
-            body_text=body,
-            source_domain="reuters.com",
-            source_tier=SourceTier.TIER1,
-            content_hash=content_hash,
+        await dedup_env.seed(
+            make_article("https://apnews.com/article/wire-1", body, "apnews.com")
         )
 
-        with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[]), \
-             patch("src.ingestion.gdelt.ingest_gdelt", return_value=([article], {"succeeded": ["reuters.com"], "failed": [], "skipped": []})), \
-             patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
-             patch("src.ingestion.run.get_session", return_value=mock_session), \
-             patch("src.ingestion.run.log_status"), \
-             patch("src.ingestion.run.build_reporting_units", return_value=0), \
-             patch("src.ingestion.run.build_stories", return_value=[]), \
-             patch("src.ingestion.run.apply_dynamic_gate", return_value={"queued": 0, "blocked": 0}):
+        dedup_env.fetch(
+            {
+                "rss_tier1": [
+                    make_article(
+                        "https://reuters.com/article/wire-1", body, "reuters.com"
+                    )
+                ]
+            }
+        )
 
-            results = await run_ingestion(dry_run=True)
-            # Different owner, same wire content — must NOT be deduped away, or the
-            # tier-1 gate can never see a second distinct owner for this story.
-            assert results["phases"]["ingestion"]["total_new"] == 1
+        results = await dedup_env.ingest()
+
+        ingestion = results["phases"]["ingestion"]
+        assert ingestion["total_new"] == 1
+        assert ingestion["url_duplicates_skipped"] == 0
+        assert ingestion["content_duplicates_skipped"] == 0
+
+        # The artifact: two rows, ONE content_hash, TWO distinct owners. Stated
+        # as data rather than as a count, because that is the property the
+        # tier-1 gate actually depends on.
+        rows = await dedup_env.rows()
+        assert len(rows) == 2
+        assert {r[2] for r in rows} == {compute_content_hash(body)}
+        assert {r[3] for r in rows} == {"apnews.com", "reuters.com"}
+        assert {r[0] for r in rows} == {
+            "https://apnews.com/article/wire-1",
+            "https://reuters.com/article/wire-1",
+        }
 
     @pytest.mark.asyncio
-    async def test_both_hashes_checked(self):
-        """Both URL hash and content hash are checked against DB."""
-        mock_session = AsyncMock()
-        mock_session.__aenter__.return_value = mock_session
-        mock_session.__aexit__.return_value = None
+    async def test_content_hash_dedup_counted_separately(self, dedup_env):
+        """A URL dup and a content dup are counted independently.
 
-        body = "Body text for testing."
-        content_hash = compute_content_hash(body)
-        url_hash = compute_url_hash("https://example.com/article")
+        The two counters answer different questions -- "have we seen this link?"
+        and "have we seen this text from this outlet?" -- so a run that
+        collapsed them into one number would hide which rule actually fired.
+        """
+        stored_url = "https://apnews.com/article/existing"
+        stored_body = "This body already exists in the DB under reuters.com."
 
-        article = RawArticle(
-            id=uuid.uuid4(),
-            url="https://example.com/article",
-            url_hash=url_hash,
-            title="Test Article",
-            body_text=body,
-            source_domain="example.com",
-            source_tier=SourceTier.TIER2,
-            content_hash=content_hash,
+        await dedup_env.seed(
+            make_article(
+                stored_url,
+                "Body of the row stored by an earlier run, for the URL-duplicate case.",
+                "apnews.com",
+            ),
+            make_article(
+                "https://reuters.com/article/stored", stored_body, "reuters.com"
+            ),
         )
 
-        url_hash_result = MagicMock()
-        url_hash_result.scalars.return_value.all.return_value = []
-        content_hash_result = MagicMock()
-        content_hash_result.all.return_value = []  # returns (content_hash, source_domain) tuples
-        mock_session.execute = AsyncMock(side_effect=[url_hash_result, content_hash_result])
-        mock_session.commit = AsyncMock()
+        # Matches the stored URL exactly and carries a unique body, so only the
+        # url_hash rule can catch it.
+        url_dup = make_article(
+            stored_url,
+            "A brand new body arriving under a URL we have already stored.",
+            "apnews.com",
+        )
+        # A new URL, but the same body under the same outlet as a stored row,
+        # so only the content_hash rule can catch it.
+        content_dup = make_article(
+            "https://reuters.com/article/new-url", stored_body, "reuters.com"
+        )
+        dedup_env.fetch({"rss_tier1": [url_dup, content_dup]})
 
-        with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[article]), \
-             patch("src.ingestion.gdelt.ingest_gdelt", return_value=([], {"succeeded": [], "failed": [], "skipped": []})), \
-             patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
-             patch("src.ingestion.run.get_session", return_value=mock_session), \
-             patch("src.ingestion.run.log_status"), \
-             patch("src.ingestion.run.build_reporting_units", return_value=0), \
-             patch("src.ingestion.run.build_stories", return_value=[]), \
-             patch("src.ingestion.run.apply_dynamic_gate", return_value={"queued": 0, "blocked": 0}):
+        results = await dedup_env.ingest()
 
-            await run_ingestion(dry_run=True)
+        ingestion = results["phases"]["ingestion"]
+        assert ingestion["url_duplicates_skipped"] == 1
+        assert ingestion["content_duplicates_skipped"] == 1
+        assert ingestion["total_new"] == 0
+        assert ingestion["total_fetched"] == 2
 
-            # Should have called execute twice (URL + content hash)
-            assert mock_session.execute.call_count == 2
+        # The artifact: nothing was written, and both seeded rows are intact.
+        rows = await dedup_env.rows()
+        assert len(rows) == 2
+        assert {r[0] for r in rows} == {
+            "https://apnews.com/article/existing",
+            "https://reuters.com/article/stored",
+        }
 
     @pytest.mark.asyncio
-    async def test_content_hash_dedup_counted_separately(self):
-        """url_duplicates_skipped and content_duplicates_skipped are tracked independently."""
-        mock_session = AsyncMock()
-        mock_session.__aenter__.return_value = mock_session
-        mock_session.__aexit__.return_value = None
+    async def test_both_hashes_checked_in_two_batched_queries(self, dedup_env):
+        """Both keys are consulted, in one query each, for the whole batch.
 
-        dup_url = "https://apnews.com/article/existing"
-        dup_url_hash = compute_url_hash(dup_url)
+        This used to assert ``mock_session.execute.call_count == 2``, which
+        counted calls recorded on a mock rather than observing any SQL. Here the
+        count comes from the statements the engine actually executed, so a
+        regression that issued one query per article, or dropped the content
+        query entirely, would be caught.
+        """
+        seen: list[str] = []
 
-        article1 = RawArticle(  # URL duplicate — its url_hash is already in the DB
-            id=uuid.uuid4(),
-            url=dup_url,
-            url_hash=dup_url_hash,
-            title="Already-seen AP article",
-            body_text="Body text for the article that is a pure URL duplicate of one already stored.",
-            source_domain="apnews.com",
-            source_tier=SourceTier.TIER1,
-            content_hash=compute_content_hash("unique body one"),
+        def _record(_conn, _cursor, statement, *_args):
+            lowered = statement.lower()
+            if lowered.startswith("select") and "raw_articles" in lowered:
+                seen.append(" ".join(statement.split()))
+
+        event.listen(
+            dedup_env.engine.sync_engine, "before_cursor_execute", _record
         )
+        try:
+            dedup_env.fetch(
+                {
+                    "rss_tier1": [
+                        make_article(
+                            f"https://apnews.com/article/{i}",
+                            f"Body number {i}, distinct from every other.",
+                            "apnews.com",
+                        )
+                        for i in range(5)
+                    ]
+                }
+            )
+            results = await dedup_env.ingest()
+        finally:
+            event.remove(
+                dedup_env.engine.sync_engine, "before_cursor_execute", _record
+            )
 
-        content_dup_body = "This body already exists in the DB under reuters.com."
-        content_dup_hash = compute_content_hash(content_dup_body)
-        article2 = RawArticle(  # content duplicate — new URL, same content+domain as a stored row
-            id=uuid.uuid4(),
-            url="https://reuters.com/article/new-url",
-            url_hash=compute_url_hash("https://reuters.com/article/new-url"),
-            title="Reuters republish",
-            body_text=content_dup_body,
-            source_domain="reuters.com",
-            source_tier=SourceTier.TIER1,
-            content_hash=content_dup_hash,
-        )
-
-        # Exactly two DB round trips total: run_ingestion batches url_hashes and
-        # content_hashes across ALL fetched articles into one query each — not
-        # one query per article.
-        url_hash_result = MagicMock()
-        url_hash_result.scalars.return_value.all.return_value = [dup_url_hash]
-        content_hash_result = MagicMock()
-        content_hash_result.all.return_value = [(content_dup_hash, "reuters.com")]
-        mock_session.execute = AsyncMock(side_effect=[url_hash_result, content_hash_result])
-        mock_session.commit = AsyncMock()
-
-        with patch("src.ingestion.rss.ingest_rss_feeds", return_value=[]), \
-             patch("src.ingestion.gdelt.ingest_gdelt", return_value=([article1, article2], {"succeeded": ["apnews.com", "reuters.com"], "failed": [], "skipped": []})), \
-             patch("src.ingestion.reddit.ingest_reddit", return_value=[]), \
-             patch("src.ingestion.run.get_session", return_value=mock_session), \
-             patch("src.ingestion.run.log_status"), \
-             patch("src.ingestion.run.build_reporting_units", return_value=0), \
-             patch("src.ingestion.run.build_stories", return_value=[]), \
-             patch("src.ingestion.run.apply_dynamic_gate", return_value={"queued": 0, "blocked": 0}):
-
-            results = await run_ingestion(dry_run=True)
-            ingestion = results["phases"]["ingestion"]
-
-            assert ingestion["url_duplicates_skipped"] == 1
-            assert ingestion["content_duplicates_skipped"] == 1
-            assert ingestion["total_new"] == 0
-            assert mock_session.execute.call_count == 2
+        assert results["phases"]["ingestion"]["total_new"] == 5
+        assert len(seen) == 2, f"expected 2 dedup SELECTs for the batch, got {seen}"
+        assert "url_hash" in seen[0]
+        assert "content_hash" in seen[1]
+        assert len(await dedup_env.rows()) == 5
 
 
 class TestIngestionSourcesHaveContentHash:
@@ -317,7 +385,6 @@ class TestIngestionSourcesHaveContentHash:
         "process_feed_entry so the RSS ingestion test can exercise the real "
         "content-hash path instead of short-circuiting on it."
     )
-
 
     @pytest.mark.asyncio
     async def test_rss_sets_content_hash(self):
