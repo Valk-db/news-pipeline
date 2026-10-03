@@ -787,3 +787,107 @@ def test_stampable_body_floor_matches_the_ingestion_floor():
     from src.ingestion.rss_evidence import MIN_BODY_CHARS
 
     assert MIN_STAMPABLE_BODY_CHARS == MIN_BODY_CHARS
+
+
+class _NoteSigner:
+    """A signer that can mint a v3 (note-format) checkpoint.
+
+    v3 refuses to sign unless the signer exposes a public key, carries a key
+    name equal to the checkpoint's origin, and has the key id the signed
+    payload names (F8). HmacDevSigner has none of those, which is why every
+    other fixture in this file can only produce a v1 checkpoint -- and why a
+    v3 checkpoint, the only format sign_next_checkpoint actually writes, had no
+    coverage here at all.
+    """
+
+    algorithm = "ed25519"
+
+    def __init__(self, key_id="test-v3-key", key_name="procmon.dev/transparency"):
+        self.key_id = key_id
+        self.key_name = key_name
+        self._secret = b"proof-permalink-v3-test-secret"
+
+    def public_key_bytes(self) -> bytes:
+        return bytes(32)
+
+    def sign(self, message: bytes) -> bytes:
+        return hmac.new(self._secret, message, hashlib.sha256).digest()
+
+    def verify(self, message: bytes, signature: bytes) -> bool:
+        return hmac.compare_digest(self.sign(message), signature)
+
+
+class TestTreeScheme:
+    """The page must fold the tree the checkpoint says was signed.
+
+    Checkpoint.tree_scheme() maps v1/v2 to the legacy n1-ct-dup-v1 tree and v3
+    to RFC 6962. sign_next_checkpoint writes v3. A page that builds the sibling
+    path and the fold with the default scheme folds a different tree than the
+    operator signed, so a genuine v3 proof renders "Verification failed: this
+    proof does not check out" -- the page accusing the operator of a forged log
+    over a checkpoint that verifies.
+    """
+
+    async def test_v3_rfc6962_checkpoint_renders_verified(
+        self, app_with_db, db_session, monkeypatch
+    ):
+        from src.transparency.checkpoint import (
+            FORMAT_C2SP_V3,
+            TREE_SCHEME_RFC6962,
+            Checkpoint,
+            entry_timestamps_root,
+            rfc6962_path,
+            rfc6962_root,
+        )
+
+        signer = _NoteSigner()
+        monkeypatch.setattr(
+            "curation_ui.proofs.verifier_for",
+            lambda signed, trusted: signer if signed.key_id == signer.key_id else None,
+        )
+
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session)
+        # Four leaves: a power-of-two tree, so this test is about the scheme and
+        # not about the variable-depth path a promoted node produces.
+        for _ in range(3):
+            await _stamp_article(db_session, article, log)
+        other = _make_article(db_session, url="https://example.test/article-2")
+        await _stamp_article(db_session, other, log)
+        entries = await log.entries()
+        leaves = [entry.leaf_hash for entry in entries]
+        assert len(leaves) == 4
+
+        checkpoint = Checkpoint(
+            tree_size=len(entries),
+            merkle_root=rfc6962_root(leaves),
+            chain_hash=await log.head(),
+            timestamp=datetime(2026, 10, 3, 6, 0, tzinfo=timezone.utc),
+            format=FORMAT_C2SP_V3,
+            key_id=signer.key_id,
+            entry_timestamps=entry_timestamps_root(entries),
+        )
+        assert checkpoint.tree_scheme() == TREE_SCHEME_RFC6962
+        await save_checkpoint(db_session, sign_checkpoint(checkpoint, signer))
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "Inclusion verified" in body
+        assert "the fold lands on a different root" not in body
+        # The displayed path is the one the operator's tree actually has.
+        for sibling in rfc6962_path(leaves, article.log_index):
+            assert sibling.hex()[:16] in body
+
+    async def test_legacy_ct_checkpoint_still_verifies(
+        self, app_with_db, db_session, trusted_test_key
+    ):
+        """The v1/ct-v1 path is unchanged: no regression for the rows already
+        published on dev, which are all n1-ct-dup-v1."""
+        log = SqlAlchemyMerkleLog(db_session)
+        article = _make_article(db_session)
+        await _stamp_article(db_session, article, log)
+        await _checkpoint_all(db_session, log, signer=trusted_test_key)
+        await db_session.commit()
+
+        body = TestClient(app_with_db).get(f"/proof/{article.id}").text
+        assert "Inclusion verified" in body

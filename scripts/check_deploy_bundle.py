@@ -58,7 +58,7 @@ def report(tree: pathlib.Path, *, python: str | None = None,
     if verbose:
         for top, counts in sorted(file_set.summary_by_top_level().items()):
             print("  %-34s in=%-4d out=%-4d dirs_out=%d"
-                  % (top, counts["included"], counts["excluded"],
+                  % (top, counts["included_files"], counts["excluded_files"],
                      counts["excluded_dirs"]))
 
     _rule("2. Import check (curation_ui.main from the filtered tree alone)")
