@@ -85,6 +85,30 @@ class Settings(BaseSettings):
     # reports that signing is not configured instead of signing with a dev key.
     transparency_signing_key: str = ""
 
+    # The last checkpoint published, recorded OUTSIDE this database, as
+    # "<tree_size>:<checkpoint_digest_hex>" (signing._published_head_value).
+    # This is the only input to the signer an attacker with database write
+    # access cannot move, so it is what makes a rollback, truncation, or deletion
+    # of published checkpoints detectable rather than invisible.
+    #
+    # It is a floor, not a witness. An attacker who can also rewrite the deploy's
+    # environment edits this value and the log together, and it buys nothing
+    # there. A real witness -- OpenTimestamps, a co-signer we do not control, an
+    # archived copy -- is Phase 2 (src/transparency/anchoring.py, an interface
+    # and a deliberate stub). Empty means "nothing published yet", which is only
+    # acceptable with transparency_genesis_confirmed; the signer refuses
+    # otherwise rather than reading an empty checkpoint table as genesis.
+    transparency_signed_head: str = ""
+
+    # The operator has explicitly asserted that this log's very first checkpoint
+    # is legitimate. Until this is set, a log with no checkpoints refuses:
+    # RLS hiding every row, a truncated table, and a genuine first run are
+    # indistinguishable from inside the database, and treating all three as
+    # "genesis" is what let a rewritten history be re-signed from the start.
+    # This is a deliberate, one-time, human decision -- never set it from code
+    # that runs on the signing path.
+    transparency_genesis_confirmed: bool = False
+
     # Which log a v2 checkpoint claims to be. The C2SP spec wants a unique,
     # schema-less log identity; it must match the signer's key name.
     transparency_origin: str = "procmon.dev/transparency"

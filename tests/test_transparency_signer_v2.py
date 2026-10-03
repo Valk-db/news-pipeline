@@ -53,6 +53,18 @@ from src.transparency.signed_note import (
 )
 from src.transparency.store import TransparencyCheckpoint, save_checkpoint
 
+
+def _seed(label: str) -> bytes:
+    """A deterministic >= 32-byte signing seed for a test.
+
+    generate_ed25519_signer refuses a seed shorter than MIN_SIGNING_SEED_BYTES,
+    so tests that need a reproducible key pair cannot use a short label. This
+    hashes the label to exactly 32 bytes, which is deterministic per label and
+    satisfies the production constraint rather than bypassing it.
+    """
+    return hashlib.sha256(f"test-seed:{label}".encode()).digest()
+
+
 needs_cryptography = pytest.mark.skipif(
     not ed25519_available(), reason="cryptography is not installed"
 )
@@ -349,7 +361,7 @@ class TestCheckpointV2:
 
     @needs_cryptography
     def test_v2_signature_carries_the_note_key_id_and_verifies(self):
-        signer = generate_ed25519_signer(seed=b"v2-test")
+        signer = generate_ed25519_signer(seed=_seed("v2-test"))
         signed = sign_checkpoint(_v2_checkpoint(), signer)
         # 4-byte note key id + a raw Ed25519 signature.
         assert len(signed.signature) == 68
@@ -360,7 +372,7 @@ class TestCheckpointV2:
     @needs_cryptography
     def test_a_signature_cannot_be_replayed_under_another_key_name(self):
         """The origin/key-name binding: a key cannot sign as another log."""
-        signer = generate_ed25519_signer(seed=b"replay-test")
+        signer = generate_ed25519_signer(seed=_seed("replay-test"))
         signed = sign_checkpoint(_v2_checkpoint(), signer)
         # Same key, renamed to a different log.
         renamed = SignedCheckpoint(
@@ -374,15 +386,15 @@ class TestCheckpointV2:
 
     @needs_cryptography
     def test_a_v2_checkpoint_signed_by_another_key_fails_verification(self):
-        signer = generate_ed25519_signer(seed=b"right-key")
-        other = generate_ed25519_signer(seed=b"wrong-key")
+        signer = generate_ed25519_signer(seed=_seed("right-key"))
+        other = generate_ed25519_signer(seed=_seed("wrong-key"))
         signed = sign_checkpoint(_v2_checkpoint(), signer)
         impostor = Ed25519LikeSigner(other, key_id=signed.key_id)
         assert not verify_checkpoint(signed, impostor)
 
     @needs_cryptography
     def test_the_signed_note_document_is_parseable_by_the_note_parser(self):
-        signer = generate_ed25519_signer(seed=b"document-test")
+        signer = generate_ed25519_signer(seed=_seed("document-test"))
         signed = sign_checkpoint(_v2_checkpoint(), signer)
         document = signed.signed_note_document()
         assert document is not None
@@ -399,7 +411,7 @@ class TestCheckpointV2:
             chain_hash=b"\x02" * 32,
             timestamp=datetime.now(timezone.utc),
         )
-        signer = generate_ed25519_signer(seed=b"v1-doc")
+        signer = generate_ed25519_signer(seed=_seed("v1-doc"))
         assert sign_checkpoint(v1, signer).signed_note_document() is None
 
     @needs_cryptography
@@ -416,10 +428,10 @@ class TestCheckpointV2:
             chain_hash=b"\x03" * 32,
             timestamp=datetime(2026, 10, 1, tzinfo=timezone.utc),
         )
-        v1_signer = generate_ed25519_signer(seed=b"v1-signer")
+        v1_signer = generate_ed25519_signer(seed=_seed("v1-signer"))
         v1_signed = sign_checkpoint(v1_checkpoint, v1_signer)
 
-        v2_signer = generate_ed25519_signer(seed=b"v2-signer")
+        v2_signer = generate_ed25519_signer(seed=_seed("v2-signer"))
         v2_checkpoint = _v2_checkpoint(tree_size=2, previous_digest=bytes.fromhex(checkpoint_digest(v1_signed)))
         v2_signed = sign_checkpoint(v2_checkpoint, v2_signer)
 
@@ -518,7 +530,7 @@ class TestKeyBounds:
 
     @needs_cryptography
     def test_verifier_for_returns_none_outside_the_validity_window(self):
-        signer = generate_ed25519_signer(seed=b"bounded")
+        signer = generate_ed25519_signer(seed=_seed("bounded"))
         checkpoint = _v2_checkpoint()
         signed = sign_checkpoint(checkpoint, signer)
         inside = TrustedKey(
@@ -536,7 +548,7 @@ class TestKeyBounds:
 
     @needs_cryptography
     def test_a_key_name_mismatch_defeats_verification(self):
-        signer = generate_ed25519_signer(seed=b"named")
+        signer = generate_ed25519_signer(seed=_seed("named"))
         signed = sign_checkpoint(_v2_checkpoint(), signer)
         wrong_name = TrustedKey(signer.key_id, "ed25519", signer.public_key_bytes(), key_name="other.test/log")
         assert verifier_for(signed, {signer.key_id: wrong_name}) is None
@@ -550,7 +562,7 @@ class TestSignerRefusals:
     @needs_cryptography
     async def test_signs_a_v2_checkpoint_and_chains_it(self, db_session):
         log = await _log_with(4)
-        signer = generate_ed25519_signer(seed=b"signer-1")
+        signer = generate_ed25519_signer(seed=_seed("signer-1"))
         result = await signing.sign_next_checkpoint(
             db_session, log, signer, origin=ORIGIN, lock=False
         )
@@ -576,7 +588,7 @@ class TestSignerRefusals:
     @needs_cryptography
     async def test_rerunning_with_no_new_entries_is_idempotent(self, db_session):
         log = await _log_with(3)
-        signer = generate_ed25519_signer(seed=b"signer-2")
+        signer = generate_ed25519_signer(seed=_seed("signer-2"))
         first = await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False)
         again = await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False)
         assert again.status == "already_signed"
@@ -598,7 +610,7 @@ class TestSignerRefusals:
         for good while the cron reported success on every single run.
         """
         log = await _log_with(3)
-        signer = generate_ed25519_signer(seed=b"signer-v1-then-v2")
+        signer = generate_ed25519_signer(seed=_seed("signer-v1-then-v2"))
 
         # The historical v1 row, signed the way the pre-v2 code signed.
         v1 = Checkpoint(
@@ -640,7 +652,7 @@ class TestSignerRefusals:
     async def test_refuses_to_sign_a_shorter_history(self, db_session):
         """A log that shrank must not produce a valid-looking new checkpoint."""
         log = await _log_with(5)
-        signer = generate_ed25519_signer(seed=b"signer-3")
+        signer = generate_ed25519_signer(seed=_seed("signer-3"))
         await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False)
 
         # Rebuild the log with fewer entries, as a truncation would.
@@ -662,7 +674,7 @@ class TestSignerRefusals:
         root over the first N leaves and refuses when it disagrees with the
         root already published at that size.
         """
-        signer = generate_ed25519_signer(seed=b"signer-4")
+        signer = generate_ed25519_signer(seed=_seed("signer-4"))
         first = await _log_with(3)
         await signing.sign_next_checkpoint(db_session, first, signer, origin=ORIGIN, lock=False)
 
@@ -682,7 +694,7 @@ class TestSignerRefusals:
     @needs_cryptography
     async def test_refuses_equivocation_at_a_published_tree_size(self, db_session):
         """A second row at the same size with a different root is refused."""
-        signer = generate_ed25519_signer(seed=b"signer-5")
+        signer = generate_ed25519_signer(seed=_seed("signer-5"))
         log = await _log_with(2)
         await signing.sign_next_checkpoint(db_session, log, signer, origin=ORIGIN, lock=False)
 
@@ -714,7 +726,7 @@ class TestSignerRefusals:
         assert result.detail["published_root"] != result.detail["derived_root"]
 
     async def test_an_empty_log_is_refused(self, db_session):
-        signer = generate_ed25519_signer(seed=b"signer-6")
+        signer = generate_ed25519_signer(seed=_seed("signer-6"))
         result = await signing.sign_next_checkpoint(
             db_session, InMemoryMerkleLog(), signer, origin=ORIGIN, lock=False
         )
@@ -727,7 +739,7 @@ class TestSignerRefusals:
         import dataclasses
 
         log = await _log_with(3)
-        signer = generate_ed25519_signer(seed=b"signer-7")
+        signer = generate_ed25519_signer(seed=_seed("signer-7"))
         # Corrupt the second entry's chain hash: the chain no longer verifies.
         # LogEntry is frozen, so the entry is replaced rather than mutated --
         # which is itself the point: the log gives no way to edit one in place.

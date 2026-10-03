@@ -258,21 +258,79 @@ class Ed25519Verifier:
         return bytes(self._public_key.public_bytes_raw())
 
 
+# Domain separation for key derivation. A checkpoint signature and a signing key
+# are derived in the same process from values an operator pastes; without distinct
+# info strings a seed reused for one purpose could produce the other.
+SIGNING_KDF_INFO = b"n1:transparency-signer:ed25519:v2"
+
+# The minimum seed length this module accepts, in bytes.
+#
+# This is the load-bearing part of the fix, not the KDF. Ed25519 public keys are
+# published, so anyone can take the published key and ask "which 32-byte value
+# hashes to this key?". With bare SHA-256 over a short pasted string -- a
+# passphrase, a key name, a word from the docs -- that search is trivial and the
+# operator's signing key is recoverable from a public artifact. No KDF fixes
+# that on its own either: any KDF's work factor only slows a search whose input
+# space is low-entropy, and 2^n is 2^n for any n below about 128.
+#
+# So the requirement is explicit: the seed must carry at least 32 bytes of
+# randomly generated material, which is what makes the preimage search
+# intractable rather than merely slower. A shorter value is REFUSED rather than
+# quietly stretched, because quietly stretching a pasted passphrase is how the
+# failure shipped in the first place. The key ceremony generates 32 bytes from a
+# CSPRNG and publishes the derived public key through this exact function, so
+# what the operator verifies is what the signer will use.
+MIN_SIGNING_SEED_BYTES = 32
+
+
+def derive_ed25519_private_key(seed: bytes) -> bytes:
+    """Derive the 32 private bytes Ed25519 requires from >= 32 bytes of seed.
+
+    HKDF-SHA256 (RFC 5869), extract-then-expand, with SIGNING_KDF_INFO as the
+    info string. Chosen over PBKDF2/scrypt deliberately: those exist to make a
+    LOW-entropy passphrase expensive, and this path refuses low-entropy seeds
+    outright (MIN_SIGNING_SEED_BYTES), so the expensive-work-factor machinery
+    would buy nothing here and would put a multi-second stall in a cron route.
+
+    A fixed salt is correct here and worth being explicit about: a per-deployment
+    salt would add nothing, because the value being protected is the seed, not a
+    stored hash, and the attacker gets unlimited attempts against the public key
+    regardless of what salt the derivation used. The domain-separated info
+    string is what prevents cross-purpose derivation reuse.
+    """
+    if len(seed) < MIN_SIGNING_SEED_BYTES:
+        raise ValueError(
+            f"signing seed must be at least {MIN_SIGNING_SEED_BYTES} bytes of random "
+            f"material, got {len(seed)}. A shorter value (a passphrase, a pasted key) "
+            "is brute-forceable from the published Ed25519 public key, so it is refused "
+            "rather than stretched. Generate 32 bytes with a CSPRNG."
+        )
+    # extract(salt=<fixed>, key_material=seed) -> PRK, then expand to 32 bytes.
+    prk = hmac.new(b"n1:transparency-signer:hkdf-salt", seed, hashlib.sha256).digest()
+    okm = hmac.new(prk, SIGNING_KDF_INFO + b"\x01", hashlib.sha256).digest()
+    return okm
+
+
 def generate_ed25519_signer(seed: bytes | None = None) -> Ed25519Signer:
     """Fresh Ed25519 keypair.
 
-    `seed` is arbitrary-length seed material (a passphrase is fine): it is
-    hashed down to the 32 bytes Ed25519 requires, so a demo key is reproducible
-    without callers counting bytes. Omit it for a random key -- and in
-    production, generate the key outside this process and never store the seed
-    next to the log.
+    `seed` must be at least MIN_SIGNING_SEED_BYTES (32) bytes of random material;
+    anything shorter raises ValueError rather than being hashed up to size. That
+    is the F3 fix: the published Ed25519 public key makes the derivation a
+    brute-force oracle for any low-entropy seed, so the seed must actually be
+    high-entropy. See derive_ed25519_private_key for why the KDF here is HKDF and
+    not a deliberately slow one.
+
+    Omit `seed` for a random key. The production ceremony generates the seed
+    outside this process, passes it here once to derive the public key it
+    publishes, and never stores it next to the log.
     """
     if not _ED25519_AVAILABLE:
         raise RuntimeError("generate_ed25519_signer needs the 'cryptography' package.")
     if seed is None:
         key = Ed25519PrivateKey.generate()
     else:
-        key = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(seed).digest())
+        key = Ed25519PrivateKey.from_private_bytes(derive_ed25519_private_key(seed))
     return Ed25519Signer(bytes(key.private_bytes_raw()))
 
 

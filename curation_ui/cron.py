@@ -49,6 +49,7 @@ from src.transparency.checkpoint import (
     ed25519_available,
     generate_ed25519_signer,
 )
+from src.transparency.keys import load_trusted_keys
 from src.transparency.log import SqlAlchemyMerkleLog
 
 logger = logging.getLogger(__name__)
@@ -140,7 +141,16 @@ def _signer_or_error() -> object:
                 "The route does not fall back to the development HMAC key."
             ),
         )
-    return generate_ed25519_signer(seed.encode("utf-8"))
+    try:
+        return generate_ed25519_signer(seed.encode("utf-8"))
+    except ValueError as exc:
+        # A seed below the entropy floor is a deployment error, not a crash: the
+        # operator needs to be told the key is too weak, and a 500 would report
+        # "something is broken" instead of "this secret must be replaced".
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"TRANSPARENCY_SIGNING_KEY is unusable: {exc}",
+        ) from exc
 
 
 def _database_url(purpose: str) -> str:
@@ -208,6 +218,12 @@ async def cron_checkpoint(_: str = Depends(require_cron_token)):
     signer = _signer_or_error()
     database_url = _database_url("signing")
     settings = get_settings()
+    # The trust inputs, read from settings here rather than inside signing.py so
+    # the module stays free of config and can be called from a script or a test
+    # with values chosen explicitly. Defaults here are the refusing ones: an
+    # unset trusted-key set, an unset head, and an unconfirmed genesis.
+    trusted_keys = load_trusted_keys(settings.transparency_trusted_keys)
+    head = signing.parse_trusted_head(settings.transparency_signed_head)
     # get_session_for_url commits on clean exit and rolls back on an exception.
     # The advisory lock lives in sign_next_checkpoint's transaction, so an
     # overlapping fire skips rather than double-signing, and it is released
@@ -218,6 +234,9 @@ async def cron_checkpoint(_: str = Depends(require_cron_token)):
             SqlAlchemyMerkleLog(session),
             signer,
             origin=settings.transparency_origin,
+            trusted_keys=trusted_keys,
+            head=head,
+            genesis_confirmed=settings.transparency_genesis_confirmed,
         )
         if result.status == "refused":
             await signing.record_alert(session, result.reason or "refused", detail=result.to_dict())

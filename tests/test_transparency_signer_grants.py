@@ -44,6 +44,19 @@ import urllib.parse
 from pathlib import Path
 
 import pytest
+import hashlib
+
+
+def _seed(label: str) -> bytes:
+    """A deterministic >= 32-byte signing seed for a test.
+
+    generate_ed25519_signer refuses a seed shorter than MIN_SIGNING_SEED_BYTES,
+    so tests that need a reproducible key pair cannot use a short label. This
+    hashes the label to exactly 32 bytes, which is deterministic per label and
+    satisfies the production constraint rather than bypassing it.
+    """
+    return hashlib.sha256(f"test-seed:{label}".encode()).digest()
+
 
 MIGRATION_NAME = "20261002230000_transparency_signer_rbac.sql"
 MIGRATION = (
@@ -527,7 +540,7 @@ class TestRoleOnPostgres:
 
         url, connect_args = prepare_database_url(os.environ["DATABASE_URL"])
         engine = create_async_engine(url, connect_args=connect_args)
-        signer = generate_ed25519_signer(seed=b"fail-closed")
+        signer = generate_ed25519_signer(seed=_seed("fail-closed"))
         try:
             async with AsyncSession(engine, expire_on_commit=False) as session:
                 await session.execute(text(f"SET search_path = {SCHEMA}"))

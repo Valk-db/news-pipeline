@@ -6,6 +6,7 @@ proofs that fail against the wrong checkpoint, checkpoint signatures that only
 check out for the right key, and an anchor stub that records what it was handed.
 """
 import dataclasses
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -34,6 +35,18 @@ from src.transparency.log import (
     verify_chain,
 )
 from src.transparency.proofs import inclusion_proof, proof_root, verify_inclusion
+
+
+def _seed(label: str) -> bytes:
+    """A deterministic >= 32-byte signing seed for a test.
+
+    generate_ed25519_signer refuses a seed shorter than MIN_SIGNING_SEED_BYTES,
+    so tests that need a reproducible key pair cannot use a short label. This
+    hashes the label to exactly 32 bytes, which is deterministic per label and
+    satisfies the production constraint rather than bypassing it.
+    """
+    return hashlib.sha256(f"test-seed:{label}".encode()).digest()
+
 
 SECRET = b"test-only-secret"
 OTHER_SECRET = b"a-different-test-secret"
@@ -197,14 +210,14 @@ class TestCheckpointSignatures:
     @pytest.mark.skipif(not ed25519_available(), reason="cryptography is not installed")
     async def test_ed25519_signature_verifies_only_with_its_public_key(self):
         log = await _filled_log(4)
-        signer = generate_ed25519_signer(seed=b"test-seed")
+        signer = generate_ed25519_signer(seed=_seed("test-seed"))
         signed = await _signed_checkpoint(log, 4, signer)
 
         from src.transparency.checkpoint import Ed25519Verifier
 
         verifier = Ed25519Verifier(signer.public_key_bytes(), key_id=signer.key_id)
         assert verify_checkpoint(signed, verifier)
-        assert not verify_checkpoint(signed, generate_ed25519_signer(seed=b"other-seed"))
+        assert not verify_checkpoint(signed, generate_ed25519_signer(seed=_seed("other-seed")))
 
 
 class TestCheckpointContents:

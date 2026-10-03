@@ -6,6 +6,7 @@ public proof page needs:
 
     save_checkpoint(session, signed)          persist one signed checkpoint
     latest_checkpoint_covering(session, idx)  newest checkpoint whose tree covers idx
+    TransparencyQuarantine                     rows the signer must not build on
 
 The model sits on TransparencyBase (see log.py), deliberately NOT on the app
 Base: keeping the log's tables out of Base keeps them out of
@@ -79,6 +80,46 @@ class TransparencyCheckpoint(TransparencyBase):
                 "origin": self.log_id,
             }
         )
+
+
+class TransparencyQuarantine(TransparencyBase):
+    """Rows an operator has quarantined, so the signer stops building on them.
+
+    Why a table and not a status column: the two transparency tables are
+    append-only by trigger (20261002193000) and the signer role holds no UPDATE
+    or DELETE at all, which is right -- a signer that can delete an inconvenient
+    checkpoint is an equivocation primitive. So exclusion has to be recorded
+    somewhere else, and it has to be recorded the same way: appended, never
+    removed.
+
+    Two things need quarantining and both are permanent states that would
+    otherwise halt the signer forever:
+
+    - A row planted with a huge tree_size. It is append-only, so it can never be
+      deleted, and every subsequent run refuses log_shrank against it.
+    - A pre-v2 row signed with the development HMAC. No public key can verify it,
+      so once F1 authenticates the previous checkpoint it refuses against that
+      row too. This is the honest consequence of F1 rather than a bug in it.
+
+    Quarantine cannot be used to lower the bar: the signer skips these rows when
+    choosing the previous checkpoint, but the external head does not move, so a
+    quarantined genuine head still refuses with head_ahead_of_log. Excluding a row
+    and accepting a shorter history are not the same act.
+
+    checkpoint_id is a text id rather than a UUID foreign key, deliberately. An
+    FK to transparency_checkpoints(id) would make the quarantine insert fail for
+    a row that does not exist -- which is exactly the case where an operator is
+    recording a planted id by hand -- and would make the quarantine row itself
+    deletable by cascade if the referenced row ever were.
+    """
+
+    __tablename__ = "transparency_quarantine"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    checkpoint_id = Column(String(64), nullable=False, unique=True)
+    reason = Column(Text, nullable=False, default="")
+    quarantined_by = Column(String(128))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 async def save_checkpoint(session: AsyncSession, signed: SignedCheckpoint) -> TransparencyCheckpoint:

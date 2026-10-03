@@ -11,6 +11,7 @@ against the service layer; these tests drive it through HTTP with a stubbed
 session so the transport, the auth, and the status codes are pinned too.
 """
 
+import hashlib
 import json
 from contextlib import asynccontextmanager
 
@@ -22,6 +23,18 @@ import curation_ui.cron as cron_module
 from curation_ui.cron import CRON_TOKEN_ENV_VAR, cron_limiter, router
 from src.shared.config import get_settings
 from src.transparency import signing
+
+
+def _seed(label: str) -> bytes:
+    """A deterministic >= 32-byte signing seed for a test.
+
+    generate_ed25519_signer refuses a seed shorter than MIN_SIGNING_SEED_BYTES,
+    so tests that need a reproducible key pair cannot use a short label. This
+    hashes the label to exactly 32 bytes, which is deterministic per label and
+    satisfies the production constraint rather than bypassing it.
+    """
+    return hashlib.sha256(f"test-seed:{label}".encode()).digest()
+
 
 TOKEN = "test-cron-token-value"
 
@@ -133,7 +146,7 @@ class TestCronConfigurationRefusals:
 
     def test_no_database_is_503(self, monkeypatch):
         monkeypatch.setenv(CRON_TOKEN_ENV_VAR, TOKEN)
-        monkeypatch.setenv("TRANSPARENCY_SIGNING_KEY", "seed")
+        monkeypatch.setenv("TRANSPARENCY_SIGNING_KEY", _seed("no-db").hex())
         monkeypatch.setenv("TRANSPARENCY_SIGNER_DATABASE_URL", "")
         get_settings.cache_clear()
         saved = get_settings().database_url
@@ -152,7 +165,9 @@ class TestCronConfigurationRefusals:
         tries to connect and the failure is a driver error rather than the 503.
         """
         monkeypatch.setenv(CRON_TOKEN_ENV_VAR, TOKEN)
-        monkeypatch.setenv("TRANSPARENCY_SIGNING_KEY", "seed")
+        # 32 bytes: below the entropy floor the signer refuses, and this
+        # test is about the DSN, so the seed must not be the thing that fails.
+        monkeypatch.setenv("TRANSPARENCY_SIGNING_KEY", _seed("f4-dsn").hex())
         monkeypatch.setenv("TRANSPARENCY_SIGNER_DATABASE_URL", "")
         get_settings.cache_clear()
         monkeypatch.setattr(
@@ -232,7 +247,19 @@ class TestCronSigningOverHttp:
         monkeypatch.setattr(cron_module, "get_session_for_url", fake_session)
         monkeypatch.setattr(cron_module, "_signer_or_error", lambda: object())
 
-        async def fake_sign(session, log, signer, *, origin, lock=True):
+        async def fake_sign(
+            session, log, signer, *, origin, lock=True, trusted_keys=None,
+            head=None, genesis_confirmed=False,
+        ):
+            # Recorded rather than ignored: these are the F1/F2/F3 trust inputs
+            # the route now has to supply, and a route that stopped passing them
+            # would still pass every assertion in this file if the stub swallowed
+            # them.
+            state["trust_inputs"] = {
+                "trusted_keys": sorted(trusted_keys or {}),
+                "head": head,
+                "genesis_confirmed": genesis_confirmed,
+            }
             return state["result"]
 
         monkeypatch.setattr(signing, "sign_next_checkpoint", fake_sign)
@@ -256,7 +283,7 @@ class TestCronSigningOverHttp:
         )
         from datetime import datetime, timezone
 
-        signer = generate_ed25519_signer(seed=b"http-test")
+        signer = generate_ed25519_signer(seed=_seed("http-test"))
         checkpoint = Checkpoint(
             tree_size=3,
             merkle_root=bytes(range(32)),
