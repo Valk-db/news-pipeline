@@ -1881,6 +1881,127 @@ def test_ingestion_results_include_evidence_key():
     assert '"rss_evidence": rss_evidence_count' in source
     assert "RSS evidence: {rss_evidence_count}" in source
 
+# ---------------------------------------------------------------------------
+# gzip bodies (2026-10-02, batch-coverage)
+#
+# news.un.org and middleeasteye.net answer 200 with content-encoding: gzip.
+# urllib does not decode that, so the raw magic bytes used to reach
+# parse_feed_xml, which reported 0 items and made two live feeds look dead.
+# ---------------------------------------------------------------------------
+
+
+def test_maybe_decompress_inflates_gzip_body():
+    import gzip
+
+    from src.ingestion.rss_evidence import maybe_decompress, parse_feed_xml
+
+    xml = (
+        b'<?xml version="1.0"?><rss version="2.0"><channel><item>'
+        b"<title>UN steps up aid</title><link>https://news.un.org/feed/view/en/story/1</link>"
+        b"</item></channel></rss>"
+    )
+    items = parse_feed_xml(maybe_decompress(gzip.compress(xml)))
+    assert [i["title"] for i in items] == ["UN steps up aid"]
+
+
+def test_maybe_decompress_passes_through_plain_and_broken_gzip():
+    from src.ingestion.rss_evidence import GZIP_MAGIC, maybe_decompress
+
+    assert maybe_decompress(b"<rss/>") == b"<rss/>"
+    # Magic bytes that do not inflate are handed back unchanged, not raised on
+    # and not silently emptied: the parser still gets to report the bad body.
+    broken = GZIP_MAGIC + b"\x00truncated"
+    assert maybe_decompress(broken) == broken
+    assert maybe_decompress(b"") == b""
+
+
+def test_fetch_feed_polite_returns_decoded_body(monkeypatch):
+    """The 200 path decodes, so callers never see gzip magic bytes."""
+    import gzip
+
+    from src.ingestion import rss_evidence
+
+    payload = gzip.compress(b'<?xml version="1.0"?><rss version="2.0"><channel><item><title>x</title><link>https://news.un.org/feed/view/en/story/1</link></item></channel></rss>')
+
+    class _Resp:
+        status = 200
+        headers = {"Content-Encoding": "gzip"}
+
+        def read(self):
+            return payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(rss_evidence, "urlopen", lambda request, timeout=None: _Resp())
+    status, body, _, _, _ = rss_evidence.fetch_feed_polite("https://news.un.org/feed")
+    assert status == 200
+    assert not body.startswith(rss_evidence.GZIP_MAGIC)
+    assert rss_evidence.parse_feed_xml(body)[0]["title"] == "x"
+
+
+def test_rss_adapter_sweeps_every_tier_source_without_a_domain_filter():
+    """No filter means the whole tier, unchanged."""
+    from src.ingestion.adapters.rss_adapter import RssAdapter
+    from src.ingestion.source_registry import get_enabled_sources_by_tier
+    from src.ingestion.source_registry import SourceTier as RT
+
+    adapter = RssAdapter(RT.TIER2)
+    assert adapter.domains is None
+    assert adapter.sources() == get_enabled_sources_by_tier(RT.TIER2)
+
+
+def test_rss_adapter_narrows_to_the_requested_domains():
+    from src.ingestion.adapters.rss_adapter import RssAdapter
+    from src.ingestion.source_registry import SourceTier as RT
+
+    adapter = RssAdapter(RT.TIER2, domains={"allafrica.com"})
+    swept = adapter.sources()
+    assert set(swept) == {"allafrica.com"}
+    # A domain that is disabled or unknown is not resurrected by the filter.
+    assert RssAdapter(RT.TIER2, domains={"scmp.com"}).sources() == {}
+
+
+def test_build_adapters_narrows_the_tier_adapter_to_a_named_domain(capsys):
+    """--sources <domain> polls that domain, not the whole tier.
+
+    It used to select the whole tier-2 adapter for any named tier-2 domain and
+    then print "matched no adapter" for the very domain it had just matched, so
+    a domain-scoped run was indistinguishable from a full tier run in the log.
+    """
+    from src.ingestion.run import build_adapters
+    from src.ingestion.source_registry import SourceTier as RT
+
+    adapters = build_adapters(_Settings(), [RT.TIER2], sources=["allafrica.com"])
+    assert [a.name for a in adapters] == ["rss_tier2"]
+    assert adapters[0].domains == {"allafrica.com"}
+    assert "matched no adapter" not in capsys.readouterr().out
+
+
+def test_build_adapters_keeps_the_whole_tier_when_every_domain_is_named():
+    from src.ingestion.run import build_adapters
+    from src.ingestion.source_registry import get_enabled_sources_by_tier
+    from src.ingestion.source_registry import SourceTier as RT
+
+    wanted = sorted(get_enabled_sources_by_tier(RT.TIER2))
+    adapters = build_adapters(_Settings(), [RT.TIER2], sources=wanted)
+    assert [a.name for a in adapters] == ["rss_tier2"]
+    assert adapters[0].domains is None
+
+
+def test_build_adapters_warns_only_for_genuinely_unmatched_entries(capsys):
+    from src.ingestion.run import build_adapters
+    from src.ingestion.source_registry import SourceTier as RT
+
+    build_adapters(_Settings(), [RT.TIER2], sources=["allafrica.com", "not-a-real-domain.example"])
+    out = capsys.readouterr().out
+    assert "not-a-real-domain.example" in out
+    assert "allafrica.com" not in out
+
+
 # ------------------------------------------------------- cap vs known URLs
 
 

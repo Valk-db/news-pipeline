@@ -7,14 +7,19 @@ across processes" has to be testable without a process.
 """
 
 import asyncio
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pytest
 
-from src.shared.budget import GROQ_REQUESTS, used
+from src.shared.budget import GROQ_REQUESTS, today, used
 from src.shared.llm_budget import RequestBudget, BudgetExhausted
 
-TODAY = date.today()
+# The counter's day is defined once, in src/shared/budget.py, as the UTC day. A test that
+# reads back with date.today() -- the *local* day -- asserts against a different row
+# whenever the runner's timezone is not UTC, so these two tests failed for the four hours
+# a day between local midnight and UTC midnight and passed for the other twenty. Read the
+# same day the product spends against instead of re-deriving it here.
+TODAY = today()
 
 
 class TestRequestBudget:

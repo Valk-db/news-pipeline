@@ -1,0 +1,2273 @@
+{
+ "gold_version": "evalset-gold/v1",
+ "labeler": "stealth (opencode, openrouter-free/stealth/space-bunny-alpha), batch procmon/batch-evalset",
+ "labeling_method": [
+  "Read the article text EXACTLY as the model receives it: the first 8000 characters of dev raw_articles.body_text, which is the truncation at src/enrichment/snippet_extractor.py:40. The tail of a long article is deliberately NOT labeled, because the model never sees it.",
+  "For each article, pick the snippets a careful human editor would keep under the four criteria the production prompt itself states (snippet_extractor.py:44-48): direct quotes from NAMED sources, key statistics with context, important factual claims, definitive statements about events. At most 5, matching max_snippets=5.",
+  "Label every field the prompt asks for: type (one of the 5 the prompt enumerates, never a new value), entities (names that the snippet is actually about), confidence (0-100, how sure a human is that this belongs in the article), position (0-1 fraction into the 8000-char window, estimated from the character offset).",
+  "Labels were written WITHOUT looking at any pipeline output, so they do not encode the pipeline's current behaviour. The article text is the only input.",
+  "Reproduction: for a given article_id, the label is a deterministic function of the text. A second labeller needs only eval/data/corpus.json, the dev row, the four criteria quoted above, the five type values from the prompt, and the field definitions in eval/README.md. Agreement is measurable per field because the harness scores one field at a time."
+ ],
+ "known_limitations": [
+  "Inter-annotator agreement is NOT measured: there is only one labeller (me). Every number here should be read as a single-annotator baseline, not a ceiling. The first honest follow-up is a second labeller over 10 of these 30 and a per-field kappa.",
+  "The gold is a judgement about 'the snippets a human would keep'. A defensible alternative labeller would choose different sentences. Snippet_found recall is therefore bounded above by annotator agreement, not by 1.0.",
+  "For non-English articles, entities are labeled in the source language (as the prompt's 'exact snippet text' requires). If the model answers in English, snippet_found collapses to 0 -- which is a real finding about the field, not a matching artifact, and the harness reports a script_overlap diagnostic so the two can be told apart."
+ ],
+ "items": {
+  "000413bd-fc2b-4977-991f-a1dac4b66049": {
+   "stratum": "en-short",
+   "detected_language": "en",
+   "source_domain": "theguardian.com",
+   "title": "Andy Burnham 'prepared' to deliver radical change despite economic challenges – video",
+   "body_chars": 399,
+   "labeler_notes": "en-short; 399 chars. A Guardian video stub. The only two sentences that carry information are the who/what and the quoted stance.",
+   "snippets": [
+    {
+     "text": "The UK prime minister, Andy Burnham, speaks to the Guardian's political editor, Pippa Crerar, about how to change the public's perception of politics after a difficult fiscal period.",
+     "type": "fact",
+     "entities": [
+      "Andy Burnham",
+      "Pippa Crerar",
+      "the Guardian"
+     ],
+     "confidence": 80,
+     "position": 0.15,
+     "note": "Sets up the piece; names the actor and the interviewer."
+    },
+    {
+     "text": "He says he is prepared to make changes on the issues people are worried about, 'rather than constantly playing the political game'",
+     "type": "quote",
+     "entities": [
+      "Andy Burnham"
+     ],
+     "confidence": 85,
+     "position": 0.55,
+     "note": "The only attributed quote and the actual news."
+    }
+   ]
+  },
+  "25c0a5d0-a51e-4f61-b06f-26b2c7399f2a": {
+   "stratum": "en-short",
+   "detected_language": "en",
+   "source_domain": "gdacs.org",
+   "title": "Green flood alert in Guinea",
+   "body_chars": 399,
+   "labeler_notes": "en-short; templated GDACS bulletin. Highest-value fields are the event identity, the severity/alert level and the casualty/impact counts.",
+   "snippets": [
+    {
+     "text": "GDACS reported a flood event (FL1104178). Alert level: Green. Severity: Magnitude 0. Country: Guinea (GIN).",
+     "type": "fact",
+     "entities": [
+      "GDACS",
+      "Guinea"
+     ],
+     "confidence": 90,
+     "position": 0.05,
+     "note": "Event id, alert level, country: the identifying header of the bulletin."
+    },
+    {
+     "text": "On 18/09/2026, a flood started in Guinea, lasting until 29/09/2026 (last update).",
+     "type": "fact",
+     "entities": [
+      "Guinea"
+     ],
+     "confidence": 85,
+     "position": 0.45,
+     "note": "Onset and duration with context."
+    },
+    {
+     "text": "The flood caused 1 deaths and 269 displaced .",
+     "type": "stat",
+     "entities": [
+      "Guinea"
+     ],
+     "confidence": 90,
+     "position": 0.7,
+     "note": "The only impact numbers in the bulletin."
+    }
+   ]
+  },
+  "8a5bb853-23e1-4993-aa94-5b6b6dab170b": {
+   "stratum": "en-short",
+   "detected_language": "en",
+   "source_domain": "aljazeera.com",
+   "title": "Lawyers for US inmate who survived lethal injections demand release",
+   "body_chars": 399,
+   "labeler_notes": "en-short; 399 chars of Al Jazeera NewsFeed stub with a duplicated headline. Substance is the lawyer's quoted condition and the commutation request.",
+   "snippets": [
+    {
+     "text": "A lawyer for US death row inmate Christa Pike says she is in \"critical condition, receiving life-saving care\" after two failed attempts to give her a lethal injection.",
+     "type": "quote",
+     "entities": [
+      "Christa Pike"
+     ],
+     "confidence": 90,
+     "position": 0.6,
+     "note": "Attributed quote carrying the medical condition and the two failed attempts."
+    },
+    {
+     "text": "Pike’s lawyers are now asking for her sentence to be commuted.",
+     "type": "fact",
+     "entities": [
+      "Christa Pike"
+     ],
+     "confidence": 85,
+     "position": 0.85,
+     "note": "The concrete legal ask: the news."
+    }
+   ]
+  },
+  "f661e434-303d-4941-bb3e-58a94ddbe9ee": {
+   "stratum": "en-medium",
+   "detected_language": "en",
+   "source_domain": "npr.org",
+   "title": "Trade tensions mean fewer Canadians flocking to South Florida",
+   "body_chars": 2997,
+   "labeler_notes": "en-medium; NPR reported feature. Every load-bearing sentence is a number, so the gold is stat-heavy with two quotes for the human texture.",
+   "snippets": [
+    {
+     "text": "\"You have a $1,000 deposit already paid, you know — you're turning that down if you're not coming. At least postpone it or do something,\" Clavet recalled telling the guest.",
+     "type": "quote",
+     "entities": [
+      "Richard Clavet",
+      "Richard's Motel"
+     ],
+     "confidence": 85,
+     "position": 0.15,
+     "note": "Named-source quote, with a figure in it."
+    },
+    {
+     "text": "Gandhi said he would typically have 60 to 70 Canadian guests during the snowbird season. Last year, that dropped to 50, and this year he's expecting about 30 guests.",
+     "type": "stat",
+     "entities": [
+      "Jay Gandhi",
+      "Curtis Inn & Suites"
+     ],
+     "confidence": 90,
+     "position": 0.55,
+     "note": "The sharpest single trend number in the piece."
+    },
+    {
+     "text": "flights declined beginning in April of last year, with flights down about 7% for that year and nearly 9% in the first six months of 2026",
+     "type": "stat",
+     "entities": [
+      "Visit Lauderdale",
+      "Fort Lauderdale-Hollywood International Airport"
+     ],
+     "confidence": 90,
+     "position": 0.75,
+     "note": "Independent corroboration of the decline, attributed to the county marketing arm."
+    },
+    {
+     "text": "It polled some 4,000 members and found a 12-percentage-point decline in the number who planned to spend the 2025-2026 winter season in the United States.",
+     "type": "stat",
+     "entities": [
+      "Snowbird Advisor",
+      "United States"
+     ],
+     "confidence": 90,
+     "position": 0.85,
+     "note": "Sample size plus result, with context."
+    },
+    {
+     "text": "\"We're seeing an increasing number of snowbirds going to Central America,\" he said. \"We're also seeing growth in the Caribbean.\"",
+     "type": "quote",
+     "entities": [
+      "Stephen Fine",
+      "Snowbird Advisor"
+     ],
+     "confidence": 80,
+     "position": 0.95,
+     "note": "Named-source quote; the substitution effect."
+    }
+   ]
+  },
+  "6d83ad82-5821-47d8-a8b9-b5f193fb0cb4": {
+   "stratum": "en-medium",
+   "detected_language": "en",
+   "source_domain": "reddit.com",
+   "title": "Japan forms first national intelligence agency, eyes its own CIA",
+   "body_chars": 2995,
+   "labeler_notes": "en-medium; UGC submission reporting a Japanese policy announcement. Mix of one hard fact (the agency), one quote, one named-official detail and one unverified espionage allegation.",
+   "snippets": [
+    {
+     "text": "Prime Minister Sanae Takaichi has announced that her government will introduce its first national intelligence strategy that may ultimately lead to the creation of an external intelligence agency of Japan in the line of the Central Intelligence Agency (CIA) of the United States of America.",
+     "type": "fact",
+     "entities": [
+      "Sanae Takaichi",
+      "Central Intelligence Agency",
+      "Liberal Democratic Party"
+     ],
+     "confidence": 90,
+     "position": 0.1,
+     "note": "The lead claim of the whole piece."
+    },
+    {
+     "text": "\"We must strengthen our intelligence capabilities to ensure public safety and protect the national interest,\" Ms. Takaichi said at the inaugural meeting of an expert panel on intelligence capabilities earlier this week.",
+     "type": "quote",
+     "entities": [
+      "Sanae Takaichi"
+     ],
+     "confidence": 90,
+     "position": 0.2,
+     "note": "Direct quote from the named decision-maker."
+    },
+    {
+     "text": "Japan is revising three policy documents on national security, national defence and military supplies (national defence build-up) ahead of time because of the challenges that are emanating from the active battlefields of West Asia and Ukraine",
+     "type": "fact",
+     "entities": [
+      "The Hindu",
+      "Japan",
+      "Ukraine"
+     ],
+     "confidence": 80,
+     "position": 0.5,
+     "note": "Second-order policy fact, attributed to The Hindu."
+    },
+    {
+     "text": "an incident involving an employee of a machinery company. The person concerned allegedly provided secret information to a source who was reportedly a Russian intelligence officer.",
+     "type": "claim",
+     "entities": [
+      "The Yomiuri Shimbun",
+      "Russia"
+     ],
+     "confidence": 75,
+     "position": 0.6,
+     "note": "Allegation, hedged in the source text; labeled claim, not fact."
+    },
+    {
+     "text": "The expert panel discussing Japan’s intelligence overhaul consists of 17 experts and is led by Toshiya Watanabe, a professor emeritus at the University of Tokyo",
+     "type": "fact",
+     "entities": [
+      "Toshiya Watanabe",
+      "University of Tokyo"
+     ],
+     "confidence": 85,
+     "position": 0.8,
+     "note": "Named chair plus panel size: checkable specificity."
+    }
+   ]
+  },
+  "4e060fae-4189-4441-bc64-49e9a3e8f0df": {
+   "stratum": "en-medium",
+   "detected_language": "en",
+   "source_domain": "bbc.com",
+   "title": "NY's governor appoints special prosecutor in Cornell frat rape investigation",
+   "body_chars": 2993,
+   "labeler_notes": "en-medium; BBC. Classic quote/stat/claim mix around a named prosecutor. The seven-men allegation is the load-bearing claim.",
+   "snippets": [
+    {
+     "text": "\"New information has raised serious questions about how this case was handled, and I've lost faith in the Tompkins County DA's ability to fairly oversee it,\" Hochul said.",
+     "type": "quote",
+     "entities": [
+      "Kathy Hochul",
+      "Tompkins County"
+     ],
+     "confidence": 95,
+     "position": 0.15,
+     "note": "Direct quote explaining the appointment; the reason for the news."
+    },
+    {
+     "text": "Hochul's announcement removes Tompkins County District Attorney Matthew Van Houten from overseeing the case.",
+     "type": "fact",
+     "entities": [
+      "Matthew Van Houten",
+      "Kathy Hochul",
+      "Tompkins County"
+     ],
+     "confidence": 90,
+     "position": 0.22,
+     "note": "The concrete consequence of the appointment."
+    },
+    {
+     "text": "She alleged that she was drugged and raped by seven men at a fraternity house at the university in 2024.",
+     "type": "claim",
+     "entities": [
+      "Jane Doe",
+      "Cornell University"
+     ],
+     "confidence": 90,
+     "position": 0.7,
+     "note": "The central allegation; sourced to the complaint, so claim."
+    },
+    {
+     "text": "Van Houten said his office did not bring charges at the time because he had only seen a statement from Doe implying the incident was consensual and that she had not been drugged.",
+     "type": "claim",
+     "entities": [
+      "Matthew Van Houten",
+      "Jane Doe"
+     ],
+     "confidence": 85,
+     "position": 0.85,
+     "note": "The defence rationale, attributed, so claim rather than fact."
+    },
+    {
+     "text": "Cornell has said it provided evidence to the district attorney's office from its own investigation, including a Snapchat group chat in which fraternity members discussed a \"free\" sexual encounter with Doe on the night of the alleged assault.",
+     "type": "fact",
+     "entities": [
+      "Cornell University",
+      "Snapchat"
+     ],
+     "confidence": 90,
+     "position": 0.88,
+     "note": "The specific documentary evidence, with the university's own attribution."
+    }
+   ]
+  },
+  "2df23db2-6b1b-4577-a131-b801e20c4d16": {
+   "stratum": "en-long",
+   "detected_language": "en",
+   "source_domain": "npr.org",
+   "title": "How Ukrainians are coping with new, more deadly Russian attacks",
+   "body_chars": 46967,
+   "labeler_notes": "en-long; NPR Fresh Air transcript, 46967 chars total, only the first 8000 labeled because that is the whole window the model gets. Transcript dialogue, so quotes dominate.",
+   "snippets": [
+    {
+     "text": "so-called safari hunting drones that identify a person or vehicle as a target, then follow as the target flees in terror. The drone eventually dives and crashes into the target, detonating a deadly explosive charge.",
+     "type": "fact",
+     "entities": [
+      "Russia",
+      "Ukraine"
+     ],
+     "confidence": 85,
+     "position": 0.16,
+     "note": "Description of the new weapon class; a definitive statement about events."
+    },
+    {
+     "text": "Kyiv itself - and this is, I think, really important for people to understand - in the last couple of months, but really the last few weeks, has been under extraordinary bombardment from the Russians. And they are basically trying to make life unlivable in a city of several million people.",
+     "type": "quote",
+     "entities": [
+      "Kyiv",
+      "Russia",
+      "Zanny Minton Beddoes"
+     ],
+     "confidence": 90,
+     "position": 0.68,
+     "note": "The guest's central assessment, spoken, so quote."
+    },
+    {
+     "text": "the Ukrainians have run out of interceptors for ballistic missiles, what are called PAC-3 interceptors produced by the U.S.",
+     "type": "fact",
+     "entities": [
+      "PAC-3",
+      "Ukraine",
+      "United States"
+     ],
+     "confidence": 90,
+     "position": 0.72,
+     "note": "Named weapons system and its origin: checkable."
+    },
+    {
+     "text": "And Ukrainians had built sort of defensive drones that could intercept the Shaheds with a sort of 95% success rate. But now that they have these jet propulsion attached to them, that interception rate has gone down closer to 40%",
+     "type": "stat",
+     "entities": [
+      "Shahed drone",
+      "Ukraine",
+      "Russia"
+     ],
+     "confidence": 95,
+     "position": 0.78,
+     "note": "Two hard numbers, before and after: the most quotable statistic in the piece."
+    },
+    {
+     "text": "There is what Ukrainians call the kill zone, which is now something like 20 to 30 kilometers each way from the contact line, where, essentially, anything that moves will be shot down, shot at by a drone within seconds or minutes.",
+     "type": "fact",
+     "entities": [
+      "Ukraine",
+      "Russia"
+     ],
+     "confidence": 90,
+     "position": 0.93,
+     "note": "Definitive statement about the front, with a range attached."
+    }
+   ]
+  },
+  "494e050b-4843-4b4c-95cb-690b4000590b": {
+   "stratum": "en-long",
+   "detected_language": "en",
+   "source_domain": "foreignpolicy.com",
+   "title": "The Case for Trump’s Global Strategy",
+   "body_chars": 33209,
+   "labeler_notes": "en-long; Foreign Policy interview transcript, 33209 chars, first 8000 labeled. Contains the passage the fetcher duplicated (lines repeat verbatim in the raw body) -- a real data defect worth noting, but the labels are unaffected.",
+   "snippets": [
+    {
+     "text": "Then-National Security Advisor Mike Waltz departed after just 101 days in the job.",
+     "type": "stat",
+     "entities": [
+      "Mike Waltz"
+     ],
+     "confidence": 90,
+     "position": 0.12,
+     "note": "Hard number about a named official."
+    },
+    {
+     "text": "\"President Trump is a New Yorker,\" he told me in a wide-ranging interview on FP Live. \"He appreciates that the entire world—more than 150 prime ministers, presidents, foreign ministers, and CEOs—comes to one place in the world once a year, and it's New York City.\"",
+     "type": "quote",
+     "entities": [
+      "Mike Waltz",
+      "Donald Trump",
+      "New York City"
+     ],
+     "confidence": 90,
+     "position": 0.18,
+     "note": "Direct quote, the memorable line of the interview."
+    },
+    {
+     "text": "The United States has used up precious munitions, including more than a third of its Patriot missile interceptors. The global price of oil has soared, which means Americans are now forking out about 40 percent more for gas",
+     "type": "stat",
+     "entities": [
+      "United States",
+      "Patriot missile"
+     ],
+     "confidence": 90,
+     "position": 0.25,
+     "note": "Two quantified costs of the conflict, asked by the interviewer."
+    },
+    {
+     "text": "The Iranians came and made an offer, and U.S. President Donald Trump and the team didn't think it was a very good offer, to be candid with you. Trump has basically said, \"Not good enough.\"",
+     "type": "quote",
+     "entities": [
+      "Mike Waltz",
+      "Donald Trump",
+      "Abbas Araghchi"
+     ],
+     "confidence": 85,
+     "position": 0.28,
+     "note": "Direct quote on the talks, the reason the interview opened there."
+    },
+    {
+     "text": "One hundred forty-six nations—a U.N. record—have joined us in condemning not only their violations of the U.N. Convention on the Law of the Sea (UNCLOS), but their attacks on innocent civilian shipping and infrastructure around the Persian Gulf.",
+     "type": "stat",
+     "entities": [
+      "United Nations",
+      "Iran"
+     ],
+     "confidence": 90,
+     "position": 0.33,
+     "note": "A count with a superlative attached, attributed to the speaker."
+    }
+   ]
+  },
+  "773ebddb-8d38-4086-bc98-5d45f0c1b3a8": {
+   "stratum": "lang-fa",
+   "detected_language": "fa",
+   "source_domain": "bbc.com",
+   "title": "اعتراض شماری از خانوادههای جانباختگان اعتراضات دی به پزشکیان - BBC News فارسی",
+   "body_chars": 2314,
+   "sheet_block": 1,
+   "labeler_notes": "2314-char BBC Persian wire piece; the whole body fits in the 8000-char window, so positions are dense and near-zero-heavy.",
+   "snippets": [
+    {
+     "text": "شماری از خانوادههای جانباختگان کشتار دی ماه ۱۴۰۴ با انتشار ویدیوهایی به مسعود پزشکیان، رئیسجمهور ایران به خاطر «تروریست» خواندن معترضان دیماه در مصاحبه اخیرش با فاکسنیوز اعتراض کردند.",
+     "type": "fact",
+     "entities": [
+      "مسعود پزشکیان",
+      "فاکسنیوز"
+     ],
+     "confidence": 90,
+     "position": 0.0264,
+     "sheet_lines": [
+      5,
+      5
+     ],
+     "note": "The lead: who protested, whom, and over which words."
+    },
+    {
+     "text": "دونالد ترامپ خودش اعلام کرد که آمریکا این افراد را «تجهیز و مسلح» کرده است تا دولت ایران را سرنگون کنند و «افراد نتانیاهو اعلام کردند که نیروهایی از استانهای کردستان و بلوچستان وارد مراکز اصلی شهرها",
+     "type": "quote",
+     "entities": [
+      "مسعود پزشکیان",
+      "دونالد ترامپ"
+     ],
+     "confidence": 90,
+     "position": 0.1742,
+     "sheet_lines": [
+      "at",
+      6,
+      "دونالد ترامپ خودش اعلام کرد",
+      200
+     ],
+     "note": "The contested statement itself, in the president's words."
+    },
+    {
+     "text": "«من شهادت میدهم که برادرم هنگام کشته شدن به دست نیروهای جمهوری اسلامی ایران در تاریخ ۸ ژانویهٔ ۲۰۲۶، غیرمسلح بود. او به نمایندگی از هیچ دولت خارجی عمل نمیکرد.",
+     "type": "quote",
+     "entities": [
+      "سینا کاظمی",
+      "جمهوری اسلامی ایران"
+     ],
+     "confidence": 85,
+     "position": 0.3907,
+     "sheet_lines": [
+      "at",
+      9,
+      "«من شهادت",
+      250
+     ],
+     "note": "A named relative testifying; the human core of the story."
+    },
+    {
+     "text": "او فقط ۲۱ سال داشت؛ یک بسکتبالیست حرفهای با آیندهای روشن پیشِرو. او به نمایندگی از هیچ دولت خارجی عمل نمیکرد. آنها مستقیماً قلبش را هدف گرفتند.",
+     "type": "fact",
+     "entities": [
+      "احمد خسروانی"
+     ],
+     "confidence": 85,
+     "position": 0.5441,
+     "sheet_lines": [
+      "at",
+      11,
+      "او فقط",
+      200
+     ],
+     "note": "The specific victim, with the age that fixes the story."
+    },
+    {
+     "text": "حکومت ایران پیش از این بارها اعتراضات مسالمتآمیز مردم را با عنوان «اغتشاش» و معترضان را «اغتشاشگر» معرفی کرده است.",
+     "type": "fact",
+     "entities": [
+      "حکومت ایران"
+     ],
+     "confidence": 80,
+     "position": 0.9507,
+     "sheet_lines": [
+      14,
+      14
+     ],
+     "note": "Definitive closing framing claim about state language."
+    }
+   ]
+  },
+  "9aa7ef91-915a-44d2-82f8-0d1484702c49": {
+   "stratum": "lang-zh",
+   "detected_language": "zh-cn",
+   "source_domain": "epochtimes.com",
+   "title": "【独家】中国电池厂落户美国小镇 居民抗议",
+   "body_chars": 8223,
+   "sheet_block": 2,
+   "labeler_notes": "8223-char investigative feature. The model sees chars 0-8000, so the closing paragraphs sit outside the window and are NOT labeled.",
+   "snippets": [
+    {
+     "text": "在这种背景之下，伊利诺伊州是个例外——该州欢迎国轩高科电池工厂，将其视为该州历史上最大的电动车电池投资案，并已向国轩高科支付了1.65亿美元的现金。",
+     "type": "stat",
+     "entities": [
+      "伊利诺伊州",
+      "国轩高科"
+     ],
+     "confidence": 90,
+     "position": 0.0772,
+     "sheet_lines": [
+      24,
+      24
+     ],
+     "note": "Largest quantified claim in the piece, with its context."
+    },
+    {
+     "text": "电子邮件内容显示，从规划委员会提出建议到镇议会最终投票表决之间的这段时间里，这家公关公司协助起草了针对居民提问的答复文本，并提出了网站文案建议。派克透露，给该公司的报酬是分批支付的，每次约2万美元；由于每笔金额都太小，因此无需单独列项提交预算表决。",
+     "type": "stat",
+     "entities": [
+      "阿曼达·派克",
+      "贾斯库尔卡·特曼战略传播公司"
+     ],
+     "confidence": 90,
+     "position": 0.2635,
+     "sheet_lines": [
+      40,
+      40
+     ],
+     "note": "The payment mechanism that makes the PR allegation concrete."
+    },
+    {
+     "text": "这个居民们关切的项目，同时也令他们感到恐惧。他们担心，这家电池工厂有朝一日可能会引发锂电池火灾。马里兰大学（University of Maryland）杰出教授、先进生命周期工程中心（Center for Advanced Life Cycle Engineering）主任迈克尔‧佩希特（Michael Pecht）表示，一旦这种火灾蔓延开来，就很难扑灭。佩希特经常受邀调查电池起火的原因。",
+     "type": "quote",
+     "entities": [
+      "迈克尔·佩希特",
+      "马里兰大学"
+     ],
+     "confidence": 85,
+     "position": 0.4159,
+     "sheet_lines": [
+      "head",
+      56,
+      197
+     ],
+     "note": "Named expert attribution on the hazard residents fear."
+    },
+    {
+     "text": "2025年5月14日，林赛‧帕克赫斯特（Lindsay Parkhurst）法官在一份裁决中写道，一个城镇不能先隐瞒了一项决定，然后又指责人们没有对此提出异议。被告“不能将行政救济手段既当作武器又当作盾牌”。",
+     "type": "quote",
+     "entities": [
+      "林赛·帕克赫斯特"
+     ],
+     "confidence": 90,
+     "position": 0.5114,
+     "sheet_lines": [
+      64,
+      64
+     ],
+     "note": "The ruling that decided the litigation."
+    },
+    {
+     "text": "“这意味着对中国供应的依赖性更强。”他说道，“这与人们通常的认知正好相反。”他还表示，组装环节属于“非常低端的领域”。",
+     "type": "quote",
+     "entities": [
+      "迈克尔·佩希特",
+      "中国"
+     ],
+     "confidence": 85,
+     "position": 0.6689,
+     "sheet_lines": [
+      "at",
+      77,
+      "“这意味着",
+      200
+     ],
+     "note": "The thesis quote, contradicting the intuitive reading."
+    }
+   ]
+  },
+  "e6fdb070-967a-400b-a8ae-04be535446e8": {
+   "stratum": "lang-ml",
+   "detected_language": "ml",
+   "source_domain": "thejasnews.com",
+   "title": "കെ എം ഷാജിയുടെ വാഹനം യുവമോര്ച്ചക്കാര് തടഞ്ഞു; മന്ത്രി കയറിയ ഓട്ടോയും തടഞ്ഞു, പിന്നാലെ മന്ത്രി നടന്നുപോയി",
+   "body_chars": 2025,
+   "sheet_block": 3,
+   "labeler_notes": "2025-char Malayalam political item, five paragraphs.",
+   "snippets": [
+    {
+     "text": "കെ എം ഷാജിയുടെ വാഹനം യുവമോര്ച്ചക്കാര് തടഞ്ഞു; മന്ത്രി കയറിയ ഓട്ടോയും തടഞ്ഞു, പിന്നാലെ മന്ത്രി നടന്നുപോയി",
+     "type": "fact",
+     "entities": [
+      "തിരുവനന്തപുരം",
+      "വാന് റോസ് ജങ്ഷൻ"
+     ],
+     "confidence": 85,
+     "position": 0.0,
+     "sheet_lines": [
+      113,
+      113
+     ],
+     "note": "Where it happened; the dateline's content."
+    },
+    {
+     "text": "തിരുവനന്തപുരം: തദ്ദേശ മന്ത്രി കെ എം ഷാജിയെ യുവമോര്ച്ച പ്രവര്ത്തകര് തടഞ്ഞു. തിരുവനന്തപുരം പാളയത്തിന് സമീപത്തെ വാന് റോസ് ജങ്ഷനിലായിരുന്നു സംഭവം. വാഹനം തടഞ്ഞതോടെ മന്ത്രി ഓട്ടോയില് കയറിയെങ്കിലും യുവമോര്ച്ച പ്രവര്ത്തകര് ഓട്ടോയും തടഞ്ഞു. പിന്നാലെ, ഒട്ടോയില് നിന്നും ഇറങ്ങി മന്ത്രി നടന്ന",
+     "type": "fact",
+     "entities": [
+      "യുവമോര്ച്ച"
+     ],
+     "confidence": 90,
+     "position": 0.0519,
+     "sheet_lines": [
+      "head",
+      114,
+      280
+     ],
+     "note": "The central event: the walk itself, in detail."
+    },
+    {
+     "text": "മന്ത്രിക്ക് പൈലറ്റും എസ്കോര്ട്ടും ഉണ്ടായിരുന്നില്ല. ഇത് ഗുരുതര സുരക്ഷാ വീഴ്ചയായി കണക്കാക്കുന്നു. തലസ്ഥാനത്ത് കോണ്ഗ്രസ്-ബിജെപി പ്രവര്ത്തകര് തമ്മിലെ സംഘര്ഷം കനക്കുകയാണ്.",
+     "type": "fact",
+     "entities": [],
+     "confidence": 85,
+     "position": 0.2237,
+     "sheet_lines": [
+      "at",
+      114,
+      "മന്ത്രിക്ക് പൈലറ്റും",
+      200
+     ],
+     "note": "The security failure, stated flatly as a finding."
+    },
+    {
+     "text": "യുവമോര്ച്ച തിരുവനന്തപുരം നോര്ത്ത് ജില്ലാ അധ്യക്ഷന് സൂര്യകൃഷ്ണന്റെ നേതൃത്വത്തിലാണ് പ്രതിഷേധം ഉണ്ടായത്. ബിജെപി നേതാക്കള്ക്ക് നേരെയും പ്രതിഷേധം ഉണ്ടായി. നെയ്യാറ്റിന്കരയില് ബിജെപി ദേശീയ നിര്വാഹക സമിതി അംഗം പി കെ കൃഷ്ണദാസിന്റെ വാഹനത്തിന് നേരെയായിരുന്നു പ്രതിഷേധം.",
+     "type": "fact",
+     "entities": [
+      "യുവമോര്ച്ച",
+      "സൂര്യകൃഷ്ണൻ",
+      "ബിജെപി"
+     ],
+     "confidence": 85,
+     "position": 0.4746,
+     "sheet_lines": [
+      "at",
+      116,
+      "യുവമോര്ച്ച തിരുവനന്തപുരം",
+      260
+     ],
+     "note": "The organisers, named."
+    },
+    {
+     "text": "കോണ്ഗ്രസ് പ്രവര്ത്തകര് കരിങ്കൊടി കാണിച്ചതിന് പിന്നാലെയാണ് സംസ്ഥാനത്തെ യുഡിഎഫ് മന്ത്രിമാര്ക്കെതിരേ യുവമോര്ച്ച കരിങ്കൊടി പ്രതിഷേധം ആരംഭിച്ചത്.",
+     "type": "claim",
+     "entities": [
+      "യുഡിഎഫ്",
+      "യുവമോര്ച്ച"
+     ],
+     "confidence": 90,
+     "position": 0.6933,
+     "sheet_lines": [
+      "at",
+      117,
+      "കോണ്ഗ്രസ്",
+      260
+     ],
+     "note": "The asserted political causation; a claim, not an observed fact."
+    }
+   ]
+  },
+  "e2b4777c-41cd-46ae-b536-2aded708654e": {
+   "stratum": "lang-sq",
+   "detected_language": "sq",
+   "source_domain": "balkanweb.com",
+   "title": "“E vërteta s’ka nevojë për skenar”/ Mesazh Von der Leyen me pankarta: Ursula, lejo që Europa të dëgjojë për protestën",
+   "body_chars": 1117,
+   "sheet_block": 4,
+   "labeler_notes": "1117-char Albanian wire item; only four labels because the piece is short and largely one protest event.",
+   "snippets": [
+    {
+     "text": "Në ditën e 123-të të protestës qytetare kundër qeverisë, protestuesit kanë përcjellë një mesazh të drejtpërdrejtë për presidenten e Komisionit Europian, Ursula von der Leyen, e cila ndodhet në Tiranë për vizitë zyrtare.",
+     "type": "fact",
+     "entities": [
+      "Ursula von der Leyen",
+      "Komisioni Europian",
+      "Tiranë"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      123,
+      123
+     ],
+     "note": "Sets the scene: day 123, who is visiting, where."
+    },
+    {
+     "text": "Përmes pankartave të vendosura në protestë, qytetarët i kanë kërkuar drejtueses së Komisionit Europian që gjatë vizitës së saj të dëgjojë edhe zërin e atyre që prej muajsh protestojnë kundër qeverisë.",
+     "type": "fact",
+     "entities": [
+      "Komisioni Europian"
+     ],
+     "confidence": 85,
+     "position": 0.197,
+     "sheet_lines": [
+      124,
+      124
+     ],
+     "note": "What the protesters asked for, stated plainly."
+    },
+    {
+     "text": "“Shqipëria e do Europën, Ursula, lëre Europën të dëgjojë edhe Shqipërinë që proteston!”, shkruhet në një prej pankartave.",
+     "type": "quote",
+     "entities": [
+      "Ursula von der Leyen"
+     ],
+     "confidence": 85,
+     "position": 0.3769,
+     "sheet_lines": [
+      125,
+      125
+     ],
+     "note": "The postcard text itself, the quotable artefact."
+    },
+    {
+     "text": "Mesazhet për Von der Leyen vijnë në të njëjtën ditë kur presidentja e Komisionit Europian zhvilloi takim dhe konferencë të përbashkët me kryeministrin Edi Rama në Kryeministri. Gjatë qëndrimit të saj në godinë, jashtë saj vijoi protesta e qytetarëve, nën masa të shtuara sigurie.",
+     "type": "fact",
+     "entities": [
+      "Ursula von der Leyen",
+      "Edi Rama"
+     ],
+     "confidence": 90,
+     "position": 0.7502,
+     "sheet_lines": [
+      129,
+      129
+     ],
+     "note": "The same-day meeting that triggered the postcards."
+    }
+   ]
+  },
+  "e3314a2b-4ffa-4b3c-9a04-be33be2e1030": {
+   "stratum": "lang-uk",
+   "detected_language": "uk",
+   "source_domain": "tvoemisto.tv",
+   "title": "Пам’ять Героїв, прапори та виступ військового оркестру: що відбудеться у Львові 1 жовтня",
+   "body_chars": 1447,
+   "sheet_block": 5,
+   "labeler_notes": "1447-char Ukrainian civic-announcement piece; the article is a timetable, so the strongest snippets are the schedule items with times.",
+   "snippets": [
+    {
+     "text": "У Львові 1 жовтня відбудуться заходи з нагоди Дня захисників і захисниць України. У цей день вшанують пам’ять Героїв України та всіх борців за свободу й незалежність . Про це повідомила Львівська обласна рада.",
+     "type": "fact",
+     "entities": [
+      "Львівська обласна рада"
+     ],
+     "confidence": 85,
+     "position": 0.0,
+     "sheet_lines": [
+      134,
+      134
+     ],
+     "note": "Announcement of the event and its official source."
+    },
+    {
+     "text": "О 13:00 на флагштоці перед головним входом у Львівську обласну раду на площі Андрія Парубія, 1 відбудеться церемонія підняття Державного Прапора України та Прапора \"Між небом і землею\".",
+     "type": "fact",
+     "entities": [
+      "Державний Прапор України"
+     ],
+     "confidence": 85,
+     "position": 0.5363,
+     "sheet_lines": [
+      139,
+      139
+     ],
+     "note": "The flagship ceremony, with a specific time and place."
+    },
+    {
+     "text": "Вечірню програму розпочнуть о 18:00 на площі перед Львівською національною оперою. Там виступить військовий оркестр Національної академії сухопутних військ імені гетьмана Петра Сагайдачного.",
+     "type": "fact",
+     "entities": [
+      "Національна академія сухопутних військ"
+     ],
+     "confidence": 80,
+     "position": 0.6648,
+     "sheet_lines": [
+      140,
+      140
+     ],
+     "note": "The evening programme and its named performer."
+    },
+    {
+     "text": "Також заплановані показові виступи Кінологічного навчального центру Державної прикордонної служби України. Завершить програму показ повнометражного українського екшн-трилера \"Кіллхаус\".",
+     "type": "fact",
+     "entities": [
+      "Державна прикордонна служба України"
+     ],
+     "confidence": 75,
+     "position": 0.7968,
+     "sheet_lines": [
+      141,
+      141
+     ],
+     "note": "The closing item; lower confidence, it is filler."
+    }
+   ]
+  },
+  "e7b36b1a-47bf-4c2c-b6d0-94e3de6c6401": {
+   "stratum": "lang-tr",
+   "detected_language": "tr",
+   "source_domain": "malatyaguncel.com",
+   "title": "Doğu Türkistan işgalinin 77'nci yılında İstanbul'da Çin protestosu",
+   "body_chars": 9254,
+   "sheet_block": 6,
+   "labeler_notes": "9254-char Turkish statement-heavy wire piece; the model sees only chars 0-8000, and the last paragraphs are unrelated site boilerplate.",
+   "snippets": [
+    {
+     "text": "Direniş ruhunun baskılara boyun eğmeyeceği vurgulanan eylemde STK'lar adına basın açıklamasını okuyan Doğu Türkistan Maarif ve Dayanışma Derneği Başkanı Musacan Er, Çin'in bugüne kadar sayısız suç işlediğini, günümüzde ise toplama kamplarında milyonlarca insanın zorla çalıştırıldığını ifade etti.",
+     "type": "fact",
+     "entities": [
+      "Musacan Er",
+      "Doğu Türkistan Maarif ve Dayanışma Derneği"
+     ],
+     "confidence": 85,
+     "position": 0.032,
+     "sheet_lines": [
+      "head",
+      148,
+      297
+     ],
+     "note": "Who spoke, in what role, and the substance reported."
+    },
+    {
+     "text": "1 Ekim günü, Doğu Türkistan'ın faşist Çin tarafından işgal edildiği kara bir gündür. 1 Ekim, Uygurlar için yeni bir sömürge döneminin başlangıç günüdür.",
+     "type": "quote",
+     "entities": [
+      "Musacan Er"
+     ],
+     "confidence": 85,
+     "position": 0.0917,
+     "sheet_lines": [
+      "at",
+      150,
+      "1 Ekim günü",
+      200
+     ],
+     "note": "The central quotation of the speech."
+    },
+    {
+     "text": "2. Sincan İsmi: Çin tarafından topraklarımıza verilen ve Çince de “Yeni sınır” “Yeni İşgal Edilmiş Toprak” anlamına gelen “Sincan” adı bu toprakların sonradan koparıldığını ve işgal edildiğini kanıtlamaktadır.",
+     "type": "fact",
+     "entities": [
+      "Çin"
+     ],
+     "confidence": 75,
+     "position": 0.3718,
+     "sheet_lines": [
+      "head",
+      154,
+      209
+     ],
+     "note": "One of three numbered historical arguments; a claim."
+    },
+    {
+     "text": "1933. yılında Kaşgar'da kurulan (Doğu Türkistan İslam Cumhuriyeti) ve 1944. Yılın da Gulca'da ikinci kez ilan edilen (Doğu Türkistan Cumhuriyeti) devleti, bu milletin esareti asla kabul etmediğinin en somut göstergesidir.",
+     "type": "stat",
+     "entities": [
+      "Doğu Türkistan İslam Cumhuriyeti",
+      "Doğu Türkistan Cumhuriyeti"
+     ],
+     "confidence": 85,
+     "position": 0.4091,
+     "sheet_lines": [
+      "at",
+      155,
+      "1933. yılında",
+      250
+     ],
+     "note": "Dated historical claims, the most falsifiable content here."
+    },
+    {
+     "text": "Bütün bu vahşetin adı Çin'in iddia ettiği gibi \"terörle mücadele\" politikası değildir.",
+     "type": "quote",
+     "entities": [
+      "Musacan Er"
+     ],
+     "confidence": 85,
+     "position": 0.5334,
+     "sheet_lines": [
+      "at",
+      157,
+      "Bütün bu vahşetin",
+      250
+     ],
+     "note": "The genocide framing, attributed."
+    }
+   ]
+  },
+  "27c11a78-e8e1-4756-96c0-ffe41a20d561": {
+   "stratum": "lang-ro",
+   "detected_language": "ro",
+   "source_domain": "agerpres.ro",
+   "title": "REPORTAJ/Mureș: Poveștile seniorilor care au dat viață taberei de creație 'Atelier 2026'",
+   "body_chars": 12345,
+   "sheet_block": 7,
+   "labeler_notes": "12345-char AGERPRES feature, but the model only sees the first 8000. Lines 192+ are site boilerplate and unrelated stories and are NOT labeled; the reporter credit line is boilerplate too.",
+   "snippets": [
+    {
+     "text": "Peste 40 de artiști plastici sosiți din toate colțurile țării, în special seniori, s-au reunit timp de o săptămână, până pe 30 septembrie, în cadrul taberei de creație 'Atelier 2026', un eveniment cu o tradiție de peste două decenii, finanțat de Primăria Municipiului Târgu Mureș.",
+     "type": "stat",
+     "entities": [
+      "Primăria Municipiului Târgu Mureș",
+      "Atelier 2026"
+     ],
+     "confidence": 85,
+     "position": 0.0111,
+     "sheet_lines": [
+      "head",
+      173,
+      280
+     ],
+     "note": "The scale and the funder of the event, with numbers."
+    },
+    {
+     "text": "Ne-am adunat un grup foarte mare și cu mult, mult chef de lucru, de creație, bună dispoziție și tot ce înseamnă o tabără, în sensul că ai libertatea să creezi, te îndepărtezi de grijile de acasă și ești pur și simplu într-un grup, așa cu eram pe vremea copilăriei, când mergeam în tabere', a",
+     "type": "quote",
+     "entities": [
+      "Liliana Lazăr",
+      "Asociația Artiștilor Plastici Mureș"
+     ],
+     "confidence": 90,
+     "position": 0.1011,
+     "sheet_lines": [
+      "at",
+      176,
+      "Ne-am adunat",
+      300
+     ],
+     "note": "The organiser's own framing of what the camp does for people."
+    },
+    {
+     "text": "Am 77 de ani, am pictat un peisaj de iarnă, încă nu-i terminat tabloul, mai am puțin și îl finisez. În afară de asta, am mai pictat o interpretare a unei păduri, într-un stil modern, apoi un peisaj în stil clasic, realist. Am fost profesor de biologie și am desenat pe tablă pentru copii.",
+     "type": "quote",
+     "entities": [
+      "Klara Kárp"
+     ],
+     "confidence": 85,
+     "position": 0.2462,
+     "sheet_lines": [
+      "at",
+      181,
+      "Am 77 de ani",
+      300
+     ],
+     "note": "The fullest self-description in the piece, with her age."
+    },
+    {
+     "text": "'Pictez de la 14 ani. Prima apariție a fost în 1963, în revista lui Eugen Barbu. Pasiunea de la 14 ani nu m-a părăsit niciodată. Cum spunem noi, de acest microb nu putem scăpa', ne povestește Brănișteanu.",
+     "type": "quote",
+     "entities": [
+      "Andrei Brănișteanu"
+     ],
+     "confidence": 85,
+     "position": 0.487,
+     "sheet_lines": [
+      186,
+      186
+     ],
+     "note": "A dated career fact stated in his own words."
+    },
+    {
+     "text": "Proiectul nu se oprește însă aici. Zecile de tablouri realizate în această săptămână intensă de lucru vor fi centralizate și expuse în fața publicului larg în cadrul unei expoziții de amploare programate pentru luna octombrie, eveniment ce va fi marcat și prin editarea unui catalog de artă dedicat",
+     "type": "fact",
+     "entities": [
+      "Atelier 2026"
+     ],
+     "confidence": 80,
+     "position": 0.6199,
+     "sheet_lines": [
+      "at",
+      190,
+      "Proiectul nu se oprește",
+      300
+     ],
+     "note": "What happens next, the October exhibition; the resolution."
+    }
+   ]
+  },
+  "27cd6127-863f-488a-b055-6d4004e35359": {
+   "stratum": "lang-fi",
+   "detected_language": "fi",
+   "source_domain": "reddit.com",
+   "title": "Risikko: Johtopäätöstä Venäjän vaikuttamisesta ei voi vielä tehdä",
+   "body_chars": 4204,
+   "sheet_block": 8,
+   "labeler_notes": "4204-char Finnish parliament-security story carried on reddit.com. Attribution is unusually dense, so quote and claim dominate.",
+   "snippets": [
+    {
+     "text": "Viime viikolla useat yksittäiset kansanedustajat ovat kertoneet epäillyistä tunkeutumisista omiin asuntoihinsa, kertoo eduskunnan puhemies Jussi Halla-aho (ps.). Halla-ahon mukaan epäiltyjen tunkeutumisten määrä on ”huomattava”.",
+     "type": "quote",
+     "entities": [
+      "Jussi Halla-aho"
+     ],
+     "confidence": 90,
+     "position": 0.177,
+     "sheet_lines": [
+      214,
+      214
+     ],
+     "note": "The Speaker's assessment of scale, in his words."
+    },
+    {
+     "text": "Halla-ahon mukaan on mahdollista, että merkit on jätetty tarkoituksella, ikään kuin viestinä siitä, että asunnossa on käyty.",
+     "type": "claim",
+     "entities": [
+      "Jussi Halla-aho"
+     ],
+     "confidence": 85,
+     "position": 0.2714,
+     "sheet_lines": [
+      216,
+      216
+     ],
+     "note": "An inference, explicitly hedged, that the marks were deliberate."
+    },
+    {
+     "text": "– Se on hyvinkin mahdollista tässä ajassa, Orpo vastasi kysymykseen siitä, onko mahdollista, että taustalla on vieraan vallan vaikuttamista.",
+     "type": "quote",
+     "entities": [
+      "Petteri Orpo"
+     ],
+     "confidence": 90,
+     "position": 0.4762,
+     "sheet_lines": [
+      223,
+      223
+     ],
+     "note": "The Prime Minister on foreign-power interference: short, high-value, the story's actual claim."
+    },
+    {
+     "text": "– Näemme useissa Euroopan maissa, että Venäjä on pyrkinyt vaikuttamaan vaaleihin, Orpo sanoo.",
+     "type": "claim",
+     "entities": [
+      "Petteri Orpo",
+      "Venäjä"
+     ],
+     "confidence": 85,
+     "position": 0.5699,
+     "sheet_lines": [
+      226,
+      226
+     ],
+     "note": "The attribution of the pattern to Russia; a claim, not observed."
+    },
+    {
+     "text": "Ensimmäinen epäilty tunkeutuminen tuli varapuhemies Risikon tietoon keskiviikkoiltana 23.9. Hän välitti tiedon torstaina 24.9. turvallisuusjohtaja Aaro Toivoselle, minkä jälkeen asian laajuutta alettiin kartoittaa.",
+     "type": "stat",
+     "entities": [
+      "Paula Risikko",
+      "Aaro Toivonen"
+     ],
+     "confidence": 85,
+     "position": 0.7571,
+     "sheet_lines": [
+      232,
+      232
+     ],
+     "note": "The timeline with exact dates; the most falsifiable detail."
+    }
+   ]
+  },
+  "0e478cb7-6818-4a26-b6cc-b32af3d47351": {
+   "stratum": "lang-de",
+   "detected_language": "de",
+   "source_domain": "express.de:443",
+   "title": "Keine spezielle Behandlung: Sindbis-Fieber in Deutschland nachgewiesen",
+   "body_chars": 2612,
+   "sheet_block": 9,
+   "labeler_notes": "2612-char dpa medical item. Dense, factual, attribution to the RKI. Long lines so several snippets are partial.",
+   "snippets": [
+    {
+     "text": "Betroffen sei ein 60-jähriger Mann aus Baden-Württemberg, teilte das Robert Koch-Institut (RKI) in Berlin mit. Antikörper, die auf eine frühere Infektion hindeuteten, waren demnach bereits vor Jahren bei Blutspendern aus der Umgebung von Weinheim gefunden worden.",
+     "type": "fact",
+     "entities": [
+      "Robert Koch-Institut",
+      "Baden-Württemberg",
+      "Weinheim"
+     ],
+     "confidence": 90,
+     "position": 0.1397,
+     "sheet_lines": [
+      "at",
+      244,
+      "Betroffen sei ein 60-jähriger",
+      300
+     ],
+     "note": "The first-in-Germany case: who, where, attributed to the RKI."
+    },
+    {
+     "text": "Bei Patientinnen und Patienten mit Fieber, Hautausschlag und ausgeprägten Gelenkschmerzen solle während der Stechmückensaison bei der Diagnose auch an eine mögliche Sindbis-Virus-Infektion gedacht werden.",
+     "type": "claim",
+     "entities": [
+      "Robert Koch-Institut"
+     ],
+     "confidence": 85,
+     "position": 0.3515,
+     "sheet_lines": [
+      "at",
+      245,
+      "Bei Patientinnen und Patienten",
+      300
+     ],
+     "note": "The RKI's clinical advice; a recommendation, labelled as such."
+    },
+    {
+     "text": "Mensch-zu-Mensch-Übertragungen sind nicht bekannt. Wenn eine infizierte Mücke einen Menschen sticht, kann dieser das sogenannte Sindbis-Fieber bekommen. Typische Symptome sind plötzliches Fieber, juckender Hautausschlag und starke Gelenkschmerzen.",
+     "type": "fact",
+     "entities": [
+      "Sindbis-Virus"
+     ],
+     "confidence": 80,
+     "position": 0.5364,
+     "sheet_lines": [
+      "at",
+      247,
+      "Mensch-zu-Mensch",
+      300
+     ],
+     "note": "The clinically decisive negative: no human-to-human spread."
+    },
+    {
+     "text": "Eine spezielle Behandlung gegen das Virus gibt es nicht, die Beschwerden werden mit schmerzstillenden und entzündungshemmenden Medikamenten gelindert. Vorbeugen kann man vor allem durch guten Mückenschutz: lange Kleidung, Mückenspray und Mückennetze.",
+     "type": "fact",
+     "entities": [
+      "Sindbis-Fieber"
+     ],
+     "confidence": 85,
+     "position": 0.7454,
+     "sheet_lines": [
+      "at",
+      248,
+      "Eine spezielle Behandlung",
+      300
+     ],
+     "note": "No specific treatment exists; a load-bearing negative finding."
+    },
+    {
+     "text": "Der Mann in Baden-Württemberg erkrankte nach RKI-Angaben am 12. Juli. Weil er in einem Stadtbezirk mit etablierten Populationen der Asiatischen Tigermücke (Aedes albopictus) lebt, hätten die behandelnden Ärzte ihn zunächst auf eine mögliche Chikungunya-Infektion testen lassen.",
+     "type": "stat",
+     "entities": [
+      "Aedes albopictus",
+      "Baden-Württemberg"
+     ],
+     "confidence": 85,
+     "position": 0.8415,
+     "sheet_lines": [
+      "at",
+      249,
+      "Der Mann in Baden-Württemberg erkrankte",
+      300
+     ],
+     "note": "Onset date and the mosquito species that drove the testing."
+    }
+   ]
+  },
+  "89433c0b-dbc3-4407-b75c-afb1c5ac9d42": {
+   "stratum": "lang-es",
+   "detected_language": "es",
+   "source_domain": "npr.org",
+   "title": "En esta ciudad de Pensilvania, los dos partidos políticos buscan el voto latino",
+   "body_chars": 9184,
+   "sheet_block": 10,
+   "labeler_notes": "9184-char NPR Spanish-language feature on Latino voting in Allentown. The model sees the first 8000 chars, so the last paragraphs are NOT labeled. Named-source quotes and precinct numbers carry the piece.",
+   "snippets": [
+    {
+     "text": "\"Usamos bastantes limones. Esa caja cuesta más, los aguacates cuestan más, la leche cuesta más – el precio de la carne está subiendo\", explicó Rosales, añadiendo que la situación económica también aprieta a sus clientes.",
+     "type": "quote",
+     "entities": [
+      "Beti Rosales",
+      "La Placita"
+     ],
+     "confidence": 85,
+     "position": 0.0788,
+     "sheet_lines": [
+      258,
+      258
+     ],
+     "note": "A small business owner's account of input costs."
+    },
+    {
+     "text": "\"Cómo se decide la Cámara [de Representantes] está inextricablemente atado a si los latinos salen a votar, y por quién\", dijo Valencia.",
+     "type": "quote",
+     "entities": [
+      "Stephanie Valencia",
+      "Equis Research"
+     ],
+     "confidence": 90,
+     "position": 0.1691,
+     "sheet_lines": [
+      261,
+      261
+     ],
+     "note": "The pollster's core claim about what decides the House."
+    },
+    {
+     "text": "Eso es particularmente evidente en Allentown, según el alcalde Matt Tuerk, el primer hispanohablante en llevar el cargo. \"Si ves el censo de 1970, la ciudad tenía 109,000 personas y el 98.2% era blanco\".",
+     "type": "stat",
+     "entities": [
+      "Matt Tuerk",
+      "Allentown"
+     ],
+     "confidence": 90,
+     "position": 0.1861,
+     "sheet_lines": [
+      262,
+      262
+     ],
+     "note": "Census numbers showing the demographic transformation."
+    },
+    {
+     "text": "\"Cada uno de estos precintos votaban demócrata, pero 52 de esos 55 cambiaron a republicano a partir de las elecciones del 2020, y el mayor cambio fue en uno de los precintos con más latinos\", dijo Tuerk.",
+     "type": "stat",
+     "entities": [
+      "Matt Tuerk"
+     ],
+     "confidence": 90,
+     "position": 0.3088,
+     "sheet_lines": [
+      266,
+      266
+     ],
+     "note": "52 of 55 precincts flipping; the single hardest number here."
+    },
+    {
+     "text": "Estaba tocando puertas, y una señora pequeña salió y empezó a hablarme y a llorar\", relató Brooks después de un evento de campaña anunciando su enfoque hacia los latinos. \"Tiene miedo de ir al mercado;",
+     "type": "quote",
+     "entities": [
+      "Bob Brooks"
+     ],
+     "confidence": 85,
+     "position": 0.5743,
+     "sheet_lines": [
+      "at",
+      276,
+      "Estaba tocando puertas",
+      300
+     ],
+     "note": "The candidate anecdote that makes the ICE fear concrete."
+    }
+   ]
+  },
+  "6386af5c-f4ae-459c-9e50-60a72b4c65c0": {
+   "stratum": "lang-id",
+   "detected_language": "id",
+   "source_domain": "siasat.com",
+   "title": "PM Modi pays homage to Mahatma Gandhi on birth anniversary",
+   "body_chars": 696,
+   "sheet_block": 11,
+   "labeler_notes": "DEGENERATE ARTICLE: 696 chars of machine-generated metadata. The body is a keyword/person/place/geo dump with no prose, only the headline and a geolocation line. Production returns [] here because there is nothing to extract. The gold is deliberately the two load-bearing strings: the headline's claim and the primary named location. Lower confidence, and the note says why: this article is a test of the empty/degenerate path, not of extraction skill.",
+   "snippets": [
+    {
+     "text": "PM Modi pays homage to Mahatma Gandhi on birth anniversary Themes: TAX_FNCACT, TAX_FNCACT_MINISTER, LE",
+     "type": "claim",
+     "entities": [
+      "Narendra Modi",
+      "Mahatma Gandhi",
+      "Raj Ghat"
+     ],
+     "confidence": 70,
+     "position": 0.0,
+     "sheet_lines": [
+      "head",
+      297,
+      102
+     ],
+     "note": "The only assertion in the body: the headline's claim, lifted from the metadata blob because it is the article's entire content."
+    },
+    {
+     "text": "Persons: droupadi murmu, viksit bharat, narendra modi, rekha gupta, mahatma gandhi, lok sabha rahul gandhi, taranjit singh sandhu Location: Raj Ghat, Uttar Pradesh, India (IN) 24.8366,78.4326 Location: Delhi, Delhi, India (IN) 28.6667,77.2167 Location: New Delhi, Delhi, India (IN) 28.6,77.",
+     "type": "fact",
+     "entities": [
+      "Droupadi Murmu",
+      "Viksit Bharat",
+      "Narendra Modi",
+      "Rekha Gupta",
+      "Mahatma Gandhi",
+      "Rahul Gandhi",
+      "Taranjit Singh Sandhu"
+     ],
+     "confidence": 55,
+     "position": 0.4325,
+     "sheet_lines": [
+      "at",
+      297,
+      "Persons:",
+      300
+     ],
+     "note": "The NER-style person list, which is the only entity-bearing content in the body. Confidence is deliberately low: this is metadata, not reporting."
+    }
+   ]
+  },
+  "56eb4457-8918-463a-adad-3dcaf8e815af": {
+   "stratum": "lang-it",
+   "detected_language": "it",
+   "source_domain": "zazoom.it",
+   "title": "Caro carburanti e giusto prezzo la protesta dei trattori a Roma | Siamo esasperati",
+   "body_chars": 2937,
+   "sheet_block": 12,
+   "labeler_notes": "2937-char Italian aggregator page: an article stub plus related-link and comment lines. Numbers in the fuel-price claims are the load-bearing content; the 'Notizie e thread social correlati' heading marks where the boilerplate starts.",
+   "snippets": [
+    {
+     "text": "Circa venti trattori si sono fermati sulla Via Aurelia, vicino Torrimpietra, bloccando parzialmente il traffico. Gli agricoltori protestano contro il caro carburanti e chiedono un prezzo equo per i prodotti agricoli.",
+     "type": "fact",
+     "entities": [
+      "Via Aurelia",
+      "Torrimpietra"
+     ],
+     "confidence": 80,
+     "position": 0.0283,
+     "sheet_lines": [
+      "at",
+      303,
+      "Circa venti trattori",
+      300
+     ],
+     "note": "The event summary: what, where, how many."
+    },
+    {
+     "text": "Sono quattro anni almeno che subiamo rincari. Il gasolio agricolo è arrivato a 1,70 euro, i fertilizzanti sono più che raddoppiati e il nostro prodotto è dimezzato” spiega un agricoltore toscano. “Il grano è quotato 20 centesimi contro un aumento del pane a quasi 4 euro.",
+     "type": "stat",
+     "entities": [
+      "Lollobrigida"
+     ],
+     "confidence": 90,
+     "position": 0.2659,
+     "sheet_lines": [
+      "at",
+      304,
+      "Sono quattro anni",
+      300
+     ],
+     "note": "Diesel at 1.70, fertilisers doubled, output halved: the core quantified grievance, in a named farmer's words."
+    },
+    {
+     "text": "Il grano è quotato 20 centesimi contro un aumento del pane a quasi 4 euro. Il ministro Lollobrigida era venuto a fare delle promesse due anni fa alla protesta sulla Nomentana ma non è successo niente. 🔗 Leggi su Lapresse.",
+     "type": "stat",
+     "entities": [
+      "Lollobrigida"
+     ],
+     "confidence": 85,
+     "position": 0.333,
+     "sheet_lines": [
+      "at",
+      304,
+      "Il grano è quotato",
+      300
+     ],
+     "note": "Wheat up 20 cents against bread near 4 euros; the second quantified grievance and the minister's broken promise."
+    },
+    {
+     "text": "Da lunedì 28 settembre, nei distributori Enilive la benzina non supererà 1,99 euro al litro e il gasolio 2,19. Eni è una grande azienda italiana partecipata dallo Stato.",
+     "type": "stat",
+     "entities": [
+      "Enilive",
+      "Eni"
+     ],
+     "confidence": 80,
+     "position": 0.7011,
+     "sheet_lines": [
+      "at",
+      311,
+      "Da lunedì 28 settembre",
+      300
+     ],
+     "note": "The concrete price-cap numbers a reader would act on."
+    }
+   ]
+  },
+  "b67ded82-0e2f-4df5-815e-fe0cbd5ee6d4": {
+   "stratum": "lang-fr",
+   "detected_language": "fr",
+   "source_domain": "un.org",
+   "title": "Qui façonne l’IA ? À l’ONU, le débat porte sur le pouvoir, la confiance et l’inclusion",
+   "body_chars": 8832,
+   "sheet_block": 13,
+   "labeler_notes": "8832-char UN News French feature on AI governance. Named-attribution quotes dominate; the model sees only the first 8000 chars.",
+   "snippets": [
+    {
+     "text": "Comme l’a résumé le Secrétaire général de l’ONU, António Guterres : « L’IA change véritablement la donne, avec un potentiel immense pour faire progresser la médecine, accélérer les découvertes scientifiques, multiplier les opportunités et améliorer les conditions de vie. »",
+     "type": "quote",
+     "entities": [
+      "António Guterres",
+      "Organisation des Nations unies"
+     ],
+     "confidence": 90,
+     "position": 0.1245,
+     "sheet_lines": [
+      323,
+      323
+     ],
+     "note": "The Secretary-General's framing; the spine of the piece."
+    },
+    {
+     "text": "« Le danger n’est pas la technologie. Le danger, c’est une technologie sans responsabilité : des capacités sans contrôle, une prise de décision sans transparence », a-t-il déclaré.",
+     "type": "quote",
+     "entities": [
+      "António Guterres"
+     ],
+     "confidence": 90,
+     "position": 0.3135,
+     "sheet_lines": [
+      331,
+      331
+     ],
+     "note": "The most quotable line in the article."
+    },
+    {
+     "text": "« Nous considérons l’IA comme un moteur de transformation, pour l’émancipation humaine, la prospérité économique et la résolution des problèmes à l’échelle de la population », a déclaré son représentant.",
+     "type": "quote",
+     "entities": [
+      "Inde"
+     ],
+     "confidence": 85,
+     "position": 0.3906,
+     "sheet_lines": [
+      336,
+      336
+     ],
+     "note": "India's position, named and attributed."
+    },
+    {
+     "text": "« Nous croyons au droit de chaque nation de façonner son écosystème, en développant ses propres modèles et stratégies de déploiement, conformément à ses objectifs et priorités nationaux », a-t-elle déclaré.",
+     "type": "quote",
+     "entities": [
+      "Inde"
+     ],
+     "confidence": 85,
+     "position": 0.5661,
+     "sheet_lines": [
+      346,
+      346
+     ],
+     "note": "India on technological sovereignty; the governance axis."
+    },
+    {
+     "text": "« Nous devons adopter une approche centrée sur l’humain et développer l’IA pour le bien commun, réduire la fracture numérique et promouvoir un développement universellement bénéfique », a-t-elle affirmé.",
+     "type": "quote",
+     "entities": [
+      "Chine"
+     ],
+     "confidence": 85,
+     "position": 0.6124,
+     "sheet_lines": [
+      348,
+      348
+     ],
+     "note": "China's position on sharing versus concentration of AI."
+    }
+   ]
+  },
+  "495ef9d1-68b4-469b-ac58-fd06a2855b64": {
+   "stratum": "en-long",
+   "detected_language": "en",
+   "source_domain": "reddit.com",
+   "title": "Who’s the Shadow President?",
+   "body_chars": 32177,
+   "sheet_block": 22,
+   "labeler_notes": "32177-char podcast transcript on Russell Vought. Only the first 8000 chars are labeled. Transcript with speaker tags and ARCHIVAL TAPE lines; the pulldown-quote lines (631, 649 in other blocks) are repeated excerpts of earlier lines, not new information, so they are not labeled here even when they fall inside the window.",
+   "snippets": [
+    {
+     "text": "Reporter Andy Kroll got his hands on secret tapes of a low-profile bureaucrat named Russell Vought. Turns out, as director of the Office of Management and Budget, he’s been quietly reshaping the federal government and commanding many of the second Trump administration’s biggest moves.",
+     "type": "fact",
+     "entities": [
+      "Andy Kroll",
+      "Russell Vought",
+      "Office of Management and Budget"
+     ],
+     "confidence": 90,
+     "position": 0.0015,
+     "sheet_lines": [
+      497,
+      497
+     ],
+     "note": "The show description states the entire thesis in one sentence."
+    },
+    {
+     "text": "In more ways than I can keep track of, the federal government has changed dramatically. The White House has ignored Congress, carried out its agenda both at home and around the world without much regard for the norms of checks and balances. Agencies like USAID have been dismantled.",
+     "type": "fact",
+     "entities": [
+      "USAID",
+      "ICE",
+      "Andy Kroll"
+     ],
+     "confidence": 85,
+     "position": 0.1412,
+     "sheet_lines": [
+      "at",
+      504,
+      "In more ways than I can keep track",
+      300
+     ],
+     "note": "The named agencies said to have been dismantled or expanded; the concrete institutional content of the setup."
+    },
+    {
+     "text": "ARCHIVAL TAPE, 2024 Vought speech: The stark reality in America is that we are in the late stages of a complete Marxist takeover of the country.",
+     "type": "quote",
+     "entities": [
+      "Russell Vought"
+     ],
+     "confidence": 90,
+     "position": 0.4442,
+     "sheet_lines": [
+      523,
+      523
+     ],
+     "note": "The most striking verbatim line from the secret tapes; the single most quotable thing in the window."
+    },
+    {
+     "text": "ARCHIVAL TAPE, 2023 Vought speech: We want the bureaucrats to be traumatically affected. We want— when they wake up in the morning, we want them to not wanna go to work.",
+     "type": "quote",
+     "entities": [
+      "Russell Vought"
+     ],
+     "confidence": 90,
+     "position": 0.5583,
+     "sheet_lines": [
+      531,
+      531
+     ],
+     "note": "The remark the reporter says hit him like a bag of bricks."
+    },
+    {
+     "text": "Vought’s official title is director of the Office of Management and Budget. But Andy says there’s an easier way to think about him: the shadow president.",
+     "type": "fact",
+     "entities": [
+      "Russell Vought",
+      "Office of Management and Budget"
+     ],
+     "confidence": 85,
+     "position": 0.7594,
+     "sheet_lines": [
+      537,
+      537
+     ],
+     "note": "The framing device of the whole series, stated plainly."
+    }
+   ]
+  },
+  "7d949a9b-191f-41b3-9a23-0fe55bf227bc": {
+   "stratum": "wire-cable",
+   "detected_language": "en",
+   "source_domain": "allafrica.com",
+   "title": "Ethiopia: Who Gets to Author Ethiopia's Political Order? Why the Crisis Is About More Than Identity Politics",
+   "body_chars": 21211,
+   "sheet_block": 23,
+   "labeler_notes": "21211-char essay wire-carried on allafrica.com; the model sees the first 8000. It is an argument, not reported news, so claim/stat dominate over quote: there is no named human source with a direct quote in the window.",
+   "snippets": [
+    {
+     "text": "The thesis here is that Ethiopia's crisis is better understood as an unresolved foundational bargain: the basic settlement that determines membership, territory, land and resources, authority, and protection.",
+     "type": "claim",
+     "entities": [
+      "Oromo"
+     ],
+     "confidence": 90,
+     "position": 0.1079,
+     "sheet_lines": [
+      "at",
+      557,
+      "The thesis here is that",
+      300
+     ],
+     "note": "The thesis sentence, verbatim. This IS the article."
+    },
+    {
+     "text": "This is an interpretive historical argument based on scholarship, Oromo historiography, constitutional texts, human-rights documentation, and institutional reports rather than new field data.",
+     "type": "summary",
+     "entities": [
+      "Oromo"
+     ],
+     "confidence": 85,
+     "position": 0.2249,
+     "sheet_lines": [
+      "at",
+      560,
+      "This is an interpretive",
+      300
+     ],
+     "note": "The author's disclosure of method and standpoint, kept with the argument. RELABELLED from 'fact' to 'summary' during the harness test pass: the sentence describes what this article is rather than asserting anything about the world, which is what the prompt's 'summary' type is for. The earlier 'fact' label was wrong and it was the only reason the gold set contained no 'summary' at all, while the model emitted 4 of them -- a gold set that cannot represent a value the prompt asks for scores that value as always-wrong."
+    },
+    {
+     "text": "Asmarom Legesse documents Gadaa as an internally generated political order with deliberative assemblies, rotating leadership, checks on power, and public accountability. Its marginalization was therefore a loss of recognized political authority, not merely cultural loss.",
+     "type": "fact",
+     "entities": [
+      "Asmarom Legesse",
+      "Gadaa"
+     ],
+     "confidence": 85,
+     "position": 0.4895,
+     "sheet_lines": [
+      "at",
+      565,
+      "Asmarom Legesse",
+      300
+     ],
+     "note": "The named scholarly source and the institution at stake."
+    },
+    {
+     "text": "The 1974 revolution abolished the monarchy, nationalized land, and proclaimed equality, but the Derg remained centralized and militarized.",
+     "type": "stat",
+     "entities": [
+      "Derg"
+     ],
+     "confidence": 80,
+     "position": 0.6904,
+     "sheet_lines": [
+      "at",
+      568,
+      "The 1974 revolution",
+      300
+     ],
+     "note": "1974 revolution as a dated historical reference point."
+    },
+    {
+     "text": "The 1995 Constitution made those commitments explicit.",
+     "type": "fact",
+     "entities": [
+      "1995 Constitution",
+      "Oromo",
+      "Sidama",
+      "Wolaita",
+      "Anuak"
+     ],
+     "confidence": 85,
+     "position": 0.8415,
+     "sheet_lines": [
+      "at",
+      570,
+      "The 1995 Constitution",
+      300
+     ],
+     "note": "The constitutional commitments and the named nations; the load-bearing legal reference in the window."
+    }
+   ]
+  },
+  "5fb896b1-0aad-44a6-977d-8d3e9ddf1f80": {
+   "stratum": "wire-cable",
+   "detected_language": "en",
+   "source_domain": "middleeasteye.net",
+   "title": "Inside Somaliland: The Israel-Turkey clash coming to the Horn of Africa",
+   "body_chars": 15327,
+   "sheet_block": 24,
+   "labeler_notes": "15327-char Middle East Eye reported feature on Somaliland. Named interviewees with direct quotes, which is what the prompt's first criterion is for. Note the newsletter promo line (584/585) and the scene-setting paragraphs are not labeled.",
+   "snippets": [
+    {
+     "text": "Israel’s recognition of Somaliland has been framed as giving it a launchpad to strike Yemen’s Houthis across the Red Sea, but Israel could also be on a collision course with an even more strategic foe and US ally in the Horn of Africa: Turkey.",
+     "type": "fact",
+     "entities": [
+      "Somaliland",
+      "Israel",
+      "Houthis",
+      "Turkey"
+     ],
+     "confidence": 90,
+     "position": 0.009,
+     "sheet_lines": [
+      579,
+      579
+     ],
+     "note": "The nut graf: the thesis about Turkey, not the Houthis."
+    },
+    {
+     "text": "“We need air defence systems,” Mohamed Osman Fadal, a senior foreign affairs advisor to Somaliland’s president, said in an interview. “Turkey has F-16s in Mogadishu, and it wants to build a drone base in Somalia.”",
+     "type": "quote",
+     "entities": [
+      "Mohamed Osman Fadal",
+      "Turkey"
+     ],
+     "confidence": 90,
+     "position": 0.0983,
+     "sheet_lines": [
+      582,
+      582
+     ],
+     "note": "Named senior advisor, direct quote, with the specific military facts (F-16s, drone base) inside it."
+    },
+    {
+     "text": "“We have been too good,” he said. “We had been reaching out to Arab and Muslim countries for recognition since 1991. We had to move on. Israel recognised a gap here. We are proud to partner with the Israelis.\"",
+     "type": "quote",
+     "entities": [
+      "Mohamed Abdirahman Hassan"
+     ],
+     "confidence": 90,
+     "position": 0.2589,
+     "sheet_lines": [
+      590,
+      590
+     ],
+     "note": "The foreign minister's own account of why they moved; the most quotable line in the piece."
+    },
+    {
+     "text": "“The Houthis are not terrorists like al-Shabab. We reject that label. We are against confrontation in Yemen. The Houthis need to be engaged,” Hassan said.",
+     "type": "quote",
+     "entities": [
+      "Mohamed Abdirahman Hassan",
+      "Houthis"
+     ],
+     "confidence": 85,
+     "position": 0.4853,
+     "sheet_lines": [
+      598,
+      598
+     ],
+     "note": "Direct quote that contradicts the conventional framing, so a reader needs it verbatim."
+    },
+    {
+     "text": "A lot of people think Israel and Turkey are gearing up for a fight, but there are too many eyes on Syria. The Horn could be where they test each other because it’s so out of the way.",
+     "type": "quote",
+     "entities": [
+      "Israel",
+      "Turkey",
+      "Syria"
+     ],
+     "confidence": 85,
+     "position": 0.5725,
+     "sheet_lines": [
+      "at",
+      603,
+      "A lot of people think Israel and Turkey",
+      300
+     ],
+     "note": "The attributed assessment that supplies the analysis."
+    }
+   ]
+  },
+  "ecc42ead-d7fa-4b6f-8f60-e2eadf881ba9": {
+   "stratum": "institutional",
+   "detected_language": "en",
+   "source_domain": "foreignaffairs.com",
+   "title": "The Trouble With the Nuclear-AI Analogy",
+   "body_chars": 28174,
+   "sheet_block": 25,
+   "labeler_notes": "28174-char Foreign Affairs argument about the nuclear-AI analogy. Dense with named executive quotes and hard historical numbers. The model sees the first 8000 chars only.",
+   "snippets": [
+    {
+     "text": "In humanity’s quest to constrain the dangers from fast-advancing artificial intelligence, many have looked to the most revolutionary technology that preceded it: nuclear weapons. SpaceX CEO Elon Musk has called artificial intelligence “far more dangerous than nukes.",
+     "type": "quote",
+     "entities": [
+      "Elon Musk",
+      "Dario Amodei",
+      "Sam Altman",
+      "John Ratcliffe"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      "at",
+      622,
+      "In humanity’s quest",
+      300
+     ],
+     "note": "Four named executives making the analogy the article examines. Highest-value quote block in the piece."
+    },
+    {
+     "text": "Recent disclosures by OpenAI, Anthropic, Google, and Meta that their advanced models escaped testing environments and gained unauthorized access to the Internet have raised alarm in Washington about the risks of frontier AI. But the implications of these incidents remain ambiguous.",
+     "type": "fact",
+     "entities": [
+      "OpenAI",
+      "Anthropic",
+      "Google",
+      "Meta"
+     ],
+     "confidence": 90,
+     "position": 0.2665,
+     "sheet_lines": [
+      "at",
+      625,
+      "Recent disclosures by OpenAI",
+      300
+     ],
+     "note": "The concrete recent incident the abstract-risk argument rests on, with four named companies."
+    },
+    {
+     "text": "In a 1953 speech to the United Nations, then U.S.",
+     "type": "stat",
+     "entities": [
+      "Dwight Eisenhower",
+      "United Nations"
+     ],
+     "confidence": 85,
+     "position": 0.5159,
+     "sheet_lines": [
+      "at",
+      628,
+      "In a 1953 speech",
+      300
+     ],
+     "note": "1953 'Atoms for Peace'; the dated precedent the author treats as the success story."
+    },
+    {
+     "text": "In 1963, President John F. Kennedy predicted that 15 to 25 states would become nuclear powers in the following decade, and many senior U.S. leaders believed a nuclear war was inevitable.",
+     "type": "stat",
+     "entities": [
+      "John F. Kennedy",
+      "NPT",
+      "IAEA"
+     ],
+     "confidence": 90,
+     "position": 0.5605,
+     "sheet_lines": [
+      "at",
+      629,
+      "In 1963, President John F. Kennedy",
+      300
+     ],
+     "note": "15 to 25 predicted nuclear powers, then nine actual. The sharpest quantified claim in the window."
+    },
+    {
+     "text": " That no frontier AI model has yet caused a catastrophe may well be luck.",
+     "type": "claim",
+     "entities": [],
+     "confidence": 90,
+     "position": 0.7788,
+     "sheet_lines": [
+      631,
+      631
+     ],
+     "note": "The article's one-line thesis as a standalone pull quote: that the absence of catastrophe is luck, not design."
+    }
+   ]
+  },
+  "e3460dc7-1957-4e17-846f-1bd8f0e75ea9": {
+   "stratum": "institutional",
+   "detected_language": "en",
+   "source_domain": "foreignaffairs.com",
+   "title": "Rewiring the Arsenal of Democracy",
+   "body_chars": 24277,
+   "sheet_block": 26,
+   "labeler_notes": "24277-char Foreign Affairs argument on defense interoperability. Long paragraphs, so most snippets are partial lines. The repeated pull quote at line 649 is a duplicate of line 646 and is deliberately NOT labeled, which is a useful adversarial case for the matcher.",
+   "snippets": [
+    {
+     "text": "The post–Cold War international order slowly withered for decades, but it reached a clear inflection point on June 1, 2025. On that day, Ukraine deployed less than a million dollars’ worth of hobby-shop technology to destroy Russian strategic bombers worth billions. Russia’s exquisite air defenses a",
+     "type": "fact",
+     "entities": [
+      "Operation Spider's Web",
+      "Ukraine",
+      "Russia"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      "head",
+      639,
+      300
+     ],
+     "note": "Dated inflection point with the cost asymmetry (under a million dollars vs billions); the article's trigger event."
+    },
+    {
+     "text": "This model generally involves U.S. defense companies creating small batches of exquisite equipment that is operated with proprietary, siloed software. Allies would purchase this equipment and combine it with their own nation’s military offerings, wherever possible.",
+     "type": "fact",
+     "entities": [],
+     "confidence": 80,
+     "position": 0.3609,
+     "sheet_lines": [
+      "at",
+      644,
+      "This model generally involves",
+      300
+     ],
+     "note": "The description of the Cold War industrial model being described, i.e. the status quo being argued against."
+    },
+    {
+     "text": "This complacency led to the level of unpreparedness that U.S. President Donald Trump inherited last year. The U.S.-led defense architecture had successfully deterred large-scale conflict for decades, but the U.S. Army in 2025 looked shockingly similar to that of 1975.",
+     "type": "fact",
+     "entities": [
+      "Donald Trump",
+      "U.S. Army"
+     ],
+     "confidence": 85,
+     "position": 0.4718,
+     "sheet_lines": [
+      "at",
+      646,
+      "This complacency led to",
+      300
+     ],
+     "note": "The unpreparedness diagnosis, attributed and dated."
+    },
+    {
+     "text": " The U.S. Army in 2025 looked shockingly similar to that of 1975.",
+     "type": "quote",
+     "entities": [
+      "U.S. Army"
+     ],
+     "confidence": 80,
+     "position": 0.6893,
+     "sheet_lines": [
+      649,
+      649
+     ],
+     "note": "The pull-quote line, kept as its own gold item precisely because it duplicates text inside snippet 3 above: a correct extractor should not be penalised for finding it, and a matching bug would show up here."
+    },
+    {
+     "text": "The Ukrainian soldiers, by contrast, were able to monitor threats and activate offensive and defensive capabilities from one system, on one screen, and with just a few keystrokes.",
+     "type": "fact",
+     "entities": [
+      "Ukraine",
+      "Russia"
+     ],
+     "confidence": 85,
+     "position": 0.7914,
+     "sheet_lines": [
+      "at",
+      651,
+      "The Ukrainian soldiers",
+      300
+     ],
+     "note": "The first-hand observation contrast between Ukrainian and allied systems; the author's own reporting."
+    }
+   ]
+  },
+  "91f5f5a3-6cd4-45ab-acfd-e5f921a6c2e9": {
+   "stratum": "ugc-reddit",
+   "detected_language": "en",
+   "source_domain": "reddit.com",
+   "title": "Palestinians Want a Two-State Solution",
+   "body_chars": 21787,
+   "sheet_block": 27,
+   "labeler_notes": "21787-char survey write-up (Arab Barometer) carried on reddit.com. This is the most number-dense article in the corpus, so the gold is almost entirely stat. The pull quote at 669 duplicates 663/671 and is not labeled.",
+   "snippets": [
+    {
+     "text": "In September 2025, U.S. President Donald Trump unveiled a peace plan to end the war in Gaza, vowing it would not only rebuild the devastated territory but also usher in “eternal peace in the Middle East.” A year later, the plan has stalled. Hamas has not disarmed.",
+     "type": "fact",
+     "entities": [
+      "Donald Trump",
+      "Hamas",
+      "Israel",
+      "Benjamin Netanyahu"
+     ],
+     "confidence": 85,
+     "position": 0.0,
+     "sheet_lines": [
+      "at",
+      660,
+      "In September 2025, U.S. President Donald Trump",
+      300
+     ],
+     "note": "The situation summary with the specific stalemate claims."
+    },
+    {
+     "text": "Seventy-two percent said they believed Palestinians were “moderately or very opposed” to any peace negotiations, and over 80 percent said they believed Palestinians thought no peace with Israel was achievable.",
+     "type": "stat",
+     "entities": [
+      "Tel Aviv University"
+     ],
+     "confidence": 90,
+     "position": 0.1807,
+     "sheet_lines": [
+      "at",
+      661,
+      "Seventy-two percent",
+      300
+     ],
+     "note": "72 percent and 80 percent poll figures; the perception gap the whole piece rests on."
+    },
+    {
+     "text": "Our most recent broad survey, conducted in October 2025, showed that a majority of Palestinians regard diplomatic negotiations, not armed resistance, as the best way to resolve the Israeli-Palestinian conflict for good;",
+     "type": "stat",
+     "entities": [
+      "Arab Barometer",
+      "PCPSR"
+     ],
+     "confidence": 90,
+     "position": 0.2401,
+     "sheet_lines": [
+      "at",
+      662,
+      "Our most recent broad survey",
+      300
+     ],
+     "note": "Method plus finding: October 2025 survey, cross-checked by PCPSR. Both the number and its provenance."
+    },
+    {
+     "text": "The survey polled 855 people in Gaza face-to-face in the respondents’ homes, shelters, or camps, and 800 in the West Bank face-to-face in the respondents’ homes.",
+     "type": "stat",
+     "entities": [
+      "Arab Barometer",
+      "Gaza",
+      "West Bank"
+     ],
+     "confidence": 90,
+     "position": 0.5299,
+     "sheet_lines": [
+      "at",
+      666,
+      "The survey polled 855 people",
+      300
+     ],
+     "note": "Sample sizes 855 and 800; the most checkable methodological number in the article."
+    },
+    {
+     "text": "In our survey, 85 percent of Gazans indicated that they had been displaced at least once since early October 2023. Among those who had been displaced, 70 percent had been uprooted three or more times.",
+     "type": "stat",
+     "entities": [
+      "Gaza",
+      "OCHA"
+     ],
+     "confidence": 90,
+     "position": 0.6438,
+     "sheet_lines": [
+      "at",
+      667,
+      "In our survey, 85 percent",
+      300
+     ],
+     "note": "The dense humanitarian-statistics paragraph: displacement, employment, food, electricity, fuel. The single most useful snippet in the article."
+    }
+   ]
+  },
+  "b487581e-fc63-4ba1-ab75-7f570e3c986c": {
+   "stratum": "ugc-reddit",
+   "detected_language": "en",
+   "source_domain": "reddit.com",
+   "title": "Amnesty urges Iran to halt flogging of female singer Parastoo Ahmadi",
+   "body_chars": 21166,
+   "sheet_block": 28,
+   "labeler_notes": "21166-char rolling-news digest on reddit.com covering three unrelated stories (Amnesty/Iran, Trump on the war, Houthi resupply) plus a fourth on the Basij. Headline is only the first story. This is the hardest gold in the set: a correct extractor should concentrate on the story the headline names, and the harness will show whether it does.",
+   "snippets": [
+    {
+     "text": "Amnesty International on Thursday called on Iranian authorities to immediately halt plans to flog singer Parastoo Ahmadi and eight others over a livestreamed 2024 concert in which she performed without a hijab and sang in public despite Iran’s ban on solo performances by women.",
+     "type": "fact",
+     "entities": [
+      "Amnesty International",
+      "Parastoo Ahmadi",
+      "Iran"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      676,
+      676
+     ],
+     "note": "The headline story, stated completely: who Amnesty called on, over what, and why."
+    },
+    {
+     "text": "The rights group said Ahmadi and the others were each sentenced in June to 74 lashes, a two-year travel ban and a two-year ban on artistic activities. An appeals court in Qom upheld the convictions and sentences on Sept. 25, making the rulings final and enforceable.",
+     "type": "stat",
+     "entities": [
+      "Parastoo Ahmadi",
+      "Qom"
+     ],
+     "confidence": 90,
+     "position": 0.0349,
+     "sheet_lines": [
+      677,
+      677
+     ],
+     "note": "74 lashes, two-year travel ban, two-year artistic ban, upheld on a specific date. The hard numbers of the lead story."
+    },
+    {
+     "text": "Amnesty described flogging as “cruel, inhuman and degrading punishment” that violates the absolute prohibition on torture and other ill-treatment.",
+     "type": "quote",
+     "entities": [
+      "Amnesty International"
+     ],
+     "confidence": 85,
+     "position": 0.0683,
+     "sheet_lines": [
+      678,
+      678
+     ],
+     "note": "Amnesty's own quoted characterization of the punishment."
+    },
+    {
+     "text": "\"I've destroyed their nuclear capability. I've destroyed their navy, 159 ships are at the bottom of the sea. I've destroyed their air force. All their planes are gone. I've destroyed their radar,\" he said.",
+     "type": "quote",
+     "entities": [
+      "Donald Trump"
+     ],
+     "confidence": 90,
+     "position": 0.3679,
+     "sheet_lines": [
+      696,
+      696
+     ],
+     "note": "The most quotable Trump line in the digest, with 159 ships, a concrete number inside the quote."
+    },
+    {
+     "text": "He said Iranian authorities had killed between 72,000 and 75,000 protesters in protests earlier this year.",
+     "type": "stat",
+     "entities": [
+      "Donald Trump",
+      "Iran"
+     ],
+     "confidence": 85,
+     "position": 0.4846,
+     "sheet_lines": [
+      703,
+      703
+     ],
+     "note": "72,000 to 75,000 protesters killed; the most consequential unverified figure in the article and therefore the one a careful editor must surface rather than bury."
+    }
+   ]
+  },
+  "43b9116f-6c44-4375-824f-e0b5d20a0f1c": {
+   "stratum": "sensor-alert",
+   "detected_language": "en",
+   "source_domain": "gdacs.org",
+   "title": "Green notification for tropical cyclone CHOI-WAN-26. Population affected by Category 1 (120 km/h) wind speeds or higher is 0 (0 in Tropical Storm).",
+   "body_chars": 647,
+   "sheet_block": 29,
+   "labeler_notes": "647-char GDACS templated bulletin, one line. A careful editor keeps the event identity and the impact numbers; the URL is boilerplate. Note the internal inconsistency in the source (title says Category 1 120 km/h, body says Tropical Storm maximum wind 194 km/h) -- recorded, not fixed.",
+   "snippets": [
+    {
+     "text": "GDACS reported a tropical cyclone event (TC1001332). Alert level: Green. Severity: Tropical Storm (maximum wind speed of 194 km/h). Country: Northern Mariana Islands (MNP). Coordinates 17.0000 latitude, 144.7000 longitude. Published at 2026-09-30T02:12:11+00:00.",
+     "type": "fact",
+     "entities": [
+      "GDACS",
+      "Northern Mariana Islands"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      "at",
+      734,
+      "GDACS reported a tropical cyclone event",
+      300
+     ],
+     "note": "Event id, alert level, severity, country: the identity of the event in one span."
+    },
+    {
+     "text": "From 30/09/2026 to 02/10/2026, a Tropical Storm (maximum wind speed of 194 km/h) CHOI-WAN-26 was active in NWPacific. The cyclone affects these countries: Northern Mariana Islands (vulnerability Medium).",
+     "type": "stat",
+     "entities": [
+      "CHOI-WAN-26"
+     ],
+     "confidence": 90,
+     "position": 0.4065,
+     "sheet_lines": [
+      "at",
+      734,
+      "From 30/09/2026 to 02/10/2026",
+      300
+     ],
+     "note": "Active window, wind speed, basin, affected country and vulnerability: the machine-readable payload."
+    },
+    {
+     "text": "Estimated population affected by category 1 (120 km/h) wind speeds or higher is 0 (0 in tropical storm). Detail page: https://www.gdacs.org/report.aspx?",
+     "type": "stat",
+     "entities": [
+      "Northern Mariana Islands"
+     ],
+     "confidence": 90,
+     "position": 0.7218,
+     "sheet_lines": [
+      "at",
+      734,
+      "Estimated population affected",
+      300
+     ],
+     "note": "The impact count. Zero, and that it is zero is the whole reason this Green alert is low value, so it must be kept."
+    }
+   ]
+  },
+  "848a40b0-f7fe-4881-aa3d-94c1820e7e52": {
+   "stratum": "sensor-alert",
+   "detected_language": "en",
+   "source_domain": "gdacs.org",
+   "title": "Drought is on going in Austria, Bosnia & Herzegovina, Belgium, Belarus, Switzerland, Czech Republic, Germany, Denmark, Spain, France, Croatia, Hungary, Ireland, Italy, Liechtenstein, Luxembourg, Moldova, Montenegro, Netherlands, Norway, Poland, Romania, Serbia, Sweden, Slovenia, Slovakia, San Marino, Ukraine,",
+   "body_chars": 640,
+   "sheet_block": 30,
+   "labeler_notes": "640-char GDACS templated drought bulletin, one line, 27 countries. Same template as block 29. The affected-area figure is the only real datum besides the alert level.",
+   "snippets": [
+    {
+     "text": "GDACS reported a drought event (DR1018332). Alert level: Orange. Severity: Medium impact for agricultural drought in 1717124 km2.",
+     "type": "fact",
+     "entities": [
+      "GDACS",
+      "Austria",
+      "Ukraine",
+      "France"
+     ],
+     "confidence": 90,
+     "position": 0.0,
+     "sheet_lines": [
+      "at",
+      739,
+      "GDACS reported a drought event",
+      300
+     ],
+     "note": "Event id, Orange alert level, severity, and the affected country list. Four named countries kept as representatives of 27."
+    },
+    {
+     "text": "Severity: Medium impact for agricultural drought in 1717124 km2.",
+     "type": "stat",
+     "entities": [],
+     "confidence": 90,
+     "position": 0.1016,
+     "sheet_lines": [
+      "at",
+      739,
+      "Severity: Medium impact for agricultural drought",
+      300
+     ],
+     "note": "The affected-area figure, 1717124 km2. The only number in the bulletin that carries magnitude."
+    },
+    {
+     "text": "Published at 2026-02-11T09:57:31+00:00. The Drought notification level is Orange. Detail page: https://www.gdacs.org/report.aspx?",
+     "type": "stat",
+     "entities": [
+      "GDACS"
+     ],
+     "confidence": 85,
+     "position": 0.7547,
+     "sheet_lines": [
+      "at",
+      739,
+      "Published at 2026-02-11",
+      300
+     ],
+     "note": "Publication timestamp plus the explicit restatement of the Orange level; a bulletin reader needs the as-of time."
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,2264 @@
+{
+ "overall": {
+  "snippet_found": {
+   "tp": 13,
+   "fp": 5,
+   "fn": 119,
+   "precision": 0.7222,
+   "recall": 0.0985,
+   "f1": 0.1733,
+   "exact_match": 0.0985,
+   "n": 132
+  },
+  "type": {
+   "tp": 11,
+   "fp": 2,
+   "fn": 2,
+   "precision": 0.8462,
+   "recall": 0.8462,
+   "f1": 0.8462,
+   "exact_match": 0.8462,
+   "n": 13
+  },
+  "entities": {
+   "tp": 14,
+   "fp": 13,
+   "fn": 14,
+   "precision": 0.5185,
+   "recall": 0.5,
+   "f1": 0.5091,
+   "exact_match": 0.2308,
+   "n": 13
+  },
+  "confidence": {
+   "tp": 13,
+   "fp": 0,
+   "fn": 0,
+   "precision": 1.0,
+   "recall": 1.0,
+   "f1": 1.0,
+   "exact_match": 1.0,
+   "n": 13
+  },
+  "position": {
+   "tp": 11,
+   "fp": 2,
+   "fn": 2,
+   "precision": 0.8462,
+   "recall": 0.8462,
+   "f1": 0.8462,
+   "exact_match": 0.8462,
+   "n": 13
+  }
+ },
+ "macro_f1": 0.6749,
+ "per_article": [
+  {
+   "article_id": "773ebddb-8d38-4086-bc98-5d45f0c1b3a8",
+   "stratum": "lang-fa",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "9aa7ef91-915a-44d2-82f8-0d1484702c49",
+   "stratum": "lang-zh",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 1,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "e6fdb070-967a-400b-a8ae-04be535446e8",
+   "stratum": "lang-ml",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 4,
+    "precision": 1.0,
+    "recall": 0.2,
+    "f1": 0.3333,
+    "exact_match": 0.2,
+    "n": 5
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 2,
+    "fn": 2,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "e2b4777c-41cd-46ae-b536-2aded708654e",
+   "stratum": "lang-sq",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 3,
+    "precision": 1.0,
+    "recall": 0.25,
+    "f1": 0.4,
+    "exact_match": 0.25,
+    "n": 4
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 1,
+    "fp": 1,
+    "fn": 0,
+    "precision": 0.5,
+    "recall": 1.0,
+    "f1": 0.6667,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "e3314a2b-4ffa-4b3c-9a04-be33be2e1030",
+   "stratum": "lang-uk",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 4,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 4
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "e7b36b1a-47bf-4c2c-b6d0-94e3de6c6401",
+   "stratum": "lang-tr",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 4,
+    "precision": 1.0,
+    "recall": 0.2,
+    "f1": 0.3333,
+    "exact_match": 0.2,
+    "n": 5
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 1,
+    "fp": 2,
+    "fn": 0,
+    "precision": 0.3333,
+    "recall": 1.0,
+    "f1": 0.5,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 0,
+    "fp": 1,
+    "fn": 1,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "27c11a78-e8e1-4756-96c0-ffe41a20d561",
+   "stratum": "lang-ro",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "27cd6127-863f-488a-b055-6d4004e35359",
+   "stratum": "lang-fi",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 1,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "0e478cb7-6818-4a26-b6cc-b32af3d47351",
+   "stratum": "lang-de",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 4,
+    "precision": 1.0,
+    "recall": 0.2,
+    "f1": 0.3333,
+    "exact_match": 0.2,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 1,
+    "fn": 1,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 2,
+    "fp": 1,
+    "fn": 1,
+    "precision": 0.6667,
+    "recall": 0.6667,
+    "f1": 0.6667,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "89433c0b-dbc3-4407-b75c-afb1c5ac9d42",
+   "stratum": "lang-es",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "6386af5c-f4ae-459c-9e50-60a72b4c65c0",
+   "stratum": "lang-id",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 1,
+    "fn": 2,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 2
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "56eb4457-8918-463a-adad-3dcaf8e815af",
+   "stratum": "lang-it",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 4,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 4
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "b67ded82-0e2f-4df5-815e-fe0cbd5ee6d4",
+   "stratum": "lang-fr",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 4,
+    "precision": 1.0,
+    "recall": 0.2,
+    "f1": 0.3333,
+    "exact_match": 0.2,
+    "n": 5
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 1,
+    "fp": 1,
+    "fn": 1,
+    "precision": 0.5,
+    "recall": 0.5,
+    "f1": 0.5,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "000413bd-fc2b-4977-991f-a1dac4b66049",
+   "stratum": "en-short",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 1,
+    "precision": 1.0,
+    "recall": 0.5,
+    "f1": 0.6667,
+    "exact_match": 0.5,
+    "n": 2
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "25c0a5d0-a51e-4f61-b06f-26b2c7399f2a",
+   "stratum": "en-short",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 2,
+    "precision": 1.0,
+    "recall": 0.3333,
+    "f1": 0.5,
+    "exact_match": 0.3333,
+    "n": 3
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "8a5bb853-23e1-4993-aa94-5b6b6dab170b",
+   "stratum": "en-short",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 1,
+    "fn": 2,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 2
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "f661e434-303d-4941-bb3e-58a94ddbe9ee",
+   "stratum": "en-medium",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "6d83ad82-5821-47d8-a8b9-b5f193fb0cb4",
+   "stratum": "en-medium",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "4e060fae-4189-4441-bc64-49e9a3e8f0df",
+   "stratum": "en-medium",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 4,
+    "precision": 1.0,
+    "recall": 0.2,
+    "f1": 0.3333,
+    "exact_match": 0.2,
+    "n": 5
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 1,
+    "fp": 2,
+    "fn": 1,
+    "precision": 0.3333,
+    "recall": 0.5,
+    "f1": 0.4,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "2df23db2-6b1b-4577-a131-b801e20c4d16",
+   "stratum": "en-long",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "494e050b-4843-4b4c-95cb-690b4000590b",
+   "stratum": "en-long",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "495ef9d1-68b4-469b-ac58-fd06a2855b64",
+   "stratum": "en-long",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 4,
+    "precision": 1.0,
+    "recall": 0.2,
+    "f1": 0.3333,
+    "exact_match": 0.2,
+    "n": 5
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 0,
+    "fp": 1,
+    "fn": 1,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "7d949a9b-191f-41b3-9a23-0fe55bf227bc",
+   "stratum": "wire-cable",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "5fb896b1-0aad-44a6-977d-8d3e9ddf1f80",
+   "stratum": "wire-cable",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "ecc42ead-d7fa-4b6f-8f60-e2eadf881ba9",
+   "stratum": "institutional",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 4,
+    "precision": 1.0,
+    "recall": 0.2,
+    "f1": 0.3333,
+    "exact_match": 0.2,
+    "n": 5
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 3,
+    "precision": 1.0,
+    "recall": 0.25,
+    "f1": 0.4,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "e3460dc7-1957-4e17-846f-1bd8f0e75ea9",
+   "stratum": "institutional",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "91f5f5a3-6cd4-45ab-acfd-e5f921a6c2e9",
+   "stratum": "ugc-reddit",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 4,
+    "precision": 1.0,
+    "recall": 0.2,
+    "f1": 0.3333,
+    "exact_match": 0.2,
+    "n": 5
+   },
+   "type": {
+    "tp": 0,
+    "fp": 1,
+    "fn": 1,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 1,
+    "fp": 2,
+    "fn": 3,
+    "precision": 0.3333,
+    "recall": 0.25,
+    "f1": 0.2857,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "b487581e-fc63-4ba1-ab75-7f570e3c986c",
+   "stratum": "ugc-reddit",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 4,
+    "precision": 1.0,
+    "recall": 0.2,
+    "f1": 0.3333,
+    "exact_match": 0.2,
+    "n": 5
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 1,
+    "fp": 2,
+    "fn": 0,
+    "precision": 0.3333,
+    "recall": 1.0,
+    "f1": 0.5,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  },
+  {
+   "article_id": "43b9116f-6c44-4375-824f-e0b5d20a0f1c",
+   "stratum": "sensor-alert",
+   "snippet_found": {
+    "tp": 0,
+    "fp": 1,
+    "fn": 3,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 3
+   },
+   "type": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "entities": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "confidence": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   },
+   "position": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "exact_match": 0.0,
+    "n": 0
+   }
+  },
+  {
+   "article_id": "848a40b0-f7fe-4881-aa3d-94c1820e7e52",
+   "stratum": "sensor-alert",
+   "snippet_found": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 2,
+    "precision": 1.0,
+    "recall": 0.3333,
+    "f1": 0.5,
+    "exact_match": 0.3333,
+    "n": 3
+   },
+   "type": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "entities": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 3,
+    "precision": 1.0,
+    "recall": 0.25,
+    "f1": 0.4,
+    "exact_match": 0.0,
+    "n": 1
+   },
+   "confidence": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   },
+   "position": {
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "exact_match": 1.0,
+    "n": 1
+   }
+  }
+ ],
+ "diagnostics": [
+  {
+   "article_id": "773ebddb",
+   "stratum": "lang-fa",
+   "lang": "fa",
+   "gold_snippets": 5,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "9aa7ef91",
+   "stratum": "lang-zh",
+   "lang": "zh-cn",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "e6fdb070",
+   "stratum": "lang-ml",
+   "lang": "ml",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "e2b4777c",
+   "stratum": "lang-sq",
+   "lang": "sq",
+   "gold_snippets": 4,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "e3314a2b",
+   "stratum": "lang-uk",
+   "lang": "uk",
+   "gold_snippets": 4,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "e7b36b1a",
+   "stratum": "lang-tr",
+   "lang": "tr",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "27c11a78",
+   "stratum": "lang-ro",
+   "lang": "ro",
+   "gold_snippets": 5,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "27cd6127",
+   "stratum": "lang-fi",
+   "lang": "fi",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "0e478cb7",
+   "stratum": "lang-de",
+   "lang": "de",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "89433c0b",
+   "stratum": "lang-es",
+   "lang": "es",
+   "gold_snippets": 5,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "6386af5c",
+   "stratum": "lang-id",
+   "lang": "id",
+   "gold_snippets": 2,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "56eb4457",
+   "stratum": "lang-it",
+   "lang": "it",
+   "gold_snippets": 4,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "b67ded82",
+   "stratum": "lang-fr",
+   "lang": "fr",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "000413bd",
+   "stratum": "en-short",
+   "lang": "en",
+   "gold_snippets": 2,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "25c0a5d0",
+   "stratum": "en-short",
+   "lang": "en",
+   "gold_snippets": 3,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "8a5bb853",
+   "stratum": "en-short",
+   "lang": "en",
+   "gold_snippets": 2,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "f661e434",
+   "stratum": "en-medium",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "6d83ad82",
+   "stratum": "en-medium",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "4e060fae",
+   "stratum": "en-medium",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "2df23db2",
+   "stratum": "en-long",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "494e050b",
+   "stratum": "en-long",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "495ef9d1",
+   "stratum": "en-long",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "7d949a9b",
+   "stratum": "wire-cable",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "5fb896b1",
+   "stratum": "wire-cable",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "ecc42ead",
+   "stratum": "institutional",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "e3460dc7",
+   "stratum": "institutional",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 0,
+   "script_overlap": 0.0
+  },
+  {
+   "article_id": "91f5f5a3",
+   "stratum": "ugc-reddit",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "b487581e",
+   "stratum": "ugc-reddit",
+   "lang": "en",
+   "gold_snippets": 5,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "43b9116f",
+   "stratum": "sensor-alert",
+   "lang": "en",
+   "gold_snippets": 3,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  },
+  {
+   "article_id": "848a40b0",
+   "stratum": "sensor-alert",
+   "lang": "en",
+   "gold_snippets": 3,
+   "pred_snippets": 1,
+   "script_overlap": 1.0
+  }
+ ],
+ "unlabeled": [],
+ "mutation": "first_only",
+ "mutation_notes": [
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 4 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses",
+  "first_only: 5 -> 1 snippets, only the first snippet survives: precision holds, recall collapses"
+ ],
+ "cost": {
+  "requests": 0,
+  "hits": 30,
+  "misses": 0,
+  "writes": 0,
+  "errors": 0,
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "total_tokens": 0,
+  "models": {}
+ },
+ "headroom": {
+  "groq_free_rpm": 20,
+  "groq_free_rpd": 1000,
+  "requests_this_run": 0,
+  "daily_headroom_after_run": 1000,
+  "daily_used_pct": 0.0,
+  "within_daily_cap": true,
+  "repo_pipeline_daily_budget": 900,
+  "eval_spends_pipeline_budget": false
+ },
+ "responses": [
+  {
+   "key": "f93fae92ab7acad8766c1645f02199935a07084bc976cdcf5bbe8ef106915d3b",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "49c02d952fb32ecda32612e8b433a4265862ebbd0b1bf1603470c0600c5cd22d",
+   "input_hash": "d41c48eeafc810f0ed99e638f6772ce62cfd6dae399a685eee37e76a69e481ba",
+   "replayed": true,
+   "chars": 0,
+   "signature": "e3b0c44298fc1c14",
+   "error": null
+  },
+  {
+   "key": "e351ed96ef24672088f75676fa1ec1e128dc50cc96269a394f62701dcb8eb9ff",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "10091757faa0f71f8fdfb17e499d9e0ebb9de0f23caf725584f9b23f358b6170",
+   "input_hash": "ebc089997fa3302c7fb83459f7c943359f45a020dfd44ce0ca91180752f64871",
+   "replayed": true,
+   "chars": 1138,
+   "signature": "36282c7a949da355",
+   "error": null
+  },
+  {
+   "key": "27c142549e0337e02ae5c1a58d0da76a85832fa6fe4218a4426743db1b5828c7",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "063e8c1ff4b9a261cd321c4fa143b1d40b0d0f0635a64e4a89b1e97efca06186",
+   "input_hash": "527451183fe47de1a7d52e19f5d22c3430715d1b55cd309c6164aded5de70c31",
+   "replayed": true,
+   "chars": 933,
+   "signature": "bde779cfa4703f6e",
+   "error": null
+  },
+  {
+   "key": "0d41ea5825e5e3532527d425dec06643bcf3b789c437a9fb455c26e6b7f3d951",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "df0aa31211cd82278a3b836d21816caa99f613a55eed23c05b53279940d0dd42",
+   "input_hash": "6ae8bbb3ef1b24d465700b94f20ca4a7e033cc5946ba9f76ef38e5e5fb9a73ca",
+   "replayed": true,
+   "chars": 998,
+   "signature": "775701ed12bd9cff",
+   "error": null
+  },
+  {
+   "key": "2293694b3b0fb9aaf6740e1c4101e4be12454bb73896f33946f5e86d7d20a069",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "8f78b75ef0b0af29980ad81eb10dfdfb9ce023172afa5fc70c1fcec0d272a582",
+   "input_hash": "791b8cdf13f5f046fdf75cdb5d05e6b2673c28b757a68b6ff1518e6cf3e1de83",
+   "replayed": true,
+   "chars": 551,
+   "signature": "866b5d62a9311d7c",
+   "error": null
+  },
+  {
+   "key": "82486e03f74d466185abaf35a545d7205a5c885d495b6400852ded813f53d511",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "7601fcba695972f1278f2be9efad036dff98d87d3df6b55342bede2a697420a2",
+   "input_hash": "a313ccbedc55db4f67ddbe184eefa153e0f27ea836585ed04348f331b4349fa1",
+   "replayed": true,
+   "chars": 1282,
+   "signature": "5235d4739f162d06",
+   "error": null
+  },
+  {
+   "key": "daa8eca3ac5d8b4ceb58acc7a26ec0a1a3abd176b8682b5f2c285113d24f2584",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "99bbbda5cd4d0cb9b3969f74c61a97c902d9649f3a1a930910fb2bf4a88a3631",
+   "input_hash": "dd7095d73c82852207910c8fb86e62822925b4150b061eb658f867b3cec37fe8",
+   "replayed": true,
+   "chars": 0,
+   "signature": "e3b0c44298fc1c14",
+   "error": null
+  },
+  {
+   "key": "6c2c8ccaf3ead8ca637094adbdfdf1675d0abca12f9d57b3d959ae5bb0413c0e",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "b22d82a10628762696550ecdad207f5213c89d60de014f2bdd29afdc8a44d043",
+   "input_hash": "bbc984ddd2866c79b11928b0be4ba5400a242dfa7e55aeb384257cb7a053d5e6",
+   "replayed": true,
+   "chars": 1282,
+   "signature": "7b47a0bd74fc735a",
+   "error": null
+  },
+  {
+   "key": "9f1a9908a027fbba34b876b394938f586c2c9d7383d13d9841e287af7d9aa184",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "2054cf5c5acdd243c1a735f613f580b58c37394ee25ab6649564652e64dc8f22",
+   "input_hash": "1e6b7b12d25569ce196f2207ded3b3c2a66218e466f19233d76b76e20281762d",
+   "replayed": true,
+   "chars": 1238,
+   "signature": "78a1d37201d61ed9",
+   "error": null
+  },
+  {
+   "key": "f3e1da0f99c2e669c12911e42e17a1e9f4eba9586b832cbfd3922d644278c98b",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "d8f94ff9f11cf7cc7665afed1d75527913f8bb9e2faf5d01f393c0d17d162594",
+   "input_hash": "32544e248f591361b6e5755ee6ed49ecf43f510840efe158049fd80841801a0f",
+   "replayed": true,
+   "chars": 0,
+   "signature": "e3b0c44298fc1c14",
+   "error": null
+  },
+  {
+   "key": "34333ce30823a746290978667a0faf68eb711db01a0d5c1a4c73b71208c330f0",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "c61e05eb4e9aa89ad325fec5932cab62d86c0d85fcb4cf9e2ccecac115abd7cd",
+   "input_hash": "e93dfe13566cd5e8a63ee389d5aea07b938cba29c47ae40d4e06a0937495f68d",
+   "replayed": true,
+   "chars": 1323,
+   "signature": "57a8844f40f11844",
+   "error": null
+  },
+  {
+   "key": "662ee8c1885349f66b9922cda262bccd70d6067ef02a818e6a7350ab09c3085d",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "dbffb38043b15168b2b17c3dc23e2bd9f572f1d9930e7142e1fccf5d12efd59a",
+   "input_hash": "10fa33b3d400e9171f58c7d927689c92898406cf7fc50219414aa79486b3f718",
+   "replayed": true,
+   "chars": 1079,
+   "signature": "cc22e36a66405047",
+   "error": null
+  },
+  {
+   "key": "14ccd5d32152212cfd0cfe44217a27fcfb11eec2fa2796c6f6ec5d4a5d7bd2b1",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "f48bf87086e080b09610ff7947c01c53f4d1fbd4aa68ec5a2c6959bc285a5f2f",
+   "input_hash": "f160760d1dde5e78de0baa3f827cac6be6b989bb071c2f838af524f40280c01d",
+   "replayed": true,
+   "chars": 1634,
+   "signature": "e0f3f190e983b5bb",
+   "error": null
+  },
+  {
+   "key": "4d67e0a84d9ad2a728aa6162b73d7d5e35e8178ca7b0d987e1222aa4b1afc1a9",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "ecb519249d49e3a6c469e6a245802f4f96905444940946905cc65d3daec9801b",
+   "input_hash": "e44d41567e854ae80648169e834fbef1645c244ab6cdcd9896a4a17648e91d25",
+   "replayed": true,
+   "chars": 1060,
+   "signature": "9b61c72afe74b4eb",
+   "error": null
+  },
+  {
+   "key": "7f3e6875edb4d88c0afba32f1dc65f83f319f02bd690e63599c2e56b4c58f1a5",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "2752a3825d4733e33b1248da02b30bc85c20adcf494fda43a0a588710dff3b3b",
+   "input_hash": "ab22ad723693392faf97e4e9cae62d3a1db03f93f321002a996f98a7ef326748",
+   "replayed": true,
+   "chars": 1008,
+   "signature": "4f99b9e40c8e76b1",
+   "error": null
+  },
+  {
+   "key": "6447915d1068d5f0bbc10c2a2ddd7db121987e8dc8c38b0a67ef36b3546cc2d9",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "423e3643695301c8dfae475c2b34933167dac99c14de8e74aafc31d0d7826e66",
+   "input_hash": "b9d7731dae8a70a0b548038ee30229c50420cb5776f023d4d3804bc51a0ad6bc",
+   "replayed": true,
+   "chars": 917,
+   "signature": "8d01e68d2e80a654",
+   "error": null
+  },
+  {
+   "key": "23c28a0ba0d70c1f8c98d352178536944e5c7bdd88a483a96b01e68d64886e9c",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "4261987225dc31716fb3d3e70bf0ee2153e21f083415756e63fc4e5ff1d3eab9",
+   "input_hash": "9e8b31e80f9c55803a7951000d8c82bd7612eebe593f5e561d37a0b5a34a9230",
+   "replayed": true,
+   "chars": 1242,
+   "signature": "952c5426488d39e3",
+   "error": null
+  },
+  {
+   "key": "06d66677105f6df5706843a632004d26b6b41d34b086127e683cd1b9de6a4bc8",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "bb86c2c3c70aa6a4af0c1c4170867288da557c6183bca387bcc9a7870c2ef054",
+   "input_hash": "c5df66b0767688f27e4372325ee0225643c6fbc1cb2e4777720aac3d07642118",
+   "replayed": true,
+   "chars": 1731,
+   "signature": "0031d43bd02efb77",
+   "error": null
+  },
+  {
+   "key": "506a40e1989fbe718352473e586172167b03f06ec12eea01e36297f191c5e3d0",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "7be02aa46dac0619c61c312493c95cb053b7b886543d90ba3db6c29fa641fc63",
+   "input_hash": "d8d0634a3d6742ef7c4d8d2b090e1d565b44eeafb8dea26fdcf258c9477aa473",
+   "replayed": true,
+   "chars": 1295,
+   "signature": "0abd91c4660b0968",
+   "error": null
+  },
+  {
+   "key": "18f19719f704e971cd4f35b00150de15765d4644e7ec36a0e612ae2fccbc4ade",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "5df6234ca6da94b129ec2bbd1694e452d420a52fb8aa3d328aa3dc15bcde5f4a",
+   "input_hash": "4bb57fd0585513516ad726b82f188ae01ca88c56a659c889774902752600211c",
+   "replayed": true,
+   "chars": 0,
+   "signature": "e3b0c44298fc1c14",
+   "error": null
+  },
+  {
+   "key": "faac2500ac06e022f2d890d3a71ed14b296858c1d471a0482d22391d95cb3a3d",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "cf27a4496b935e91a241e0ad2c1c17ba19a60ee23f8e676637b964cdf746362e",
+   "input_hash": "bc26c17d5f5a06d4d33354d0a6102864f5219275e3a9a4b2ef9d2f420ab8e72d",
+   "replayed": true,
+   "chars": 1470,
+   "signature": "22b965f026b7b0d6",
+   "error": null
+  },
+  {
+   "key": "1458eafce0691d5ac344b12be62bf2125d6e019c1d189bcb6992f8333de1819a",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "684d74bdf7963b74e1c6226c4b7a4d695ec1901d728edc3f07c9b8dc12a68d7b",
+   "input_hash": "24ef62edc6bae317db9acdfe76fc5de3656dd7ab814dd795aca92fc74858489a",
+   "replayed": true,
+   "chars": 1320,
+   "signature": "a17387fad6d3c40d",
+   "error": null
+  },
+  {
+   "key": "2b9e957be0495aba731f31fcf3bfa903d1e6bad0a91380f366f01b2022620a89",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "7e7fdf37b7928bde5e5e14a769209922288d727011d202aa66350b86d74c2e64",
+   "input_hash": "b22601049b78d1046b31eab3c4e3504451d3658c03c374f0dba46a571ed6b5ab",
+   "replayed": true,
+   "chars": 0,
+   "signature": "e3b0c44298fc1c14",
+   "error": null
+  },
+  {
+   "key": "381a451285b3833ece034414ed1b90172b7b0c9346040a0e1d3e4d480e5a9899",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "1778fa33c737aac57968daba9751d11b895ef7141c45a8514c99834ba95bbc46",
+   "input_hash": "79b4fa9587bcaa7245a3e5d6afaf6de4ea300893b634c57e1641d5dc474d9494",
+   "replayed": true,
+   "chars": 1369,
+   "signature": "09054f950cdecbbe",
+   "error": null
+  },
+  {
+   "key": "1a741b4d8abafb8c0ff84fb89150d3476eb78aba7fb15bc5fa5267f0fa54eab9",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "e7cbcb7aaa113b78c29df73f40859f2be47688aa9f85da84e29237c2febc31a9",
+   "input_hash": "02315ac5e8dedb5e8fe64f1f7dbf76e96023dd7ef1d5b2917b228b28d4c3b583",
+   "replayed": true,
+   "chars": 1098,
+   "signature": "ec03b18af10a441d",
+   "error": null
+  },
+  {
+   "key": "f9b0e8292db1c1d7d342dad6808c3d7b18e2a0d6fdaf0bc6529d53ac8ead3300",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "bdb77ddbec3b4f0a9c286246bf98544a1d0776c4637355db1b2291b2a5fdd1f9",
+   "input_hash": "8454100ff05bb3c33420208768ad1047b7408cb9a44e61beed0fad81806d569a",
+   "replayed": true,
+   "chars": 0,
+   "signature": "e3b0c44298fc1c14",
+   "error": null
+  },
+  {
+   "key": "f0200b77ea75af7a8e2ae83d4d4323bdadd3cf8eeff5707acf3fc875c3ceb83e",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "fbad72bb65c0c2ea411537faba2d871c78a5181f1d28f0da57f563b3ea7c7b44",
+   "input_hash": "1e1f6a3f33fb4cc05468ffcef9ee62effbf75cad41a335066b77b5b127d54706",
+   "replayed": true,
+   "chars": 1313,
+   "signature": "accc27e6f13b1809",
+   "error": null
+  },
+  {
+   "key": "2fe011b7b53665a269526424441a7838c4d2915e02bd9ada499667bdfdd34fe3",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "81290570f577b1ed29bb0dcc705f10fb534812ba684e5be30b3e68a6e8713a5b",
+   "input_hash": "a792d16de8c8c1d19a64da2a982435b7165734a7648b35a845da3bf9c2b79768",
+   "replayed": true,
+   "chars": 1143,
+   "signature": "e86bacfc71477c3e",
+   "error": null
+  },
+  {
+   "key": "8215c076ee36653c008b500e0048a4d73bc6d14da190375684ad3af491181795",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "99a37a080fc945a5e248467cb5dac7d1a7617a56c5448c85dfd5f63fd6929526",
+   "input_hash": "1e0c4403f4b3a7ec452a6c7a0a4d4dc8cf5c2ef2c8d5e6cc21940c9db1aecbfc",
+   "replayed": true,
+   "chars": 1140,
+   "signature": "6d2abf3e3238caa5",
+   "error": null
+  },
+  {
+   "key": "c71819f944a525064717ef26a9e3bd5f60a623ab49c63f35cb87b1d0061a1247",
+   "model": "openai/gpt-oss-20b",
+   "prompt_hash": "6cb454d8f90a86b4d86b403d12f2efa129f762f1002f682065c1c28ad2a7d243",
+   "input_hash": "4c57d4d4b984217fc3d43531a870b8adf9899c2f4a6ca7207213557b05a17055",
+   "replayed": true,
+   "chars": 1437,
+   "signature": "5a7b37796e622f2c",
+   "error": null
+  }
+ ]
+}

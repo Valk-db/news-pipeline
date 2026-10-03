@@ -434,6 +434,18 @@ def test_tier_definitions():
     assert "csis.org" in TIER2_DOMAINS
     assert "who.int" in TIER2_DOMAINS
     assert "chicagotribune.com" in TIER2_DOMAINS
+    # Regional blind-spot sources (batch-coverage, 2026-10-02): mirrored from
+    # source_registry in the same commit so the two sets cannot drift.
+    assert {
+        "un.org",
+        "allafrica.com",
+        "rte.ie",
+        "philstar.com",
+        "middleeasteye.net",
+        "trend.az",
+        "premiumtimesng.com",
+        "nation.africa",
+    } <= TIER2_DOMAINS
     assert "reddit.com" in TIER3_DOMAINS
     assert "substack.com" in TIER4_DOMAINS
 
@@ -477,16 +489,32 @@ def test_source_registry():
     assert all(s.enabled for s in enabled_tier1.values())
 
     enabled_tier2 = get_enabled_sources_by_tier(SourceTier.TIER2)
-    # Four enabled tier-2 sources:
+    # Four long-standing enabled tier-2 sources:
     # - foreignpolicy.com, foreignaffairs.com: ok>0 in all 3 healthy runs
     # - csis.org, who.int: entries_in_feed>0, already_known>0 (working feeds, fully deduped)
     # chicagotribune.com disabled: entries_in_feed=0 (empty feed)
-    assert len(enabled_tier2) == 4
+    # Plus the regional blind-spot sources added 2026-10-02 (batch-coverage).
+    # Asserted as a set, not a count, so adding a verified feed is not a test edit.
+    for domain in [
+        "foreignpolicy.com",
+        "foreignaffairs.com",
+        "csis.org",
+        "who.int",
+        "un.org",
+        "allafrica.com",
+        "rte.ie",
+        "philstar.com",
+        "middleeasteye.net",
+        "trend.az",
+        "premiumtimesng.com",
+        "nation.africa",
+    ]:
+        assert domain in enabled_tier2, f"{domain} should be an enabled tier-2 source"
     assert all(s.enabled for s in enabled_tier2.values())
-    assert "foreignpolicy.com" in enabled_tier2
-    assert "foreignaffairs.com" in enabled_tier2
-    assert "csis.org" in enabled_tier2
-    assert "who.int" in enabled_tier2
+
+    # scmp.com: feed alive but every article page 403s, so it produced 0
+    # articles on 2026-10-02 and is disabled with the evidence in its comment.
+    assert "scmp.com" not in enabled_tier2
 
     # Test getting specific source
     bbc = get_source_config("bbc.com")
