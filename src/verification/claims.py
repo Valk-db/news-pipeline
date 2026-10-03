@@ -51,6 +51,12 @@ Return ONLY a JSON object of this exact shape, no explanation, no markdown fence
 CLAIM_MAX_TOKENS = 4096
 CLAIM_MAX_UNITS = 5
 
+# The smallest story worth an LLM call. Two is not a tuning choice: a one-unit
+# story is one source's account of one event, and asking a model to find the
+# atomic claims and their corroboration across a single source produces a matrix
+# with one column -- which is the article, not an extraction of it.
+MIN_CLAIM_UNITS = 2
+
 
 def story_input_digest(unit_ids) -> str:
     """Digest of the evidence a claim matrix for one story was computed from.
@@ -110,23 +116,40 @@ async def claims_are_current(
     return True
 
 
-async def story_unit_digest(
+async def story_evidence_snapshot(
     session: AsyncSession, story_id: uuid.UUID, *, max_units: int = CLAIM_MAX_UNITS,
-) -> str:
-    """The digest of the units an extraction for this story would be taken against.
+) -> tuple[str, int]:
+    """What an extraction for this story would be taken against: (digest, unit count).
 
-    Public because the runner in scripts/run_phase2.py needs it *before* it spends:
-    claims_are_current() is only a useful question if the caller can compute the
-    digest without running the extraction. Gathering the units through the same
-    _gather_unit_texts_for_story() the extractor uses is what guarantees the digest
-    the check compares against is the one the extraction would have produced.
+    Both in one gather because the caller needs both before it spends anything: the
+    digest to ask claims_are_current() whether the story has been read, and the
+    count to decide whether it is worth reading at all. Gathering twice would
+    mean two chances for the two answers to disagree.
+
+    The digest is over unit ids, so it is stable regardless of how the units are
+    ordered; the count is of units that actually carry article text, because that
+    is what the prompt would be built from. A story id that does not exist
+    returns ("", 0) rather than raising: a story deleted between selection and
+    here is a skip, not a crash.
     """
     stmt = select(Story).where(Story.id == story_id)
     story = (await session.execute(stmt)).scalar_one_or_none()
     if not story:
-        return ""
+        return "", 0
     unit_texts = await _gather_unit_texts_for_story(session, story, max_units=max_units)
-    return story_input_digest(u["unit_id"] for u in unit_texts)
+    return story_input_digest(u["unit_id"] for u in unit_texts), len(unit_texts)
+
+
+async def story_unit_digest(
+    session: AsyncSession, story_id: uuid.UUID, *, max_units: int = CLAIM_MAX_UNITS,
+) -> str:
+    """The digest half of story_evidence_snapshot().
+
+    Kept as its own name for the tests and for any caller that only needs the
+    "already read?" answer.
+    """
+    digest, _count = await story_evidence_snapshot(session, story_id, max_units=max_units)
+    return digest
 
 
 async def extract_claims_for_story(
@@ -159,7 +182,7 @@ async def extract_claims_for_story(
         return results
 
     unit_texts = await _gather_unit_texts_for_story(session, story, max_units=max_units)
-    if len(unit_texts) < 2:
+    if len(unit_texts) < MIN_CLAIM_UNITS:
         # Not enough units for a meaningful claim matrix -- same threshold
         # philosophy as cluster_viewpoints, doesn't need to match exactly.
         return results

@@ -537,6 +537,62 @@ class TestRefusals:
         assert caught.value.reason == SKIP_RATE_LIMITED
         assert len(calls) == 2, "one initial attempt plus exactly one retry"
 
+    @pytest.mark.asyncio
+    async def test_a_429_survives_the_client_and_is_still_classifiable(self):
+        """The whole point of the llm.py fix, end to end through the real client.
+
+        The tests above hand the runner an exception that still carries a status
+        code, which is a shape the provider never actually produces: by the time a
+        429 reaches a caller it has been through the client's retry decorator and is
+        a tenacity RetryError, and chat_completion turns that into an LLMError. If
+        the status code is lost on that path -- and it was, measured on dev
+        2026-10-03 -- then the runner sees an unclassifiable failure, skips nothing,
+        retries nothing, and a provider limit is indistinguishable from a bug.
+        """
+        from src.shared.llm import LLMClient, LLMError
+
+        class _RateLimited(Exception):
+            """Stands in for groq.RateLimitError: SDK type, not an httpx type."""
+
+            status_code = 429
+
+        client = LLMClient()
+        client.groq_client = AsyncMock()
+        client.cerebras_client = None
+        client.groq_client.chat.completions.create.side_effect = _RateLimited(
+            "Rate limit reached for model openai/gpt-oss-20b on tokens per minute "
+            "(TPM): Limit 8000, Used 5011, Requested 3954. Please try again in 7.2375s."
+        )
+
+        with pytest.raises(LLMError) as caught:
+            await client.chat_completion([{"role": "user", "content": "test"}], max_tokens=500)
+
+        error = caught.value
+        assert LLMClient.is_rate_limited(error), "the 429 was lost on the way out"
+        assert not LLMClient.is_out_of_credit(error)
+        # The provider's own number, read off the error it wraps, not the default.
+        assert 7.0 < LLMClient._retry_after_seconds(error, 60.0) < 7.5
+        assert client.groq_client.chat.completions.create.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_a_402_survives_the_client_and_is_never_routed_around(self):
+        """The $0 rule needs the 402 to be visible, or nothing enforces it."""
+        from src.shared.llm import LLMClient, LLMError
+
+        class _OutOfCredit(Exception):
+            status_code = 402
+
+        client = LLMClient()
+        client.groq_client = AsyncMock()
+        client.cerebras_client = None
+        client.groq_client.chat.completions.create.side_effect = _OutOfCredit("quota exceeded")
+
+        with pytest.raises(LLMError) as caught:
+            await client.chat_completion([{"role": "user", "content": "test"}], max_tokens=500)
+
+        assert LLMClient.is_out_of_credit(caught.value)
+        assert not LLMClient.is_rate_limited(caught.value)
+
 
 class TestTheRunSpendsOnce:
     """The claim in the batch spec: run it twice, the second run spends nothing."""

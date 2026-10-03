@@ -16,7 +16,8 @@ keeps 404ing on every public route after this runs -- `tests/test_phase2_isolati
 is the test that holds that line. Public exposure remains a human decision.
 
 The run does not fail. Every per-story failure mode is a recorded skip:
-`already_analysed`, `budget_exhausted`, `rate_limited`, `out_of_credit`, `error`.
+`already_analysed`, `budget_exhausted`, `rate_limited`, `out_of_credit`,
+`too_few_units`, `error`.
 A daily enrichment job that fails because a free tier said 429 teaches its operators to
 ignore it. The one exception is a wholesale LLM auth failure (see below), which is a
 misconfiguration rather than a transient provider state and is worth a red build.
@@ -47,6 +48,7 @@ from src.verification.phase2 import (
     SKIP_ERROR,
     SKIP_OUT_OF_CREDIT,
     SKIP_RATE_LIMITED,
+    SKIP_TOO_FEW_UNITS,
     Phase2BudgetRefused,
     Phase2TokenBudget,
     new_result,
@@ -146,7 +148,7 @@ async def run_story(session_factory, story_id, *, budget, units, retries, dry_ru
 
     try:
         async with session_factory() as session:
-            digest = await claims_stage.story_unit_digest(
+            digest, unit_count = await claims_stage.story_evidence_snapshot(
                 session, story_id, max_units=units
             )
             current = bool(digest) and await claims_stage.claims_are_current(
@@ -155,6 +157,15 @@ async def run_story(session_factory, story_id, *, budget, units, retries, dry_ru
         if current:
             result["skipped"] = SKIP_ALREADY_ANALYSED
             result["skip_detail"] = "claim matrix matches current evidence"
+            return result
+        if unit_count < claims_stage.MIN_CLAIM_UNITS:
+            # One source is not corroboration. Skipped with its reason so the run
+            # record distinguishes "nothing to read" from "the reading failed".
+            result["skipped"] = SKIP_TOO_FEW_UNITS
+            result["skip_detail"] = (
+                f"{unit_count} unit(s) with article text, "
+                f"{claims_stage.MIN_CLAIM_UNITS} needed"
+            )
             return result
         extraction = await _extract_claims(
             session_factory, story_id, budget=budget, max_units=units, retries=retries

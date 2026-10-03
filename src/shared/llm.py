@@ -148,8 +148,8 @@ class LLMClient:
         if self.settings.cerebras_api_key and AsyncCerebras:
             self.cerebras_client = AsyncCerebras(api_key=self.settings.cerebras_api_key)
 
-    @staticmethod
-    def _status_code(exception: BaseException) -> int:
+    @classmethod
+    def _status_code(cls, exception: BaseException) -> int:
         """The HTTP status behind an SDK or httpx error, or 0 if there isn't one.
 
         Written as a single lookup rather than two isinstance chains because the
@@ -164,7 +164,44 @@ class LLMClient:
             return code
         response = getattr(exception, "response", None)
         code = getattr(response, "status_code", None)
-        return code if isinstance(code, int) else 0
+        if isinstance(code, int):
+            return code
+        return cls._status_code_from_chain(exception)
+
+    @staticmethod
+    def _status_code_from_chain(exception: BaseException, _depth: int = 0) -> int:
+        """The status code of whatever a wrapper is wrapping, 0 if there is none.
+
+        Two wrappers stood between a provider's answer and the code that could read
+        it, and both had to be unwrapped before a rate limit was visible as one:
+
+        * `tenacity.RetryError`, which the @retry decorators raise once their
+          attempts run out. It carries the real error at `.last_attempt.exception()`.
+          Measured on dev 2026-10-03: a 429 that exhausted three internal attempts
+          reached the caller as `LLMError("No LLM provider available")` with no
+          status code at all, so the Phase 2 runner recorded a generic error and
+          never retried or classified it.
+        * `raise ... from` chains, because LLMError is raised from the provider
+          error it is reporting.
+
+        Bounded to six levels: an exception whose cause chain loops or is very
+        deep is a bug elsewhere, and an unbounded walk here would turn a
+        classification helper into a hang.
+        """
+        if _depth >= 6:
+            return 0
+        inner = getattr(exception, "last_attempt", None)
+        inner = getattr(inner, "exception", lambda: None)()
+        if inner is not None and inner is not exception:
+            code = LLMClient._status_code(inner)
+            if code:
+                return code
+        for linked in (exception.__cause__, exception.__context__):
+            if linked is not None and linked is not exception:
+                code = LLMClient._status_code(linked)
+                if code:
+                    return code
+        return 0
 
     @classmethod
     def is_rate_limited(cls, exception: BaseException) -> bool:
@@ -197,6 +234,36 @@ class LLMClient:
         spells it out in prose ("Please try again in 7.2375s") and a caller that
         ignored it would either hammer the limit or sleep for a guessed interval.
         """
+        # Walk the wrapper chain as well as the exception itself. A 429 that
+        # exhausted the client's internal retries arrives as tenacity's RetryError,
+        # whose own message is repr noise -- the provider's "try again in 7.2375s"
+        # is on the error it wraps, so a search that stopped at the top level would
+        # fall back to a guess every time it mattered most.
+        current = exception
+        for _level in range(6):
+            if current is None:
+                break
+            found = LLMClient._retry_after_from_one(current, default)
+            if found != default:
+                return found
+            current = LLMClient._inner_exception(current)
+        return default
+
+    @staticmethod
+    def _inner_exception(exception: BaseException):
+        """The exception `exception` wraps, or None."""
+        inner = getattr(exception, "last_attempt", None)
+        inner = getattr(inner, "exception", lambda: None)()
+        if inner is not None and inner is not exception:
+            return inner
+        for linked in (exception.__cause__, exception.__context__):
+            if linked is not None and linked is not exception:
+                return linked
+        return None
+
+    @staticmethod
+    def _retry_after_from_one(exception, default: float) -> float:
+        """The retry-after this one exception carries, or `default`."""
         for attr in ("retry_after", "retry_after_seconds"):
             value = getattr(exception, attr, None)
             if isinstance(value, (int, float)) and value >= 0:
@@ -544,6 +611,11 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
         a reasoning model needs it: without it the call can return an empty
         message while still being counted against every budget.
         """
+        # The last provider failure, so the LLMError raised at the bottom is a report
+        # of what actually went wrong rather than a shrug. Without it a 429 that
+        # exhausted the internal retries is indistinguishable from a missing key.
+        last_error: Optional[BaseException] = None
+
         # Try Groq first
         if self.groq_client:
             try:
@@ -555,11 +627,23 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     reasoning_effort=reasoning_effort,
                 )
             except BudgetExhausted as e:
+                last_error = e
                 logger.warning(f"Groq budget exhausted: {e}")
             except Exception as e:
-                # If it's a transient error, re-raise (it will have been retried by decorator)
+                last_error = e
+                # Transient, and the decorator has already spent its three attempts.
+                # Raise LLMError rather than re-raising: what the decorator hands back
+                # is tenacity's RetryError, which says nothing a caller can act on, and
+                # summarize_story/classify_relevance already report this case this way.
+                # `from e` is what keeps the 429 legible -- a bare `raise` here loses it
+                # entirely, and is_rate_limited/is_out_of_credit/_retry_after_seconds all
+                # read the cause chain. This branch was unreachable before _status_code
+                # learned to unwrap RetryError (RetryError is not an httpx error, so the
+                # old isinstance check said "not transient" and it fell through to
+                # Cerebras); making it reachable is the point of the unwrap, and leaking
+                # RetryError out of a public method is the cost that has to be paid.
                 if self._is_transient_error(e):
-                    raise
+                    raise LLMError("No LLM provider available") from e
                 # P0-5: Handle auth failures uniformly - fall through to Cerebras
                 if self._is_auth_error(e) and not self._groq_auth_warned:
                     import os
@@ -578,9 +662,11 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     temperature=temperature,
                 )
             except Exception as e:
-                # If it's a transient error, re-raise
+                last_error = e
+                # Same reasoning as the Groq branch above: LLMError with the cause
+                # attached, never a bare re-raise of the retry wrapper.
                 if self._is_transient_error(e):
-                    raise
+                    raise LLMError("No LLM provider available") from e
                 if self._is_auth_error(e) and not self._cerebras_auth_warned:
                     import os
                     if os.getenv("GITHUB_ACTIONS"):
@@ -588,7 +674,7 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
                     self._cerebras_auth_warned = True
                 logger.warning(f"Cerebras chat completion failed: {e}")
 
-        raise LLMError("No LLM provider available")
+        raise LLMError("No LLM provider available") from last_error
 
 
 # Singleton instance

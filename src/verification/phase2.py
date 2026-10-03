@@ -116,6 +116,11 @@ SKIP_BUDGET = "budget_exhausted"
 SKIP_RATE_LIMITED = "rate_limited"
 SKIP_OUT_OF_CREDIT = "out_of_credit"
 SKIP_VIEWPOINT_CHILD = "viewpoint_child"
+# A story with one source is not a claim matrix. Recorded rather than left as a
+# silent zero: measured on dev 2026-10-03, all 20 newest PENDING stories had
+# exactly one unit, so a run that reported "20 processed, 0 claims" and no
+# reason would look identical to a run whose LLM calls were failing.
+SKIP_TOO_FEW_UNITS = "too_few_units"
 SKIP_ERROR = "error"
 
 
