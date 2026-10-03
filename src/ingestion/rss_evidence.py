@@ -82,7 +82,6 @@ from src.shared.analyzer_versions import DEDUPE_VERSION, compute_input_hash
 from src.shared.ledger import stage_run
 from src.shared.config import get_settings
 from src.shared.safe_url import is_safe_url
-from src.transparency.log import SqlAlchemyMerkleLog
 from src.utils.ner import extract_entities_top_n
 from src.utils.trafilatura_extract import (
     compute_content_hash,
@@ -91,6 +90,18 @@ from src.utils.trafilatura_extract import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# NOTE: src.transparency.log is intentionally NOT imported at module level.
+# run.py imports RssEvidenceAdapter at module scope, so a module-level import
+# here made every ingest run -- including the scheduled one, which never asks for
+# --sources rss_evidence -- depend on the transparency subsystem being
+# importable. The evidence locker is opt-in, so its dependency should be too:
+# SqlAlchemyMerkleLog is imported lazily inside stamp_observations(), which is
+# the only place that constructs one. The import is deliberately NOT wrapped in
+# a try/except: the Merkle log is the thing this subsystem exists to make
+# trustworthy, so a transparency module that will not import must stop the
+# locker loudly rather than leave a silently empty log that reads as a full one.
 
 
 # --------------------------------------------------------------------- feeds
@@ -829,6 +840,23 @@ _MISSING_TABLE_MARKERS = (
 )
 
 
+class TransparencyUnavailableError(RuntimeError):
+    """src.transparency.log could not be imported, so nothing can be stamped.
+
+    A distinct type, deliberately not a plain ImportError, because the two
+    failures need opposite handling and run.py has to be able to tell them
+    apart. run.py contains a per-adapter fetch() failure so one broken feed
+    cannot destroy a whole ingest run (I-P1-3), and that containment is right
+    for a network adapter. It is wrong here: this is not "the publisher was
+    unreachable", it is "the subsystem that makes these observations
+    trustworthy is itself unavailable". Downgrading it to an adapter_health note
+    exits 0 with an empty log that reads as a full one.
+
+    So this type is re-raised through run.py's adapter loop, and the original
+    ImportError is chained so the traceback still names the missing module.
+    """
+
+
 def _is_missing_table(exc: BaseException) -> bool:
     """True when this is a "relation does not exist" error, not any other fault.
 
@@ -880,14 +908,43 @@ async def stamp_observations(
     a later step can stamp them once
     supabase/migrations/20261001000700_merkle_log_entries.sql is applied --
     nothing is lost, only deferred.
+
+    A MISSING TABLE is soft and an UNIMPORTABLE MODULE is loud, and the
+    difference is deliberate. An unmigrated table is a deployment still catching
+    up, and deferring costs nothing because content_hash survives on the result.
+    A src.transparency.log that will not import means the subsystem that makes
+    these observations trustworthy is itself broken, and swallowing that would
+    leave a log that is empty and reads as full -- the one outcome worse than no
+    log at all. So the lazy import below is unguarded and the caller sees the
+    ImportError.
     """
-    log = merkle_log if merkle_log is not None else SqlAlchemyMerkleLog(session)
+    if merkle_log is not None:
+        log = merkle_log
+        use_savepoint = False
+    else:
+        # Lazy, and unguarded on purpose: see the module-scope NOTE above. A
+        # caller that injects a merkle_log (the tests do) never needs
+        # src.transparency.log importable at all. The import is translated into
+        # a typed error rather than being left as a bare ImportError, so
+        # run.py can re-raise exactly this and keep its general per-adapter
+        # containment for every other failure. The original ImportError is
+        # chained, so the missing module is still named in the traceback.
+        try:
+            from src.transparency.log import SqlAlchemyMerkleLog
+        except ImportError as exc:
+            raise TransparencyUnavailableError(
+                f"evidence locker cannot stamp: src.transparency.log is not "
+                f"importable ({exc}). Refusing to report success with an empty "
+                f"transparency log."
+            ) from exc
+
+        log = SqlAlchemyMerkleLog(session)
+        use_savepoint = True
     # The DB-backed appends run inside a SAVEPOINT. A failed statement in
     # Postgres aborts the whole transaction, so without a savepoint the first
     # missing-table error would poison every later write in the run, including
     # the article rows we just persisted. Rolling back to the savepoint clears
     # the aborted state and leaves the transaction usable.
-    use_savepoint = merkle_log is None
     entries: list[tuple[str, str, int]] = []
     stamped = 0
     disabled = False
