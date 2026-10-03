@@ -24,7 +24,11 @@ from sqlalchemy import Column, DateTime, Index, Integer, String, Text, desc, sel
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.transparency.checkpoint import FORMAT_JSON_V1, SignedCheckpoint
+from src.transparency.checkpoint import (
+    FORMAT_JSON_V1,
+    TREE_SCHEME_CT_V1,
+    SignedCheckpoint,
+)
 from src.transparency.log import TransparencyBase, _utc
 
 logger = logging.getLogger(__name__)
@@ -41,6 +45,17 @@ class TransparencyCheckpoint(TransparencyBase):
     (20261002200000). All three are nullable so the rows signed under v1 keep
     loading and keep verifying byte-for-byte: a row with no format IS v1, which
     is why to_signed() defaults the format rather than requiring the column.
+
+    tree_scheme arrived with v3 (20261002250000) and is NOT NULL: a row whose
+    root was computed by one tree hashing is not comparable with a row computed
+    by another, and a nullable scheme would make "old row" and "row from a
+    database where the migration has not run" indistinguishable. The default is
+    the legacy scheme, so every pre-existing row reads back as what it is.
+
+    entry_timestamps is the hex of the v3 entry-timestamp commitment. It is
+    nullable because v1/v2 rows have none, and it MUST be stored: it is inside
+    the signed bytes, so a v3 row that lost it on reload would fail its own
+    signature verification on the next run.
     """
 
     __tablename__ = "transparency_checkpoints"
@@ -56,10 +71,12 @@ class TransparencyCheckpoint(TransparencyBase):
     signature = Column(Text, nullable=False)  # hex of the detached signature
     algorithm = Column(String(64), nullable=False)  # e.g. "ed25519", "hmac-sha256-dev"
     key_id = Column(String(128), nullable=False)
-    checkpoint_format = Column(String(32))  # "n1-json-v1" (v1) or "c2sp-tlog-checkpoint-v2"
-    key_name = Column(String(128))  # C2SP signed-note key name (v2 only)
+    checkpoint_format = Column(String(32))  # "n1-json-v1", "...-v2" or "...-v3"
+    key_name = Column(String(128))  # C2SP signed-note key name (note formats only)
     previous_digest = Column(String(64))  # hex digest of the previous signed checkpoint
     log_id = Column(String(128))  # which log this row covers, matching the note's origin
+    tree_scheme = Column(String(32), nullable=False, default=TREE_SCHEME_CT_V1)
+    entry_timestamps = Column(String(64))  # hex root over covered (index, timestamp) pairs
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     def to_signed(self) -> SignedCheckpoint:
@@ -78,6 +95,9 @@ class TransparencyCheckpoint(TransparencyBase):
                 "key_name": self.key_name,
                 "previous_digest": self.previous_digest,
                 "origin": self.log_id,
+                # v3 only. Checkpoint.from_dict leaves it None on older formats,
+                # where the signed bytes never carried it.
+                "entry_timestamps": self.entry_timestamps,
             }
         )
 
@@ -137,6 +157,10 @@ async def save_checkpoint(session: AsyncSession, signed: SignedCheckpoint) -> Tr
         key_name=signed.key_name,
         previous_digest=checkpoint.previous_digest.hex() if checkpoint.previous_digest else None,
         log_id=checkpoint.origin if checkpoint.format != FORMAT_JSON_V1 else None,
+        tree_scheme=checkpoint.tree_scheme(),
+        entry_timestamps=(
+            checkpoint.entry_timestamps.hex() if checkpoint.entry_timestamps else None
+        ),
     )
     session.add(row)
     await session.flush()
