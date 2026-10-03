@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.shared.llm import LLMError
 from src.shared.llm_preflight import (
     _detail,
     _reason,
@@ -244,6 +245,44 @@ def test_reason_402_is_billing_not_auth():
         "out of credit / billing dead — treated as unavailable"
     )
     assert "auth" not in _detail({"status": 402, "ok": False, "error": "payment required"})
+
+
+class TestPingBudget:
+    """A preflight probe must be a question the model cannot answer with nothing.
+
+    Live 2026-10-03: with a bare "ping" prompt the healthy free model
+    nvidia/nemotron-3-super-120b-a12b:free returned no content 3/4 times at 64 tokens
+    and 2/4 at 200, and the preflight printed `DEGRADED 500 ... returned an empty
+    completion` -- indistinguishable from a real outage, so an operator would have gone
+    to debug a provider that was fine. Raising max_tokens did not fix it; changing the
+    prompt did. The assertion below is on that mechanism, so the prompt cannot go back to
+    a content-free utterance.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_model_that_answers_only_a_directive_prompt_is_not_reported_unhealthy(self):
+        from src.shared.llm_roster import ROSTER
+
+        free = next(r for r in ROSTER if r.name == "openrouter:nemotron")
+        asked = {}
+
+        async def reasoning_model(rung, messages, max_tokens, temperature, response_format=None):
+            # Emits nothing for a content-free utterance, exactly as the live model did.
+            asked["prompt"] = messages[0]["content"]
+            asked["max_tokens"] = max_tokens
+            if len(messages[0]["content"].split()) < 3:
+                raise LLMError(f"{free.model} returned an empty completion")
+            return OK_RESPONSE
+
+        client = _client()
+        client._chat_completion_openrouter = AsyncMock(side_effect=reasoning_model)
+        results = await _run(
+            client,
+            MagicMock(openrouter_api_key="k", groq_api_key="gsk_test", cerebras_api_key=""),
+        )
+
+        assert results["openrouter:nemotron"] == {"status": 200, "ok": True}, asked
+        assert asked["max_tokens"] >= 32, "the free tiers need room for reasoning before the answer"
 
 
 class TestFreeRosterAdvisory:

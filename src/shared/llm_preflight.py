@@ -28,12 +28,22 @@ from src.shared.llm_roster import (
     model_for,
 )
 
-_PING = [{"role": "user", "content": "ping"}]
-# 1 token is enough to prove a credential, except on the free tiers: the reasoning
-# models there spend a tiny max_tokens budget on reasoning and return no content at all,
-# which would be reported as a failed provider. 16 is still trivial in tokens and
-# distinguishes "the key works" from "the model needed room to answer".
-_PING_MAX_TOKENS = {"openrouter": 16}
+# The prompt matters more than the budget, and the live free tier is what proved it.
+# Measured 2026-10-03 on nvidia/nemotron-3-super-120b-a12b:free, 4 calls each:
+#   "ping"                                    -> 3/4 empty at 64 tokens, 2/4 at 200
+#   "Reply with exactly the word: ok"         -> 0/4 empty at 64 tokens, 0/4 at 200
+# A bare "ping" is a content-free utterance, and a model is entitled to answer it with
+# nothing, which _chat_completion_openrouter reports as an empty completion -- so a
+# healthy free rung was being printed as DEGRADED 500 on every run. Raising max_tokens
+# did NOT fix it (200 tokens was still empty half the time); only a prompt that asks for
+# an answer did. Asking for one word keeps the probe cheap and makes the question
+# unanswerable without emitting content.
+_PING = [{"role": "user", "content": "Reply with exactly the word: ok"}]
+# 1 token is enough to prove a keyed provider's credential. The free reasoning models
+# spend part of any budget on reasoning_tokens before emitting content, so they get
+# room to answer; 64 is measured to be enough for the prompt above and costs 4 content
+# tokens of a tier that is not billed at all.
+_PING_MAX_TOKENS = {"openrouter": 64}
 _PING_MAX_TOKENS_DEFAULT = 1
 
 
