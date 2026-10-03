@@ -110,14 +110,45 @@ async def claims_are_current(
     return True
 
 
-async def extract_claims_for_story(
+async def story_unit_digest(
     session: AsyncSession, story_id: uuid.UUID, *, max_units: int = CLAIM_MAX_UNITS,
+) -> str:
+    """The digest of the units an extraction for this story would be taken against.
+
+    Public because the runner in scripts/run_phase2.py needs it *before* it spends:
+    claims_are_current() is only a useful question if the caller can compute the
+    digest without running the extraction. Gathering the units through the same
+    _gather_unit_texts_for_story() the extractor uses is what guarantees the digest
+    the check compares against is the one the extraction would have produced.
+    """
+    stmt = select(Story).where(Story.id == story_id)
+    story = (await session.execute(stmt)).scalar_one_or_none()
+    if not story:
+        return ""
+    unit_texts = await _gather_unit_texts_for_story(session, story, max_units=max_units)
+    return story_input_digest(u["unit_id"] for u in unit_texts)
+
+
+async def extract_claims_for_story(
+    session: AsyncSession,
+    story_id: uuid.UUID,
+    *,
+    max_units: int = CLAIM_MAX_UNITS,
+    budget=None,
 ) -> dict:
     """Extract and persist the claim matrix for one story.
 
     Returns a result dict with counts, matching the shape enrich_story()
     in src/enrichment/pipeline.py uses (errors: list, plus per-type counts)
     so this slots into the same reporting pattern as weekly enrichment.
+
+    `budget`, when given, is a src.verification.phase2.Phase2TokenBudget and is
+    consulted immediately before the LLM call and charged immediately after it.
+    It is a parameter rather than an import so this function stays usable without
+    a budget row (scripts/run_claim_extraction.py, the recompute path) and so the
+    budget concern is visible in the signature of the one function that spends.
+    A budget refusal is re-raised rather than recorded as an error: the caller
+    needs to stop working through the queue, which an errors list cannot express.
     """
     results = {"story_id": str(story_id), "claims_created": 0, "evidence_created": 0, "errors": []}
 
@@ -144,9 +175,17 @@ async def extract_claims_for_story(
     from src.shared.llm import get_llm_client
     llm = await get_llm_client()
 
+    prompt = CLAIM_EXTRACTION_PROMPT.format(texts_for_prompt=texts_for_prompt)
+
+    if budget is not None:
+        # Before the call, never after: this is the gate. Phase2BudgetRefused
+        # propagates out of the try below untouched (see the except clause).
+        await budget.ensure_headroom(prompt)
+        await budget.pace()
+
     try:
         result = await llm.chat_completion(
-            messages=[{"role": "user", "content": CLAIM_EXTRACTION_PROMPT.format(texts_for_prompt=texts_for_prompt)}],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             # max_tokens and reasoning_effort are one decision, not two. The model
             # this pipeline is configured against (openai/gpt-oss-20b) spends its
@@ -161,6 +200,13 @@ async def extract_claims_for_story(
             reasoning_effort="low",
         )
         content = result["choices"][0]["message"]["content"]
+        if budget is not None:
+            # Charged here, immediately after the call and before anything can
+            # return early, because the tokens are spent by then whatever the
+            # caller goes on to do with the result. Real usage, not the estimate
+            # the gate used: the counter should track spend, and record() floors
+            # at 1 so a call whose usage is missing is still counted.
+            await budget.record((result.get("usage") or {}).get("total_tokens", 0))
         if not (content or "").strip():
             # An empty completion is the reasoning-model failure above, and the
             # bare `except Exception` below would turn it into a silent zero. Say
@@ -217,6 +263,14 @@ async def extract_claims_for_story(
 
         await session.commit()
     except Exception as e:
+        if budget is not None:
+            from src.verification.phase2 import Phase2BudgetRefused
+
+            if isinstance(e, Phase2BudgetRefused):
+                # Not this function's error to swallow: the caller must stop
+                # walking the queue, and a budget refusal is a decision, not a
+                # failure of this story.
+                raise
         logger.warning(f"Claim extraction failed for story {story_id}: {e}", exc_info=True)
         results["errors"].append(str(e))
 
@@ -224,7 +278,7 @@ async def extract_claims_for_story(
 
 
 async def extract_claims_for_recent_stories(
-    session_factory, hours_back: int = 168, max_stories: int = 100,
+    session_factory, hours_back: int = 168, max_stories: int = 100, budget=None,
 ) -> list[dict]:
     """Batch entry point -- mirrors enrich_recent_stories() in
     src/enrichment/pipeline.py.
@@ -234,8 +288,22 @@ async def extract_claims_for_recent_stories(
     extraction had never produced a row. PENDING stories have already passed
     the dynamic gate, so they are safe to spend on. Public exposure is a
     separate, human-gated decision and is untouched by this change.
+
+    `budget` defaults to a real Phase2TokenBudget rather than to None, and that
+    default is the point. This function is also what the pre-existing weekly job
+    calls, and a default of "no budget" would leave that path -- now pointed at
+    PENDING stories, i.e. a non-empty pool -- spending with no cap at all. An
+    unbounded default on a function that spends money is the wrong default even
+    when the caller happens to pass one.
     """
-    from src.verification.phase2 import select_phase2_stories
+    from src.verification.phase2 import (
+        Phase2BudgetRefused,
+        Phase2TokenBudget,
+        select_phase2_stories,
+    )
+
+    if budget is None:
+        budget = Phase2TokenBudget()
 
     async with session_factory() as session:
         stories = await select_phase2_stories(
@@ -253,10 +321,19 @@ async def extract_claims_for_recent_stories(
     # Process each story in its own session (like enrich_stories_batch)
     results = []
     for story_id in story_ids:
-        async with session_factory() as session:
-            result = await extract_claims_for_story(
-                session, uuid.UUID(story_id), max_units=CLAIM_MAX_UNITS
+        try:
+            async with session_factory() as session:
+                result = await extract_claims_for_story(
+                    session, uuid.UUID(story_id), max_units=CLAIM_MAX_UNITS,
+                    budget=budget,
+                )
+                results.append(result)
+        except Phase2BudgetRefused as exc:
+            # Stop walking the queue, do not fail: the remaining stories are
+            # tomorrow's problem, and they are still selected newest-first.
+            logger.info(
+                "Phase 2 token allowance spent after %d/%d stories (%d remaining): %s",
+                len(results), len(story_ids), len(story_ids) - len(results), exc,
             )
-            results.append(result)
-
+            break
     return results

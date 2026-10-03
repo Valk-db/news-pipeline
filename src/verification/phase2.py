@@ -222,9 +222,10 @@ class Phase2TokenBudget:
     async def ensure_headroom(self, prompt: str) -> int:
         """Raise Phase2BudgetRefused unless `prompt` fits in what is left today."""
         estimate = estimate_prompt_tokens(prompt)
-        if estimate > self.remaining():
+        remaining = await self.remaining()
+        if estimate > remaining:
             raise Phase2BudgetRefused(
-                f"estimated {estimate} tokens exceeds {self.remaining()} remaining "
+                f"estimated {estimate} tokens exceeds {remaining} remaining "
                 f"of the {self.cap}/day Phase 2 allowance"
             )
         return estimate

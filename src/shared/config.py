@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     phase2_retry_after_seconds: float = Field(default=60.0, ge=0.0)
     phase2_max_rate_limit_retries: int = Field(default=1, ge=0, le=3)
 
+    # How far back one Phase 2 run looks, and how many stories it may take. 48h is
+    # the same window the map and the story-grouping use, so a run sees everything
+    # ingested since the last two runs. 16 is not a guess: at the measured 2,437
+    # tokens per story the 40,000 token cap spends out at exactly 16, so raising it
+    # without raising the cap would only move the refusal earlier in the queue.
+    phase2_hours_back: int = Field(default=48, ge=1)
+    phase2_max_stories_per_run: int = Field(default=16, ge=1, le=200)
+
     # Tiered ingestion schedules (cron expressions)
     tier1_schedule: str = "0 * * * *"      # Hourly
     tier2_schedule: str = "0 */4 * * *"    # Every 4 hours
