@@ -103,7 +103,8 @@ def test_app_state_still_exposes_the_database_check() -> None:
     assert "app.state.check_database_available = check_database_available" in main_source
 
 
-def test_the_app_still_imports_and_the_database_check_answers() -> None:
+def test_the_app_still_imports_and_the_database_check_answers(
+        monkeypatch: pytest.MonkeyPatch) -> None:
     """A grep proves a string is gone; it says nothing about the module importing.
 
     `main` assigns to `app.state` at import time, so a bad deletion here breaks
@@ -116,11 +117,22 @@ def test_the_app_still_imports_and_the_database_check_answers() -> None:
         def __init__(self, state):
             self.app = type("A", (), {"state": state})()
 
-    app.state.check_database_available = lambda: (True, "")
+    # monkeypatch, not a bare assignment, and this is not a style preference.
+    # `app` is a module-level singleton, so assigning to its state and restoring
+    # nothing leaks into every test that runs later in the session. Measured: with
+    # a bare assignment here, the full suite was **79 failed / 2107 passed**,
+    # across 5 unrelated files (test_map_public 26, test_proof_permalinks 22,
+    # test_discovery 15, test_public_read_hardening 12, test_phase2_isolation 4),
+    # every one of them failing because the database check had been left returning
+    # False for the rest of the run. The failures are all in files this change does
+    # not touch, which is the signature that makes this so easy to misread as a
+    # real regression and chase for an hour.
+    monkeypatch.setattr(app.state, "check_database_available", lambda: (True, ""))
     assert check_database(_Req(app.state)) == (True, "")
     assert check_database_public(_Req(app.state)) == (True, "")
 
-    app.state.check_database_available = lambda: (False, "Database not configured.")
+    monkeypatch.setattr(app.state, "check_database_available",
+                        lambda: (False, "Database not configured."))
     ok, message = check_database_public(_Req(app.state))
     assert ok is False
     # The public surface must not publish its own configuration to an anonymous
