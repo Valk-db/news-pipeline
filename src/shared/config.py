@@ -45,6 +45,27 @@ class Settings(BaseSettings):
     # than for one process: two ingest runs a day share one budget.
     groq_daily_request_budget: int = 900
 
+    # Token caps for the same free tier, denominated in the unit that actually binds.
+    #
+    # Groq's free plan publishes 200,000 tokens/day for the whole key, and that allowance
+    # is SHARED by caption/classification, translation and Phase 2. A request cap cannot
+    # see it: the measured failure was a day whose `groq_requests` row read 28 -- 97%
+    # "unspent" -- while the day's tokens were entirely gone, the request that crossed the
+    # line being a 429 reading "TPD: Limit 200000, Used 199337, Requested 4388". So the
+    # request caps above stay (they are real limits and other stages spend against them)
+    # and these are enforced alongside them.
+    #
+    # The three are sized as shares of the one 200,000 allowance rather than
+    # independently, because independent caps are how three stages each believe they have
+    # the whole tier: 60,000 (30%) caption/classification + 20,000 (10%) translation +
+    # 40,000 (20%) Phase 2 = 120,000, leaving 80,000 (40%) of headroom. At the measured
+    # ~1,200 tokens per caption call, 60,000 is ~50 calls, which is why the 900-request cap
+    # is unreachable on this tier rather than merely generous.
+    groq_daily_token_budget: int = 60_000
+    groq_translation_daily_request_budget: int = 300
+    groq_translation_daily_token_budget: int = 20_000
+    mymemory_daily_char_budget: int = 45_000
+
     # Phase 2 (claim extraction on gate-passed PENDING stories) budget and pacing.
     #
     # The cap is in tokens/day because tokens/day is what binds: Groq's free plan

@@ -357,7 +357,15 @@ class LLMClient:
             }
 
         # Route through budget + coalescing
-        return await self._budget.run(_do_groq_call, messages, model)
+        result = await self._budget.run(_do_groq_call, messages, model)
+        # Charge what the provider said the call cost, reusing the usage block built
+        # above -- there is deliberately no second response parse here, because a second
+        # parse of the same body is a second thing that can disagree with the first.
+        #
+        # After the call, not before, because `usage.total_tokens` is not knowable before
+        # it. The gate that stops the next call is the headroom check in RequestBudget.
+        await self._budget.record_tokens((result.get("usage") or {}).get("total_tokens"))
+        return result
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),

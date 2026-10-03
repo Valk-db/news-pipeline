@@ -48,7 +48,13 @@ import urllib.parse
 import urllib.request
 from typing import Protocol
 
-from src.shared.budget import GROQ_TRANSLATION_REQUESTS, MYMEMORY_CHARS, spend_sync as spend
+from src.shared.budget import (
+    GROQ_TRANSLATION_REQUESTS,
+    GROQ_TRANSLATION_TOKENS,
+    MYMEMORY_CHARS,
+    record_sync as record,
+    spend_sync as spend,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +110,11 @@ GROQ_POLITENESS_SECONDS = 3.0
 # 2026-10-02 carried x-ratelimit-limit-requests: 1000. 300 requests is ~150 articles
 # (a title and a body each) and leaves the LLM client's own 900/day row alone.
 GROQ_DAILY_REQUEST_BUDGET = 300
+# Tokens/day for the same key, which is the unit the free tier actually enforces:
+# 20,000 is a 10% share of the published 200,000/day, and at the measured ~1,000 tokens
+# per short article translation it is ~20 articles -- which is what makes the 300-request
+# cap above unreachable rather than merely generous.
+GROQ_DAILY_TOKEN_BUDGET = 20_000
 # A rate-limited request is not a failed one, and Groq says how long to wait: the 429
 # on 2026-10-02 carried `retry-after: 20` and a body reading "Limit 8000, Used 7600,
 # Requested 3061 ... Please try again in 19.9575s". One wait and one retry is the
@@ -271,6 +282,7 @@ class GroqBackend:
         api_key: str | None = None,
         politeness_seconds: float = GROQ_POLITENESS_SECONDS,
         daily_budget: int = GROQ_DAILY_REQUEST_BUDGET,
+        daily_token_budget: int = GROQ_DAILY_TOKEN_BUDGET,
     ) -> None:
         self.api_key = api_key or os.environ.get("GROQ_API_KEY")
         if not self.api_key:
@@ -279,6 +291,13 @@ class GroqBackend:
             )
         self.politeness_seconds = politeness_seconds
         self.daily_budget = daily_budget
+        # Tokens/day, alongside the request cap, for the same reason the LLM client has
+        # both: Groq's free tier binds on tokens and a request-only cap reads as almost
+        # entirely unspent on a day the allowance is gone. Recorded rather than gated --
+        # this backend reserves synchronously and has no prompt to estimate from, so the
+        # enforceable gate here is the provider's own 429, and this counter is what makes
+        # the resulting exhaustion readable afterwards.
+        self.daily_token_budget = daily_token_budget
         self._last_call = 0.0
 
     def _polite_wait(self) -> None:
@@ -386,6 +405,16 @@ class GroqBackend:
             )
         if not content:
             raise TranslationUnavailable(f"Groq returned no translation: {raw[:160]}")
+        # Charge the tokens, from the body already parsed above. Placed after the
+        # content and finish_reason checks because those raise: a call we refuse to store
+        # still cost tokens, and the honest place to account for that is next to the
+        # refusal, not in a path the refusals skip. A zero or missing usage is charged 1
+        # for the same reason -- the request happened.
+        total = ((data.get("usage") or {}) or {}).get("total_tokens") or 0
+        # record(), not spend(): the tokens are already gone by here, so there is nothing
+        # a cap could protect, and recording through the capped statement would discard
+        # every charge made after the cap was reached.
+        record(GROQ_TRANSLATION_TOKENS, max(1, int(total)))
         return content
 
     def translate(self, text: str, source_lang: str, target_lang: str = "en") -> str:
