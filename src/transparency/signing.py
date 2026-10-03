@@ -531,9 +531,31 @@ async def sign_next_checkpoint(
                         entry_count=len(entries))
 
     skip_ids = frozenset(await quarantined_checkpoint_ids(session))
-    newest = await _newest_checkpoint(session, skip_ids=skip_ids, scheme=SIGNER_TREE_SCHEME)
+    # TWO row selections, and the difference is the whole fix. F9 introduced the
+    # scheme column and initially scoped every lookup to the scheme this signer
+    # publishes. That was wrong, and wrong in the direction that matters: a
+    # scheme filter does not merely stop the signer comparing two chains, it
+    # makes a row in another scheme INVISIBLE to the security checks. An attacker
+    # holding database write access -- the exact adversary F1 and F2 exist for --
+    # defeats both by writing the forged or planted row under the legacy v2
+    # format instead of v3. Measured: with the scheme filter on, all nine of the
+    # F1/F2/F5/quarantine tests in tests/test_transparency_signer_hardening.py
+    # signed over a forgery instead of refusing.
+    #
+    # The rule, and it is short: a published row is invisible to the signer's
+    # security checks ONLY if an operator quarantined it. Otherwise every row
+    # participates, each re-derived under its own scheme. Scheme scoping belongs
+    # to CHAIN CONTINUITY alone -- a CT root is genuinely not the predecessor of
+    # an RFC-6962 root -- and never to whether a row is authentic (F1), whether
+    # the head is still the floor (F2), whether the log went backwards (F15), or
+    # whether the size is equivocated.
+    newest = await _newest_checkpoint(session, skip_ids=skip_ids)
+    # Chain continuity: the tip of the chain this signer actually extends.
+    newest_in_scheme = await _newest_checkpoint(session, skip_ids=skip_ids, scheme=SIGNER_TREE_SCHEME)
     previous: SignedCheckpoint | None = newest.to_signed() if newest is not None else None
-    previous_digest = checkpoint_digest(previous) if previous is not None else None
+    previous_digest = (
+        checkpoint_digest(newest_in_scheme.to_signed()) if newest_in_scheme is not None else None
+    )
     # F9, reported not hidden: rows from the superseded CT scheme stay in the
     # table (it is append-only) but are not part of this chain.
     superseded = await superseded_checkpoint_count(session)
@@ -559,6 +581,10 @@ async def sign_next_checkpoint(
     # this, an attacker who can write to the database rewrites the previous
     # row's merkle_root and every one of those checks agrees with the forgery:
     # the root no longer has to match the log, only itself.
+    #
+    # `previous` is the newest row of ANY scheme, deliberately. Authenticating
+    # only the signer's own scheme would mean a v2 row could never be caught by
+    # F1, and a v2 row is what an attacker writes to stay invisible.
     if previous is not None:
         auth = verify_previous_checkpoint(previous, trusted_keys)
         if not auth.ok:
@@ -631,15 +657,25 @@ async def sign_next_checkpoint(
     derived_root = root_for_scheme(leaves, SIGNER_TREE_SCHEME)
     derived_hex = derived_root.hex()
 
-    published_at_size = await _checkpoints_at_size(
-        session, tree_size, skip_ids=skip_ids, scheme=SIGNER_TREE_SCHEME
-    )
+    published_at_size = await _checkpoints_at_size(session, tree_size, skip_ids=skip_ids)
     if published_at_size:
-        disagreeing = [row for row in published_at_size if row.merkle_root != derived_hex]
+        # Each row is re-derived under its OWN scheme, not the signer's. That is
+        # the only way an equivocation scan spanning two schemes is sound: a
+        # legacy CT row legitimately disagrees with an RFC-6962 re-derivation of
+        # the same leaves, so comparing it to `derived_hex` would refuse on every
+        # honest legacy row, while skipping it entirely would let a forged legacy
+        # row hide. Re-deriving per-row says the honest row agrees with itself
+        # and the forged row does not.
+        disagreeing = [
+            row
+            for row in published_at_size
+            if row.merkle_root != root_for_scheme(leaves, _row_scheme(row)).hex()
+        ]
         if disagreeing:
             logger.error(
                 f"REFUSING: tree_size {tree_size} is already published with root "
-                f"{disagreeing[0].merkle_root[:12]} but the log now derives {derived_hex[:12]}. "
+                f"{disagreeing[0].merkle_root[:12]} but the log now derives "
+                f"{derived_hex[:12]} under {_row_scheme(disagreeing[0])}. "
                 "This is equivocation and must not be signed."
             )
             return _refusal(
@@ -673,24 +709,31 @@ async def sign_next_checkpoint(
                 detail={"checkpoint_id": str(same_format[0].id)},
             )
 
-    if newest is not None and newest.tree_size < tree_size:
+    if newest_in_scheme is not None and newest_in_scheme.tree_size < tree_size:
         # Re-derive the root over the entries the newest checkpoint already
         # covers. If that no longer matches what was published, the prefix of
         # the log changed under a signed checkpoint, and tlog-checkpoint forbids
         # signing anything on top of that.
-        covered = [entry.leaf_hash for entry in entries[: newest.tree_size]]
+        #
+        # `newest_in_scheme`, not `newest`: this is the one comparison that must
+        # stay inside one scheme. A superseded-scheme root is a different number
+        # over the same leaves by construction, so comparing it to an RFC-6962
+        # re-derivation would refuse forever against a row that is perfectly
+        # genuine. Those rows are instead covered by the per-scheme equivocation
+        # scan above, which checks each one against the log under its own scheme.
+        covered = [entry.leaf_hash for entry in entries[: newest_in_scheme.tree_size]]
         rederived_previous = root_for_scheme(covered, SIGNER_TREE_SCHEME).hex()
-        if rederived_previous != newest.merkle_root:
+        if rederived_previous != newest_in_scheme.merkle_root:
             logger.error(
-                f"REFUSING: root over the first {newest.tree_size} entries is now "
-                f"{rederived_previous[:12]} but checkpoint {newest.key_id} published "
-                f"{newest.merkle_root[:12]}. The prefix of the log changed."
+                f"REFUSING: root over the first {newest_in_scheme.tree_size} entries is now "
+                f"{rederived_previous[:12]} but checkpoint {newest_in_scheme.key_id} published "
+                f"{newest_in_scheme.merkle_root[:12]}. The prefix of the log changed."
             )
             return _refusal(
                 REFUSAL_INCONSISTENT_HISTORY,
                 tree_size=tree_size,
-                previous_tree_size=newest.tree_size,
-                previous_root=newest.merkle_root,
+                previous_tree_size=newest_in_scheme.tree_size,
+                previous_root=newest_in_scheme.merkle_root,
                 rederived_root=rederived_previous,
             )
 
@@ -1142,6 +1185,7 @@ def watchdog_state(
     max_interval_hours: float,
     published_tree_size: int | None = None,
     log_size: int | None = None,
+    age_readable: bool = True,
 ) -> tuple[bool, str, str]:
     """(healthy, state, verdict) -- the same answer as watchdog_verdict, plus
     WHY, distinguishing the states an operator has to act on differently (F13).
@@ -1159,6 +1203,17 @@ def watchdog_state(
                  transaction that has already aborted)
     """
     if age_hours is None:
+        # `never` and `unknown` are both age_hours=None, and collapsing them is
+        # its own lie: "nothing has ever been published" is an operator action
+        # (publish a genesis checkpoint), "the age could not be read" is an
+        # infrastructure problem (fix the database). Before age_readable existed
+        # this function's own docstring advertised `unknown` and could never
+        # return it.
+        if not age_readable:
+            return False, "unknown", (
+                "the newest checkpoint's age could not be read, so the log's "
+                "freshness is unmeasured; it is NOT assumed to be never-signed"
+            )
         return False, "never", "no checkpoint has been published yet"
     covers_log = (
         published_tree_size is not None and log_size is not None and published_tree_size >= log_size

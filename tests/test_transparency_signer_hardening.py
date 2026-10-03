@@ -49,6 +49,13 @@ from src.transparency.checkpoint import (
     SignedCheckpoint,
     ed25519_available,
     generate_ed25519_signer,
+    # The LEGACY CT-scheme root, imported from checkpoint where it lives rather
+    # than reached through `signing.merkle_root`. Several tests below plant rows
+    # in the superseded scheme on purpose, and when the F9 work dropped that
+    # re-export nine of these tests failed on an AttributeError instead of on the
+    # attack they exist to perform. A test reaching into another module for a
+    # function that module does not use is a coupling with no upside.
+    merkle_root,
     sign_checkpoint,
     verify_checkpoint,
 )
@@ -123,6 +130,7 @@ async def _sign(
     head=None,
     genesis: bool = True,
     origin: str = ORIGIN,
+    timestamp: datetime | None = None,
 ):
     """The signing call under test, with the production trust inputs."""
     return await signing.sign_next_checkpoint(
@@ -134,6 +142,7 @@ async def _sign(
         trusted_keys=trusted if trusted is not None else _trusted(signer),
         head=head,
         genesis_confirmed=genesis,
+        timestamp=timestamp,
     )
 
 
@@ -149,7 +158,7 @@ async def _plant_authentic_row(session, signer, tree_size: int) -> TransparencyC
     """
     poisoned = Checkpoint(
         tree_size=tree_size,
-        merkle_root=signing.merkle_root([b"\x00" * 32] * 1),
+        merkle_root=merkle_root([b"\x00" * 32] * 1),
         chain_hash=b"\xcd" * 32,
         timestamp=datetime.now(timezone.utc),
         origin=ORIGIN,
@@ -197,7 +206,7 @@ async def _publish(session, log, signer, tree_size: int | None = None) -> Signed
     size = tree_size if tree_size is not None else await log.size()
     checkpoint = Checkpoint(
         tree_size=size,
-        merkle_root=signing.merkle_root([e.leaf_hash for e in await log.entries()][:size]),
+        merkle_root=merkle_root([e.leaf_hash for e in await log.entries()][:size]),
         chain_hash=(await log.entries())[size - 1].chain_hash,
         timestamp=datetime.now(timezone.utc),
         origin=ORIGIN,
@@ -236,7 +245,7 @@ class TestForgedPreviousCheckpoint:
         # An attacker-controlled log and a matching forged checkpoint over it.
         forged_log = await _log_with(3, label="forged")
         entries = await forged_log.entries()
-        forged_root = signing.merkle_root([e.leaf_hash for e in entries])
+        forged_root = merkle_root([e.leaf_hash for e in entries])
         forged = Checkpoint(
             tree_size=3,
             merkle_root=forged_root,
@@ -287,7 +296,7 @@ class TestForgedPreviousCheckpoint:
         trusted = _trusted(signer)
         log = await _log_with(3)
         entries = await log.entries()
-        good_root = signing.merkle_root([e.leaf_hash for e in entries])
+        good_root = merkle_root([e.leaf_hash for e in entries])
 
         forged = Checkpoint(
             tree_size=3,
@@ -363,7 +372,7 @@ class TestForgedPreviousCheckpoint:
         entries = await log.entries()
         v1 = Checkpoint(
             tree_size=2,
-            merkle_root=signing.merkle_root([e.leaf_hash for e in entries]),
+            merkle_root=merkle_root([e.leaf_hash for e in entries]),
             chain_hash=entries[-1].chain_hash,
             timestamp=datetime.now(timezone.utc),
             format=FORMAT_JSON_V1,
@@ -540,7 +549,7 @@ class TestRollbackAndGenesis:
         await _empty_checkpoints(db_session)
         substituted = Checkpoint(
             tree_size=3,
-            merkle_root=signing.merkle_root([e.leaf_hash for e in entries]),
+            merkle_root=merkle_root([e.leaf_hash for e in entries]),
             chain_hash=entries[-1].chain_hash,
             # A different timestamp => a different digest at the same root.
             timestamp=datetime(2026, 10, 1, tzinfo=timezone.utc),
@@ -640,6 +649,66 @@ class TestSignerKeyTrust:
         result = await _sign(db_session, log, signer, trusted=trusted)
         assert result.status == "refused"
         assert result.reason == signing.REFUSAL_SIGNER_KEY_OUT_OF_BOUNDS
+
+    @needs_cryptography
+    async def test_a_signing_key_outside_its_time_window_is_refused(self, db_session):
+        """F7's other half: the bound is checked against TIME at signing.
+
+        The existing max_tree_size test cannot see this. Reverting
+        ``_check_signer_key`` to ignore ``signing_time`` and fall back to
+        ``datetime.now()`` leaves that test green, because max_tree_size does not
+        depend on the moment. So without this test the time branch of
+        ``is_within_bounds`` at signing time is unreachable by any suite, which
+        means "the bounds are enforced at signing" would be an unbacked claim.
+        """
+        signer = generate_ed25519_signer(seed=_seed("f7-window"))
+        window_start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        trusted = {
+            signer.key_id: TrustedKey(
+                key_id=signer.key_id,
+                algorithm=signer.algorithm,
+                public_key=signer.public_key_bytes(),
+                not_before=window_start,
+                not_after=window_start.replace(hour=1),
+            )
+        }
+        log = await _log_with(3)
+
+        # Inside the window: signs. This half matters as much as the other -- it
+        # is what stops the fix degenerating into "refuse always".
+        inside = await _sign(
+            db_session,
+            log,
+            signer,
+            trusted=trusted,
+            timestamp=window_start.replace(minute=30),
+        )
+        assert inside.status == "signed", inside.reason
+
+        # After not_after, at an unbounded tree size, so ONLY the time bound can
+        # be the reason for refusing.
+        after = await _sign(
+            db_session,
+            log,
+            signer,
+            trusted=trusted,
+            timestamp=window_start.replace(hour=9),
+        )
+        assert after.status == "refused"
+        assert after.reason == signing.REFUSAL_SIGNER_KEY_OUT_OF_BOUNDS
+        assert "not_after" in (after.detail or {}).get("detail_problem", "")
+
+        # Before not_before, same reasoning.
+        before = await _sign(
+            db_session,
+            log,
+            signer,
+            trusted=trusted,
+            timestamp=window_start.replace(month=9, day=20, hour=9),
+        )
+        assert before.status == "refused"
+        assert before.reason == signing.REFUSAL_SIGNER_KEY_OUT_OF_BOUNDS
+        assert "not_before" in (before.detail or {}).get("detail_problem", "")
 
     @needs_cryptography
     async def test_a_low_entropy_seed_is_refused_by_the_derivation(self):
@@ -893,7 +962,7 @@ class TestQuarantine:
         entries = await log.entries()
         v1 = Checkpoint(
             tree_size=2,
-            merkle_root=signing.merkle_root([e.leaf_hash for e in entries]),
+            merkle_root=merkle_root([e.leaf_hash for e in entries]),
             chain_hash=entries[-1].chain_hash,
             timestamp=datetime.now(timezone.utc),
             format=FORMAT_JSON_V1,
@@ -917,7 +986,13 @@ class TestQuarantine:
         await db_session.flush()
         result = await _sign(db_session, log, signer)
         assert result.status == "signed"
-        assert result.signed.checkpoint.format == FORMAT_C2SP_V2
+        # The quarantine unblocked signing; the format it publishes is the
+        # signer's CURRENT format. This assertion was FORMAT_C2SP_V2 and had to
+        # move to v3, because F9 changed what the signer publishes -- not because
+        # the test's contract changed. The contract is "dev can sign again
+        # without keeping an HMAC verification path alive", and it is asserted
+        # above by the refusal that precedes the quarantine.
+        assert result.signed.checkpoint.format == signing.SIGNER_FORMAT
 
 
 class TestHeadParsing:
