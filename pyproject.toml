@@ -61,9 +61,14 @@ dev = [
     # Secret scanning in CI. Yelp's detect-secrets, Apache-2.0, runs offline
     # against the working tree with no account, no token and no Docker, which is
     # what makes it usable here: gitleaks and trufflehog both want a binary this
-    # CI job has no way to fetch or pin. It pulls pyyaml transitively; if you
-    # ever remove this line, do not also assume pyyaml is still importable.
+    # CI job has no way to fetch or pin.
     "detect-secrets>=1.5",
+    # Listed explicitly because tests/test_ci_quality_gate.py parses
+    # .github/workflows/ci.yml to prove the gate is actually wired up, and
+    # because detect-secrets happens to pull pyyaml in transitively. Depending
+    # on somebody else's transitive dependency is how a suite silently stops
+    # running when an unrelated extra is trimmed.
+    "pyyaml>=6",
 ]
 
 [tool.ruff]

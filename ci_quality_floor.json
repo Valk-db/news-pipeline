@@ -1,0 +1,18 @@
+{
+  "_what_this_is": "Pre-registered no-regression floors for CI. Measured on main c58c6f6 by scripts/ci_quality_gate.py, which is the only thing allowed to change them. Raising a floor is a deliberate act that belongs in the commit message, not a side effect of a refactor.",
+
+  "mypy": {
+    "_why": "main carried 445 errors, so mypy could never be a plain pass/fail gate. It is a ratchet: the build fails if the count goes UP. Fixing errors lowers the number; lower it here in the same commit that fixed them. The value below is main's, not this branch's lower count, so that parallel batches starting from main are not broken on arrival.",
+    "max_errors": 445,
+    "command": "mypy src/ curation_ui/"
+  },
+
+  "pytest": {
+    "_why": "A test-count floor is the only check that notices a test being deleted instead of fixed. 1816 collected on main c58c6f6 (1782 passed + 34 skipped). Collected is the right number, not passed: skips and failures are visible in the run itself, but a deleted test only ever shows up as a smaller collection.",
+    "min_collected": 1816,
+    "command": "pytest tests/ --collect-only -q"
+  },
+
+  "measured_on": "2026-10-03",
+  "measured_at": "main c58c6f6"
+}
