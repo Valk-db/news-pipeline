@@ -250,6 +250,76 @@ def session_factory_for(engine):
     return _get_session
 
 
+class IngestionEnv:
+    """One test's world: a real database and real adapter selection.
+
+    ``seed`` writes rows into ``raw_articles`` the way a previous run would
+    have, so the dedup path under test compares against real stored rows rather
+    than a mock's idea of them. ``fetch`` declares what the adapters return and
+    re-stubs them, so each test states its own batch in its own body.
+    """
+
+    def __init__(self, engine, monkeypatch, settings_kwargs=None):
+        from src.ingestion import run as run_module
+
+        self.engine = engine
+        self._monkeypatch = monkeypatch
+        self._module = run_module
+        self.run = IngestionRun()
+        self.patched_modules: list[str] = []
+
+        self.patched_modules = bind_get_session_everywhere(
+            monkeypatch, session_factory_for(engine)
+        )
+        self._settings_kwargs = settings_kwargs or {}
+        monkeypatch.setattr(
+            run_module, "get_settings", lambda: settings_for(**self._settings_kwargs)
+        )
+        silence_post_ingest_phases(monkeypatch, run_module)
+        silence_translation(monkeypatch)
+
+        # The seam is only trustworthy if it covered the modules that actually
+        # open sessions. Asserting it here means a new module that binds
+        # get_session by name fails loudly at setup, not silently in a test.
+        assert "src.ingestion.run" in self.patched_modules
+        assert "src.shared.database" in self.patched_modules
+
+    def fetch(self, articles_by_adapter, health_by_adapter=None) -> IngestionRun:
+        """Declare each adapter's return value; returns the run recorder.
+
+        The real ``build_adapters`` still decides which adapters exist, so
+        ``settings.gdelt_enabled`` is exercised through the production branch.
+        """
+        self.run = stub_adapters(
+            self._monkeypatch,
+            self._module,
+            articles_by_adapter,
+            health_by_adapter,
+        )
+        self.run.patched_modules = self.patched_modules
+        return self.run
+
+    async def seed(self, *articles: RawArticle) -> None:
+        """Insert articles directly, standing in for an earlier ingest run."""
+        maker = async_sessionmaker(
+            self.engine, class_=AsyncSession, expire_on_commit=False
+        )
+        async with maker() as session:
+            session.add_all(list(articles))
+            await session.commit()
+
+    async def ingest(self, dry_run: bool = False, **kwargs) -> dict:
+        return await self._module.run_ingestion(dry_run=dry_run, **kwargs)
+
+    async def rows(self) -> list[tuple]:
+        """(url, url_hash, content_hash, source_domain) for every stored row."""
+        return await stored_rows(self.engine)
+
+    async def statuses(self) -> list[tuple]:
+        """(phase, status) for every row log_status wrote, in write order."""
+        return await status_log_rows(self.engine)
+
+
 async def stored_rows(engine) -> list[tuple]:
     """Every row in ``raw_articles``, as (url, url_hash, content_hash, domain)."""
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

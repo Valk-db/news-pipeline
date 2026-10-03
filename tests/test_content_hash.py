@@ -13,25 +13,11 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 
 from src.utils.trafilatura_extract import compute_content_hash, compute_url_hash
-from src.ingestion import run as run_module
-from src.ingestion.run import run_ingestion
-from src.schema.models import Base, RawArticle, SourceTier
+from src.schema.models import SourceTier
 from src.shared.config import Settings
-
-from tests.ingestion_harness import (
-    bind_get_session_everywhere,
-    make_article,
-    session_factory_for,
-    settings_for,
-    silence_post_ingest_phases,
-    silence_translation,
-    stored_rows,
-    stub_adapters,
-)
+from tests.ingestion_harness import make_article
 
 
 class TestContentHash:
@@ -68,84 +54,6 @@ class TestContentHash:
         assert compute_url_hash(url) == compute_url_hash(url.upper())
 
 
-class DedupEnv:
-    """One dedup test's world: a real database, real adapter selection.
-
-    ``seed`` writes rows into ``raw_articles`` the way a previous run would
-    have, so the dedup path under test compares against real stored rows rather
-    than a mock's idea of them. ``fetch`` declares what the adapters return and
-    re-stubs them, so each test states its own batch in its own body.
-    """
-
-    def __init__(self, engine, monkeypatch, module):
-        self.engine = engine
-        self._monkeypatch = monkeypatch
-        self._module = module
-        self.run = None
-        self.patched_modules: list[str] = []
-
-    def fetch(self, articles_by_adapter, health_by_adapter=None):
-        """Declare each adapter's return value and record the resulting run."""
-        self.run = stub_adapters(
-            self._monkeypatch,
-            self._module,
-            articles_by_adapter,
-            health_by_adapter,
-        )
-        self.run.patched_modules = self.patched_modules
-        return self.run
-
-    async def seed(self, *articles: RawArticle) -> None:
-        """Insert articles directly, standing in for an earlier ingest run."""
-        maker = async_sessionmaker(
-            self.engine, class_=AsyncSession, expire_on_commit=False
-        )
-        async with maker() as session:
-            session.add_all(list(articles))
-            await session.commit()
-
-    async def ingest(self, dry_run: bool = False) -> dict:
-        return await run_ingestion(dry_run=dry_run)
-
-    async def rows(self) -> list[tuple]:
-        """(url, url_hash, content_hash, source_domain) for every stored row."""
-        return await stored_rows(self.engine)
-
-
-@pytest.fixture
-async def dedup_env(monkeypatch):
-    """A real SQLite database wired in at every ``get_session`` binding.
-
-    The real ``build_adapters`` runs, so adapter selection is production logic.
-    Only each adapter's ``fetch()`` is replaced, because that is the one thing
-    here that would touch the network.
-    """
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    env = DedupEnv(engine, monkeypatch, run_module)
-    env.patched_modules = bind_get_session_everywhere(
-        monkeypatch, session_factory_for(engine)
-    )
-    monkeypatch.setattr(run_module, "get_settings", lambda: settings_for())
-    silence_post_ingest_phases(monkeypatch, run_module)
-    silence_translation(monkeypatch)
-
-    # The seam is only trustworthy if it actually covered the modules that open
-    # sessions. Asserting it at fixture setup means a future module that binds
-    # get_session by name is a loud failure here, not a silent hole in a test.
-    assert "src.ingestion.run" in env.patched_modules
-    assert "src.shared.database" in env.patched_modules
-
-    yield env
-    await engine.dispose()
-
-
 class TestRunIngestionDedup:
     """Dedup at ingest, asserted on the rows that land in raw_articles.
 
@@ -156,17 +64,17 @@ class TestRunIngestionDedup:
     """
 
     @pytest.mark.asyncio
-    async def test_url_hash_dedup(self, dedup_env):
+    async def test_url_hash_dedup(self, ingestion_env):
         """An article whose url_hash is already stored is not inserted again."""
         stored_body = "Body of the article that was ingested by an earlier run."
-        await dedup_env.seed(
+        await ingestion_env.seed(
             make_article("https://apnews.com/article/1", stored_body, "apnews.com")
         )
 
         # Same URL, so the same url_hash: a correction or republish of a story
         # we already hold. A different body, so content dedup could not catch
         # it -- only the url_hash rule can.
-        dedup_env.fetch(
+        ingestion_env.fetch(
             {
                 "rss_tier1": [
                     make_article(
@@ -178,7 +86,7 @@ class TestRunIngestionDedup:
             }
         )
 
-        results = await dedup_env.ingest()
+        results = await ingestion_env.ingest()
 
         ingestion = results["phases"]["ingestion"]
         assert ingestion["total_new"] == 0
@@ -188,7 +96,7 @@ class TestRunIngestionDedup:
 
         # The artifact: the table still holds exactly the originally stored row.
         # The republished body did NOT overwrite it.
-        rows = await dedup_env.rows()
+        rows = await ingestion_env.rows()
         assert len(rows) == 1
         ((url, url_hash, content_hash, domain),) = rows
         assert url == "https://apnews.com/article/1"
@@ -197,14 +105,14 @@ class TestRunIngestionDedup:
         assert domain == "apnews.com"
 
     @pytest.mark.asyncio
-    async def test_content_hash_dedup_same_domain(self, dedup_env):
+    async def test_content_hash_dedup_same_domain(self, ingestion_env):
         """Same body, same outlet, new URL -> dropped as a republish."""
         body = "This is the exact same body text appearing twice under the same outlet."
-        await dedup_env.seed(
+        await ingestion_env.seed(
             make_article("https://apnews.com/article/1-original", body, "apnews.com")
         )
 
-        dedup_env.fetch(
+        ingestion_env.fetch(
             {
                 "rss_tier1": [
                     make_article(
@@ -214,7 +122,7 @@ class TestRunIngestionDedup:
             }
         )
 
-        results = await dedup_env.ingest()
+        results = await ingestion_env.ingest()
 
         ingestion = results["phases"]["ingestion"]
         assert ingestion["total_new"] == 0
@@ -224,7 +132,7 @@ class TestRunIngestionDedup:
         # The artifact: the ORIGINAL url survived. A dedup that dropped the new
         # row but recorded the new url's identity would look identical on the
         # counters alone.
-        rows = await dedup_env.rows()
+        rows = await ingestion_env.rows()
         assert len(rows) == 1
         ((url, _url_hash, content_hash, domain),) = rows
         assert url == "https://apnews.com/article/1-original"
@@ -232,7 +140,7 @@ class TestRunIngestionDedup:
         assert domain == "apnews.com"
 
     @pytest.mark.asyncio
-    async def test_content_hash_same_across_domains_not_deduped(self, dedup_env):
+    async def test_content_hash_same_across_domains_not_deduped(self, ingestion_env):
         """Same wire body, different outlet -> BOTH kept.
 
         This is the negative assertion, and it was the worthless one: the old
@@ -243,11 +151,11 @@ class TestRunIngestionDedup:
         these would quietly starve the gate of exactly the evidence it needs.
         """
         body = "This is the exact same wire body syndicated across two different outlets."
-        await dedup_env.seed(
+        await ingestion_env.seed(
             make_article("https://apnews.com/article/wire-1", body, "apnews.com")
         )
 
-        dedup_env.fetch(
+        ingestion_env.fetch(
             {
                 "rss_tier1": [
                     make_article(
@@ -257,7 +165,7 @@ class TestRunIngestionDedup:
             }
         )
 
-        results = await dedup_env.ingest()
+        results = await ingestion_env.ingest()
 
         ingestion = results["phases"]["ingestion"]
         assert ingestion["total_new"] == 1
@@ -267,7 +175,7 @@ class TestRunIngestionDedup:
         # The artifact: two rows, ONE content_hash, TWO distinct owners. Stated
         # as data rather than as a count, because that is the property the
         # tier-1 gate actually depends on.
-        rows = await dedup_env.rows()
+        rows = await ingestion_env.rows()
         assert len(rows) == 2
         assert {r[2] for r in rows} == {compute_content_hash(body)}
         assert {r[3] for r in rows} == {"apnews.com", "reuters.com"}
@@ -277,7 +185,7 @@ class TestRunIngestionDedup:
         }
 
     @pytest.mark.asyncio
-    async def test_content_hash_dedup_counted_separately(self, dedup_env):
+    async def test_content_hash_dedup_counted_separately(self, ingestion_env):
         """A URL dup and a content dup are counted independently.
 
         The two counters answer different questions -- "have we seen this link?"
@@ -287,7 +195,7 @@ class TestRunIngestionDedup:
         stored_url = "https://apnews.com/article/existing"
         stored_body = "This body already exists in the DB under reuters.com."
 
-        await dedup_env.seed(
+        await ingestion_env.seed(
             make_article(
                 stored_url,
                 "Body of the row stored by an earlier run, for the URL-duplicate case.",
@@ -310,9 +218,9 @@ class TestRunIngestionDedup:
         content_dup = make_article(
             "https://reuters.com/article/new-url", stored_body, "reuters.com"
         )
-        dedup_env.fetch({"rss_tier1": [url_dup, content_dup]})
+        ingestion_env.fetch({"rss_tier1": [url_dup, content_dup]})
 
-        results = await dedup_env.ingest()
+        results = await ingestion_env.ingest()
 
         ingestion = results["phases"]["ingestion"]
         assert ingestion["url_duplicates_skipped"] == 1
@@ -321,7 +229,7 @@ class TestRunIngestionDedup:
         assert ingestion["total_fetched"] == 2
 
         # The artifact: nothing was written, and both seeded rows are intact.
-        rows = await dedup_env.rows()
+        rows = await ingestion_env.rows()
         assert len(rows) == 2
         assert {r[0] for r in rows} == {
             "https://apnews.com/article/existing",
@@ -329,7 +237,7 @@ class TestRunIngestionDedup:
         }
 
     @pytest.mark.asyncio
-    async def test_both_hashes_checked_in_two_batched_queries(self, dedup_env):
+    async def test_both_hashes_checked_in_two_batched_queries(self, ingestion_env):
         """Both keys are consulted, in one query each, for the whole batch.
 
         This used to assert ``mock_session.execute.call_count == 2``, which
@@ -346,10 +254,10 @@ class TestRunIngestionDedup:
                 seen.append(" ".join(statement.split()))
 
         event.listen(
-            dedup_env.engine.sync_engine, "before_cursor_execute", _record
+            ingestion_env.engine.sync_engine, "before_cursor_execute", _record
         )
         try:
-            dedup_env.fetch(
+            ingestion_env.fetch(
                 {
                     "rss_tier1": [
                         make_article(
@@ -361,17 +269,17 @@ class TestRunIngestionDedup:
                     ]
                 }
             )
-            results = await dedup_env.ingest()
+            results = await ingestion_env.ingest()
         finally:
             event.remove(
-                dedup_env.engine.sync_engine, "before_cursor_execute", _record
+                ingestion_env.engine.sync_engine, "before_cursor_execute", _record
             )
 
         assert results["phases"]["ingestion"]["total_new"] == 5
         assert len(seen) == 2, f"expected 2 dedup SELECTs for the batch, got {seen}"
         assert "url_hash" in seen[0]
         assert "content_hash" in seen[1]
-        assert len(await dedup_env.rows()) == 5
+        assert len(await ingestion_env.rows()) == 5
 
 
 class TestIngestionSourcesHaveContentHash:

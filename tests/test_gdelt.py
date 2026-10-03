@@ -378,41 +378,102 @@ class TestIngestGdeltCircuitBreaker:
 
 
 class TestRunIngestionIntegration:
-    """Integration-style tests for run_ingestion health tracking (mocked)."""
+    """Integration-style tests for run_ingestion health tracking.
+
+    These run against a real in-memory database with the real ``build_adapters``
+    and stubbed adapter fetches, so the health/degraded logic is the production
+    logic rather than a reimplementation of it.
+    """
 
     @pytest.mark.asyncio
-    async def test_run_ingestion_logs_degraded_when_tier1_down(self):
-        """run_ingestion logs 'degraded' when tier-1 critical domain is down."""
-        from src.ingestion.run import run_ingestion
+    async def test_run_ingestion_logs_degraded_when_tier1_down(
+        self, monkeypatch, ingestion_env
+    ):
+        """A tier-1 critical GDELT domain going down writes an 'ingest degraded' row.
 
-        with patch("src.ingestion.rss.ingest_rss_feeds") as mock_rss, \
-             patch("src.ingestion.gdelt.ingest_gdelt") as mock_gdelt, \
-             patch("src.ingestion.reddit.ingest_reddit") as mock_reddit, \
-             patch("src.ingestion.run.get_session") as mock_session, \
-             patch("src.ingestion.run.log_status"):
+        The point of this test is the degraded status line, so it asserts on the
+        status_log row ``log_status`` actually wrote -- not on adapters
+        succeeding, and not on a mock of a function ``run_ingestion`` has not
+        called since the adapters landed.
 
-            mock_rss.return_value = []
-            mock_gdelt.return_value = (
-                [],  # articles
-                {
-                    "succeeded": ["reuters.com", "bbc.com", "theguardian.com", "npr.org"],
-                    "failed": ["apnews.com"],
-                    "skipped": [],
-                }
-            )
-            mock_reddit.return_value = []
+        ``GDELT_TIER1_CRITICAL_DOMAINS`` is patched to a non-empty set because
+        in production it is ``set()``, which makes this branch unreachable. See
+        ``test_degraded_status_is_unreachable_in_production`` immediately below,
+        which pins that fact rather than leaving it implicit.
+        """
+        from src.ingestion import run as run_module
+        from src.ingestion.adapter import SourceHealth
 
-            # Mock session context manager
-            mock_sess = AsyncMock()
-            mock_session.return_value.__aenter__.return_value = mock_sess
-            mock_sess.execute.return_value.scalars.return_value.all.return_value = []
+        monkeypatch.setattr(
+            run_module, "GDELT_TIER1_CRITICAL_DOMAINS", {"apnews.com", "reuters.com"}
+        )
+        ingestion_env.fetch(
+            {"gdelt": []},
+            health_by_adapter={
+                "gdelt": SourceHealth(
+                    status="degraded",
+                    detail="apnews.com unreachable",
+                    succeeded=["reuters.com", "bbc.com", "theguardian.com", "npr.org"],
+                    failed=["apnews.com"],
+                    skipped=[],
+                )
+            },
+        )
 
-            await run_ingestion(dry_run=True)
+        results = await ingestion_env.ingest(dry_run=False)
 
-            # Check that ingest phase has correct health info
-            # (we can't easily check the log_status call without more mocking)
-            # But we can verify the gdelt return value structure
-            mock_gdelt.assert_called_once()
+        ingestion = results["phases"]["ingestion"]
+        # apnews.com is critical and failed; reuters.com is critical and did
+        # not, so it must NOT be listed.
+        assert ingestion["tier1_critical_down"] == ["apnews.com"]
+
+        # The artifact: the status_log row run.py wrote for the ingest phase.
+        statuses = await ingestion_env.statuses()
+        assert ("ingest", "degraded") in statuses
+
+    @pytest.mark.asyncio
+    async def test_degraded_status_is_unreachable_in_production(
+        self, monkeypatch, ingestion_env
+    ):
+        """With the shipped constant, the ingest phase can never be 'degraded'.
+
+        ``GDELT_TIER1_CRITICAL_DOMAINS`` is ``set()`` in src/ingestion/gdelt.py
+        ("All tier-1 sources now have RSS backups"), so
+        ``tier1_critical_down = sorted(set() & ...)`` is always ``[]`` and
+        ``ingest_status`` is always "ok" -- even when GDELT reports domains
+        failed. This test exists so that fact is asserted and visible rather
+        than discovered later by someone trusting the branch above: if the
+        constant is ever repopulated, this test is the one that will tell you
+        the reporting has become live.
+        """
+        from src.ingestion.adapter import SourceHealth
+        from src.ingestion.gdelt import GDELT_TIER1_CRITICAL_DOMAINS
+
+        assert GDELT_TIER1_CRITICAL_DOMAINS == set()
+
+        ingestion_env.fetch(
+            {"gdelt": []},
+            health_by_adapter={
+                "gdelt": SourceHealth(
+                    status="down",
+                    detail="GDELT unreachable",
+                    succeeded=[],
+                    failed=["apnews.com", "reuters.com", "bbc.com"],
+                    skipped=[],
+                )
+            },
+        )
+
+        results = await ingestion_env.ingest(dry_run=False)
+
+        ingestion = results["phases"]["ingestion"]
+        assert ingestion["tier1_critical_down"] == []
+        # The GDELT failure is still reported through adapter_health, which is
+        # where a reader should look today.
+        assert ingestion["adapter_health"]["gdelt"]["status"] == "down"
+        statuses = await ingestion_env.statuses()
+        assert ("ingest", "ok") in statuses
+        assert ("ingest", "degraded") not in statuses
 
     @pytest.mark.asyncio
     async def test_main_exits_nonzero_on_tier1_critical_down(self):
