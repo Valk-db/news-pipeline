@@ -143,11 +143,38 @@ def _signer_or_error() -> object:
     return generate_ed25519_signer(seed.encode("utf-8"))
 
 
-def _database_url() -> str:
-    """The DSN to sign with: least-privilege if configured, else the app's."""
+def _database_url(purpose: str) -> str:
+    """The least-privilege signer DSN. Raises 503 rather than degrading.
+
+    F4: this used to fall back to `settings.database_url` when
+    transparency_signer_database_url was unset. That fallback is the defect,
+    not a convenience. The whole point of the dedicated role (see
+    supabase/migrations/20261002230000_transparency_signer_rbac.sql) is that the
+    signing path holds a role with SELECT on the log plus INSERT on the two
+    transparency tables and nothing else -- no UPDATE, no DELETE, no reach into
+    any other table. Falling back to the app DSN handed the signing job the
+    app's broad-write credentials and silently gave that property away, and
+    nothing in the code, the tests, or the health check could tell: the route
+    reported success either way. The minimal-role property depended on a config
+    step that no code enforced and no failure ever surfaced.
+
+    So the fallback is gone. Unset is not "use something broader", it is "this
+    deployment has not been configured to sign", and it must fail loudly. The
+    caller names the purpose so the 503 says which surface refused.
+    """
     settings = get_settings()
     dedicated = (settings.transparency_signer_database_url or "").strip()
-    return dedicated or settings.database_url
+    if not dedicated:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "transparency_signer_database_url is not set, so checkpoint signing "
+                f"({purpose}) has no least-privilege DSN and will not fall back to the "
+                "app's broad-write DATABASE_URL. Configure it to the transparency_signer "
+                "role; see supabase/migrations/20261002230000_transparency_signer_rbac.sql."
+            ),
+        )
+    return dedicated
 
 
 def _result_body(result: signing.SigningResult) -> dict:
@@ -179,12 +206,7 @@ def _result_body(result: signing.SigningResult) -> dict:
 async def cron_checkpoint(_: str = Depends(require_cron_token)):
     """Sign a checkpoint over the whole log. Idempotent: safe to re-run."""
     signer = _signer_or_error()
-    database_url = _database_url()
-    if not database_url:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="No database URL configured for checkpoint signing",
-        )
+    database_url = _database_url("signing")
     settings = get_settings()
     # get_session_for_url commits on clean exit and rolls back on an exception.
     # The advisory lock lives in sign_next_checkpoint's transaction, so an
@@ -217,12 +239,7 @@ async def cron_checkpoint_watchdog(_: str = Depends(require_cron_token)):
     an external probe can read the verdict from the body of a successful
     response instead of only alerting on non-200s.
     """
-    database_url = _database_url()
-    if not database_url:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="No database URL configured for the checkpoint watchdog",
-        )
+    database_url = _database_url("watchdog")
     settings = get_settings()
     age_hours = None
     alerts = []

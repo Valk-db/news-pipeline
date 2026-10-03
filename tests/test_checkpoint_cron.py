@@ -15,6 +15,7 @@ import json
 from contextlib import asynccontextmanager
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import curation_ui.cron as cron_module
@@ -34,6 +35,7 @@ def _clean_cron_env(monkeypatch):
     """
     monkeypatch.delenv(CRON_TOKEN_ENV_VAR, raising=False)
     monkeypatch.delenv("TRANSPARENCY_SIGNING_KEY", raising=False)
+    monkeypatch.delenv("TRANSPARENCY_SIGNER_DATABASE_URL", raising=False)
     cron_limiter.reset()
     yield
     cron_limiter.reset()
@@ -139,6 +141,65 @@ class TestCronConfigurationRefusals:
         response = _client().get("/api/cron/checkpoint", headers=_authorize())
         assert response.status_code == 503
         monkeypatch.setattr(get_settings(), "database_url", saved, raising=False)
+
+    def test_an_unset_signer_dsn_does_not_fall_back_to_the_app_dsn(self, monkeypatch):
+        """F4: the app's broad-write DSN must never be used to sign.
+
+        The original defect only shows up when DATABASE_URL *is* set, which is
+        every real deployment -- so a test that blanks both (as the old one did)
+        cannot see it. Here the app DSN is deliberately populated and pointed at
+        a URL that must never be opened: if the fallback survives, the route
+        tries to connect and the failure is a driver error rather than the 503.
+        """
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, TOKEN)
+        monkeypatch.setenv("TRANSPARENCY_SIGNING_KEY", "seed")
+        monkeypatch.setenv("TRANSPARENCY_SIGNER_DATABASE_URL", "")
+        get_settings.cache_clear()
+        monkeypatch.setattr(
+            get_settings(),
+            "database_url",
+            "postgresql://app-user:pw@127.0.0.1:1/app-db-that-must-not-be-opened",
+            raising=False,
+        )
+
+        opened = []
+
+        def _never(url):
+            opened.append(url)
+            raise AssertionError(f"the app DSN was opened for signing: {url}")
+
+        monkeypatch.setattr(cron_module, "get_session_for_url", _never)
+
+        response = _client().get("/api/cron/checkpoint", headers=_authorize())
+        assert response.status_code == 503
+        assert "transparency_signer_database_url" in response.json()["detail"]
+        assert opened == []
+
+    def test_the_watchdog_also_refuses_without_a_signer_dsn(self, monkeypatch):
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, TOKEN)
+        monkeypatch.setenv("TRANSPARENCY_SIGNER_DATABASE_URL", "")
+        get_settings.cache_clear()
+        response = _client().get("/api/cron/checkpoint/watchdog", headers=_authorize())
+        assert response.status_code == 503
+        assert "transparency_signer_database_url" in response.json()["detail"]
+
+    def test_the_signer_dsn_is_the_only_dsn_used_when_set(self, monkeypatch):
+        """The positive control: with the DSN set, that is the URL used."""
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, TOKEN)
+        monkeypatch.setenv("TRANSPARENCY_SIGNER_DATABASE_URL", "postgresql://signer/pw@h/db")
+        get_settings.cache_clear()
+        assert cron_module._database_url("signing") == "postgresql://signer/pw@h/db"
+        assert cron_module._database_url("watchdog") == "postgresql://signer/pw@h/db"
+
+    def test_a_signer_dsn_is_required_for_both_surfaces(self, monkeypatch):
+        monkeypatch.setenv(CRON_TOKEN_ENV_VAR, TOKEN)
+        monkeypatch.setenv("TRANSPARENCY_SIGNER_DATABASE_URL", "  ")
+        get_settings.cache_clear()
+        for purpose in ("signing", "watchdog"):
+            with pytest.raises(HTTPException) as excinfo:
+                cron_module._database_url(purpose)
+            assert excinfo.value.status_code == 503
+            assert purpose in excinfo.value.detail
 
 
 class TestCronSigningOverHttp:
