@@ -195,10 +195,15 @@ def _tier_sentence(tier_mix: dict, source_count: int = 0) -> str:
     """
     present = [tier for tier in (1, 2, 3, 4) if _tier_count(tier_mix, tier) > 0]
     if not present:
-        if source_count > 0:
+        if source_count == 1:
             return (
                 "The pipeline has not tallied this story's tiers yet, so the "
-                f"{_source_phrase(source_count)} listed below each carry their own tier."
+                "source listed below carries its own tier."
+            )
+        if source_count > 1:
+            return (
+                "The pipeline has not tallied this story's tiers yet, so each of "
+                f"the {source_count} sources listed below carries its own tier."
             )
         return "No sources have been attributed to this story yet."
 

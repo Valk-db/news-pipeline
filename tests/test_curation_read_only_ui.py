@@ -642,7 +642,12 @@ class TestTheSentencesReadAsEnglish:
         assert "no outlet has been attributed" not in sentence
         tiers = curation._tier_sentence(blank["tier_mix"], 1)
         assert "has not tallied this story's tiers yet" in tiers
+        assert "the source listed below carries its own tier" in tiers
         assert "No sources have been attributed" not in tiers
+        # "each carry" is not a thing a one-source story can say.
+        assert "each carry" not in tiers
+        many = curation._tier_sentence(blank["tier_mix"], 3)
+        assert "each of the 3 sources listed below carries its own tier" in many
 
     def test_a_pending_tally_is_reported_in_the_plural_too(self):
         blank = {"outlets": 0, "tier_mix": {"t1": 0, "t2": 0, "t3": 0, "t4": 0},
