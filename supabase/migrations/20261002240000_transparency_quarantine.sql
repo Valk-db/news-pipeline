@@ -152,19 +152,22 @@ BEGIN
 END
 $$;
 
--- (d) The service_role key ships in the anon-facing trust path on some setups,
--- so it gets RLS-aware SELECT rather than a bare grant: a table with RLS on and
--- no policy reads as an EMPTY table, which is the most dangerous shape because
--- it looks like "nothing is quarantined" -- exactly the state a signer needs to
--- be wrong about.
-DO $$
-BEGIN
-    IF to_regclass('public.transparency_quarantine') IS NOT NULL
-       AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
-        GRANT SELECT ON transparency_quarantine TO service_role;
-        DROP POLICY IF EXISTS service_role_read ON transparency_quarantine;
-        CREATE POLICY service_role_read ON transparency_quarantine
-            FOR SELECT TO service_role USING (true);
-    END IF;
-END
-$$;
+-- (d) NO service_role policy, on purpose.
+--
+-- The first draft of this file granted service_role an RLS-aware SELECT with a
+-- policy, reasoning that a table with RLS on and no policy reads as an EMPTY
+-- table. That reasoning is wrong for this role: Supabase's service_role carries
+-- rolbypassrls = true (verified on dev), so RLS never applies to it and no
+-- policy is needed for it to read the table. The policy therefore bought
+-- nothing, and it broke the invariant every other table in this schema holds --
+-- that every policy in public is scoped to transparency_signer alone, which
+-- scripts/check_signer_privileges.py asserts and reported as a finding on the
+-- first run. A policy that widens nothing is still a policy someone has to read
+-- to be sure of that.
+--
+-- So: no grant and no policy for service_role. It holds nothing explicit, which
+-- has_table_privilege confirms. An operator inspecting or writing a quarantine
+-- row does it as postgres (the table owner), over SQL, where the decision is
+-- supposed to be made and recorded. The anon-facing REST surface has no path to
+-- it at all, which is the correct shape for a table whose contents say which
+-- published checkpoints the signer must not trust.

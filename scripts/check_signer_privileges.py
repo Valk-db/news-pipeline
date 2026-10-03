@@ -15,7 +15,9 @@ So the checks are:
              is anything in EXPECTED that it does not hold.
   execution  the same questions asked the only way that counts: SET ROLE, then
              read the log, read the checkpoints, write a checkpoint, write an
-             alert, and try the four things it must not be able to do. Each
+             alert, read the quarantine, and try the things it must not be able
+             to do -- including quarantining a checkpoint, which is the one the
+             role must NOT be able to do even though it reads the table. Each
              statement runs in its own savepoint so one refusal does not abort
              the rest of the probe.
   --sign     the real signing path, as the role: sign_next_checkpoint() with
@@ -56,6 +58,17 @@ EXPECTED: dict[str, set[str]] = {
     "merkle_log_entries": {"SELECT"},
     "transparency_checkpoints": {"SELECT", "INSERT"},
     "transparency_alerts": {"SELECT", "INSERT"},
+    # Read-only, and deliberately so. transparency_quarantine (migration
+    # 20261002240000) records the checkpoints an operator has excluded -- a
+    # planted huge tree_size, a pre-v2 HMAC row -- because the append-only
+    # trigger means such a row can never be deleted and would otherwise halt
+    # signing permanently. The signer CONSUMES those decisions; it must not be
+    # able to MAKE them. An INSERT grant here would let an attacker who reached
+    # the signing DSN quarantine the genuine head and stall the signer at will.
+    # It could not make it sign a shorter history -- the external head does not
+    # move when a row is excluded -- but a denial of service is still worth not
+    # offering, so this stays SELECT.
+    "transparency_quarantine": {"SELECT"},
 }
 
 # The tables the signer must have no reach into at all.
@@ -69,6 +82,7 @@ PROBES = [
     ("read the log", "SELECT count(*) FROM merkle_log_entries", "rows"),
     ("read published checkpoints", "SELECT count(*) FROM transparency_checkpoints", "rows"),
     ("read alerts", "SELECT count(*) FROM transparency_alerts", "rows"),
+    ("read quarantine", "SELECT count(*) FROM transparency_quarantine", "rows"),
     (
         "publish a checkpoint",
         "INSERT INTO transparency_checkpoints (id, tree_size, merkle_root, chain_hash, timestamp,"
@@ -90,6 +104,14 @@ PROBES = [
      " canonical_payload, leaf_hash, chain_hash) VALUES (999999, 'n1:sha256', now(),"
      " '{}'::json, '{}', repeat('0',64), repeat('0',64))", "denied"),
     ("read article rows", "SELECT count(*) FROM raw_articles", "denied"),
+    # The quarantine asymmetry, as an execution probe rather than a comment:
+    # the signer READS operator decisions and must not be able to MAKE them. An
+    # INSERT grant here would let an attacker who reached the signing DSN
+    # quarantine the genuine head and stall the signer.
+    ("quarantine a checkpoint",
+     "INSERT INTO transparency_quarantine (checkpoint_id, reason) VALUES"
+     " ('probe-never-inserted', 'probe')", "denied"),
+    ("un-quarantine a checkpoint", "DELETE FROM transparency_quarantine WHERE false", "denied"),
 ]
 
 findings: list[str] = []

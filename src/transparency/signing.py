@@ -358,18 +358,31 @@ def _published_head_value(tree_size: int, digest: str) -> str:
     return f"{tree_size}:{digest}"
 
 
-async def _checkpoints_at_size(session: AsyncSession, tree_size: int) -> list[TransparencyCheckpoint]:
-    """Every published checkpoint at exactly this tree size.
+async def _checkpoints_at_size(
+    session: AsyncSession,
+    tree_size: int,
+    *,
+    skip_ids: frozenset[str] = frozenset(),
+) -> list[TransparencyCheckpoint]:
+    """Every non-quarantined published checkpoint at exactly this tree size.
 
     All of them, not just the first: the migration adds UNIQUE(tree_size), but a
     database predating it can hold several rows at one size, and two rows with
     different roots at the same size is precisely the equivocation this function
     exists to catch. Reading only the first would let the second hide.
+
+    `skip_ids` excludes quarantined rows, and that is load-bearing rather than
+    cosmetic. It was MISSING here when the live probe ran, and the symptom was
+    subtle: a quarantined row still matched the idempotency check, so a run whose
+    whole purpose was to sign past a quarantined row returned already_signed
+    forever and the signer never recovered. Quarantine that the signer still
+    reads is not quarantine. Found by running the real path against dev, not by a
+    unit test: every SQLite test seeds a table with nothing to quarantine.
     """
     rows = await session.execute(
         select(TransparencyCheckpoint).where(TransparencyCheckpoint.tree_size == tree_size)
     )
-    return list(rows.scalars().all())
+    return [row for row in rows.scalars().all() if str(row.id) not in skip_ids]
 
 
 async def sign_next_checkpoint(
@@ -502,7 +515,7 @@ async def sign_next_checkpoint(
     derived_root = merkle_root(leaves)
     derived_hex = derived_root.hex()
 
-    published_at_size = await _checkpoints_at_size(session, tree_size)
+    published_at_size = await _checkpoints_at_size(session, tree_size, skip_ids=skip_ids)
     if published_at_size:
         disagreeing = [row for row in published_at_size if row.merkle_root != derived_hex]
         if disagreeing:

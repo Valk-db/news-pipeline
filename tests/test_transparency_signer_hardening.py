@@ -829,6 +829,32 @@ class TestQuarantine:
         assert after.tree_size == 3
 
     @needs_cryptography
+    async def test_a_quarantined_row_does_not_still_trigger_already_signed(self, db_session):
+        """The bug the live probe found, pinned so it cannot come back.
+
+        Quarantine was honoured when picking the PREVIOUS checkpoint but not in
+        the equivocation/idempotency scan at this tree_size. So a run whose whole
+        purpose was to sign past a quarantined row returned already_signed
+        forever -- the signer never recovered from the quarantine, which is the
+        opposite of what quarantine is for. No SQLite test could have caught it:
+        every one of them seeds a table with nothing to quarantine.
+        """
+        signer = generate_ed25519_signer(seed=_seed("q-already-signed"))
+        log = await _log_with(3)
+        first = await _sign(db_session, log, signer)
+        assert first.status == "signed"
+
+        row = (await db_session.execute(select(TransparencyCheckpoint))).scalars().first()
+        db_session.add(
+            TransparencyQuarantine(checkpoint_id=str(row.id), reason="quarantined for test")
+        )
+        await db_session.flush()
+
+        result = await _sign(db_session, log, signer)
+        assert result.status == "signed", result.reason
+        assert result.tree_size == 3
+
+    @needs_cryptography
     async def test_quarantine_cannot_be_used_to_sign_below_the_published_head(
         self, db_session
     ):
