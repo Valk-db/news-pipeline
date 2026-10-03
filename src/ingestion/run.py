@@ -311,8 +311,21 @@ def build_adapters(
                 matched_entries |= hit
                 continue
 
+    # An unmatched --sources entry is only a mystery if it names nothing at all.
+    # A name the registry knows but has enabled=False is a different failure: the
+    # operator asked for a real source and will get silence, so say which it was
+    # and why it is off rather than reporting it as unknown.
+    from src.ingestion.source_registry import ALL_SOURCES
+
+    known_disabled = {d for d, cfg in ALL_SOURCES.items() if not cfg.enabled}
     for entry in sorted(wanted - matched_entries):
-        print(f"WARNING: --sources entry {entry!r} matched no adapter")
+        if entry in known_disabled:
+            print(
+                f"WARNING: --sources entry {entry!r} is a known source but is "
+                f"disabled in the registry; it will not be polled"
+            )
+        else:
+            print(f"WARNING: --sources entry {entry!r} matched no adapter")
 
     return selected
 
