@@ -155,6 +155,7 @@ class TransportShim:
         model_override: str | None = None,
         usage: UsageRecorder | None = None,
         on_response: Callable[..., None] | None = None,
+        mutate: str | None = None,
     ):
         self._llm = llm_client
         self._cache = cache
@@ -164,6 +165,11 @@ class TransportShim:
         self._model_override = model_override
         self._usage = usage or UsageRecorder()
         self._on_response = on_response
+        # Set only for a mutation run. Applied to the content AFTER the cache
+        # lookup and never written back, so a mutated run is free and cannot
+        # contaminate the cache the baseline replays from.
+        self._mutate = mutate
+        self.mutation_notes: list[str] = []
         self.chat = _Chat(self)
         # Production passes model=llm.model; LLMClient has no .model, so the shim
         # reports the configured production model id (settings.groq_model).
@@ -185,7 +191,10 @@ class TransportShim:
             if self._on_response is not None:
                 self._on_response(key, effective_model, p_hash, i_hash, cached.content, replayed=True)
             return _CompletionResponse(
-                choices=[_Choice(message=_Message(cached.content), finish_reason=cached.finish_reason)]
+                choices=[
+                    _Choice(message=_Message(self._maybe_mutate(cached.content)),
+                            finish_reason=cached.finish_reason)
+                ]
             )
 
         before = (self._usage.prompt_tokens, self._usage.completion_tokens)
@@ -220,7 +229,23 @@ class TransportShim:
         )
         if self._on_response is not None:
             self._on_response(key, effective_model, p_hash, i_hash, content, replayed=False)
-        return _CompletionResponse(choices=[_Choice(message=_Message(content))])
+        return _CompletionResponse(choices=[_Choice(message=_Message(self._maybe_mutate(content)))])
+
+    def _maybe_mutate(self, content: str) -> str:
+        """Corrupt the content on the way to production, if a mutation is armed.
+
+        Runs after the cache lookup and its output is never written back, so the
+        cache the baseline replays from stays clean and the mutated run costs
+        zero provider requests.
+        """
+        if self._mutate is None:
+            return content
+        from eval.mutate import apply_mutation
+
+        mutated, note = apply_mutation(self._mutate, content)
+        if note:
+            self.mutation_notes.append(note)
+        return mutated
 
 
 def call_signature(content: str) -> str:

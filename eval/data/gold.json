@@ -1621,7 +1621,7 @@
     },
     {
      "text": "This is an interpretive historical argument based on scholarship, Oromo historiography, constitutional texts, human-rights documentation, and institutional reports rather than new field data.",
-     "type": "fact",
+     "type": "summary",
      "entities": [
       "Oromo"
      ],
@@ -1633,7 +1633,7 @@
       "This is an interpretive",
       300
      ],
-     "note": "The author's own disclosure of method and standpoint; a careful editor keeps the caveat with the argument."
+     "note": "The author's disclosure of method and standpoint, kept with the argument. RELABELLED from 'fact' to 'summary' during the harness test pass: the sentence describes what this article is rather than asserting anything about the world, which is what the prompt's 'summary' type is for. The earlier 'fact' label was wrong and it was the only reason the gold set contained no 'summary' at all, while the model emitted 4 of them -- a gold set that cannot represent a value the prompt asks for scores that value as always-wrong."
     },
     {
      "text": "Asmarom Legesse documents Gadaa as an internally generated political order with deliberative assemblies, rotating leadership, checks on power, and public accountability. Its marginalization was therefore a loss of recognized political authority, not merely cultural loss.",

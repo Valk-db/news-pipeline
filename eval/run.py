@@ -17,6 +17,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,13 @@ from eval.scoring import (
 # rather than taking the harness's word for what "free" means today.
 GROQ_FREE_RPM = 20
 GROQ_FREE_RPD = 1000
+# Minimum wall-clock gap between LIVE provider calls, from GROQ_FREE_RPM. The
+# Groq free tier returns 429 above 20 requests/minute, and the production retry
+# (tenacity, 3 attempts, 1-10s) would burn its attempts and then record a
+# provider error for an article that never got asked. Pacing keeps the baseline
+# a measurement of extraction rather than of rate limiting. Replayed calls are not
+# paced: nothing leaves the machine.
+GROQ_MIN_INTERVAL_SECONDS = 60.0 / GROQ_FREE_RPM + 0.5
 # The repo's own caps, from src/shared/config.py:46 and
 # src/enrichment/translation.py:86. The eval deliberately does NOT spend these:
 # it uses a throwaway SQLite counter so a full eval run cannot eat the daily
@@ -145,6 +153,7 @@ async def run_corpus(
     cache: ReplayCache,
     model_override: str | None = None,
     max_snippets: int = 5,
+    mutate: str | None = None,
 ) -> dict[str, Any]:
     """Run the real extraction over the corpus, scoring fields as we go."""
     from unittest.mock import patch
@@ -160,6 +169,21 @@ async def run_corpus(
     diagnostics: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
     responses: list[dict[str, Any]] = []
+    mutation_notes: list[str] = []
+    last_live = 0.0
+
+    def pace(after: float) -> float:
+        """Wait out the remainder of the free-tier window between live calls."""
+        nonlocal last_live
+        if cache.stats.requests <= after:
+            return after
+        now = time.monotonic()
+        wait = last_live + GROQ_MIN_INTERVAL_SECONDS - now
+        if wait > 0:
+            print(f"    pacing {wait:.1f}s to stay under {GROQ_FREE_RPM} req/min")
+            time.sleep(wait)
+        last_live = time.monotonic()
+        return cache.stats.requests
 
     def on_response(key, model, p_hash, i_hash, content, replayed, error=None):
         responses.append(
@@ -172,13 +196,17 @@ async def run_corpus(
         )
 
     try:
-        for item in items:
+        for n, item in enumerate(items, 1):
             label = gold.get(item.article_id)
+            print(f"  [{n:>2}/{len(items)}] {item.article_id[:8]} {item.stratum:<14} "
+                  f"{str(item.detected_language):<6} body={len(item.body_text):>6} "
+                  f"live={cache.stats.requests} hits={cache.stats.hits}", flush=True)
             shim = TransportShim(
                 client, cache,
                 article_id=item.article_id, body=item.body_text,
                 knobs={"max_snippets": max_snippets},
                 model_override=model_override, usage=usage, on_response=on_response,
+                mutate=mutate,
             )
             # The production function, called verbatim. Two names are redirected,
             # and neither is the prompt or any extraction logic:
@@ -200,6 +228,8 @@ async def run_corpus(
                     title=item.title,
                     max_snippets=max_snippets,
                 )
+            last_live = pace(last_live)
+            mutation_notes.extend(shim.mutation_notes)
 
             pred = _parse_predicted(list(produced or []))
             diagnostics.append(
@@ -230,6 +260,8 @@ async def run_corpus(
         "unlabeled": failures,
         "responses": responses,
         "stats": cache.stats.as_dict(),
+        "mutation": mutate,
+        "mutation_notes": mutation_notes,
     }
 
 
@@ -253,6 +285,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", default=None, help="override the model id (baseline uses the configured one)")
     ap.add_argument("--max-snippets", type=int, default=5)
     ap.add_argument("--json", default=None, help="also write the scoreboard as JSON")
+    ap.add_argument(
+        "--mutate", default=None,
+        help="apply a named corruption from eval/mutate.py after the cache lookup; "
+             "proves the harness can see a regression. Costs no provider requests.",
+    )
     args = ap.parse_args(argv)
 
     if not os.environ.get("GROQ_API_KEY"):
@@ -278,9 +315,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"cache:  {'OFF (forcing live calls)' if args.no_cache else 'warm (record-and-replay)'}")
     print()
 
+    if args.mutate:
+        print(f"MUTATION ARMED: {args.mutate} (see python -m eval.mutate). "
+              "Applied after the cache lookup, never written back.")
+
     cache = ReplayCache(enabled=not args.no_cache)
     result = asyncio.run(
-        run_corpus(labeled, gold, cache=cache, model_override=args.model, max_snippets=args.max_snippets)
+        run_corpus(labeled, gold, cache=cache, model_override=args.model,
+                   max_snippets=args.max_snippets, mutate=args.mutate)
     )
 
     print(format_scoreboard(result["rows"], result["overall"]))
@@ -321,6 +363,8 @@ def main(argv: list[str] | None = None) -> int:
             ],
             "diagnostics": result["diagnostics"],
             "unlabeled": result["unlabeled"],
+            "mutation": result["mutation"],
+            "mutation_notes": result["mutation_notes"],
             "cost": stats,
             "headroom": headroom(stats["requests"]),
             "responses": result["responses"],

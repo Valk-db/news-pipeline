@@ -59,8 +59,20 @@ _STOP = {
 
 
 def normalize(text: str) -> str:
-    text = unicodedata.normalize("NFKC", text or "")
-    return text.casefold().strip()
+    """Case- and width-insensitive form, with combining marks removed.
+
+    The mark removal is not cosmetic. ``str.casefold()`` maps U+0130 (LATIN CAPITAL
+    LETTER I WITH DOT ABOVE, Turkish ``İ``) to ``i`` followed by U+0307 COMBINING
+    DOT ABOVE. ``\\w+`` does not match U+0307, so without this the tokenizer splits
+    ``İstanbul`` into ``i`` and ``stanbul``; the one-character ``i`` is then dropped
+    by the length filter and every Turkish token loses its first letter. Measured
+    effect on the frozen corpus: a Turkish gold snippet and the same sentence typed
+    with an ASCII ``I`` scored token-F1 0.80 instead of 1.00, purely from the
+    diacritic. Turkish is one of thirteen non-English languages in the gold set, so
+    this is a systematic handicap on the population the eval oversamples on purpose.
+    """
+    text = unicodedata.normalize("NFKC", text or "").casefold()
+    return "".join(c for c in text if not unicodedata.category(c).startswith("M")).strip()
 
 
 def tokenize(text: str) -> list[str]:
