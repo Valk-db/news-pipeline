@@ -376,23 +376,6 @@ def test_requirements_txt_pins_are_all_pinned() -> None:
     for name, line in db.read_requirements(REPO).items():
         assert "==" in line, "%s is not pinned: %r" % (name, line)
 
-
-def test_pgvector_is_pinned_to_a_version_that_does_not_exist() -> None:
-    """A known deploy blocker, pinned so it cannot be forgotten.
-
-    `requirements.txt` pins `pgvector==0.2.6`. PyPI has 0.2.0 through 0.2.5 and then
-    0.3.0; there has never been a 0.2.6. `pip install -r requirements.txt` therefore
-    cannot resolve at all, which is a hard build failure on Vercel. Nothing in the
-    repository imports pgvector and `VERCEL_DEPLOY.md` says embeddings are JSON array
-    columns, so the pin looks like a leftover.
-
-    When this is fixed, the right fix is to drop the line rather than move it to
-    0.3.0: the package is not used. Then delete this test. It exists so the blocker
-    is visible in the diff that fixes it instead of being rediscovered later.
-    """
-    assert db.read_requirements(REPO)["pgvector"] == "pgvector==0.2.6"
-
-
 # --------------------------------------------------------------------------- #
 # The test that matters: the check must be able to fail
 # --------------------------------------------------------------------------- #
