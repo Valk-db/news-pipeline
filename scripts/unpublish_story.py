@@ -219,10 +219,16 @@ async def unpublish_story(
     reason: str,
     actor: str,
     force: bool = False,
+    session=None,
 ) -> UnpublishResult:
-    """Set one story to REJECTED and write the audit row. Caller commits."""
-    async with get_session() as session:
-        story = await session.get(Story, uuid.UUID(story_id))
+    """Set one story to REJECTED and write the audit row.
+
+    `session` exists so the decision and the audit row can be tested without a
+    database; the CLI never passes it and always goes through get_session().
+    """
+
+    async def run(sess) -> UnpublishResult:
+        story = await sess.get(Story, uuid.UUID(story_id))
         if story is None:
             raise LookupError(
                 f"no story with id {story_id}. If the id is right, the story may be a "
@@ -231,37 +237,33 @@ async def unpublish_story(
 
         previous = story.status
         action, _, explanation = resolve_transition(previous.value, force=force)
-        siblings = await _still_public_siblings(session, story)
+        siblings = await _still_public_siblings(sess, story)
+        day = story.day.date().isoformat() if story.day else None
+
+        def result(**overrides) -> UnpublishResult:
+            base = {
+                "story_id": str(story.id),
+                "previous_status": previous.value,
+                "new_status": previous.value,
+                "was_public": False,
+                "changed": False,
+                "headline": None,
+                "day": day,
+                "detail_was_forced": False,
+                "still_public_siblings": siblings,
+                "explanation": explanation,
+            }
+            base.update(overrides)
+            return UnpublishResult(**base)
 
         if action == "refuse":
-            return UnpublishResult(
-                story_id=str(story.id),
-                previous_status=previous.value,
-                new_status=previous.value,
-                was_public=False,
-                changed=False,
-                headline=None,
-                day=story.day.date().isoformat() if story.day else None,
-                detail_was_forced=False,
-                still_public_siblings=siblings,
-                explanation=explanation,
-            )
+            return result()
 
         if action == "noop":
-            return UnpublishResult(
-                story_id=str(story.id),
-                previous_status=previous.value,
-                new_status=previous.value,
-                was_public=previous in PUBLIC_STORY_STATUSES,
-                changed=False,
-                headline=None,
-                day=story.day.date().isoformat() if story.day else None,
-                still_public_siblings=siblings,
-                explanation=explanation,
-            )
+            return result(was_public=previous in PUBLIC_STORY_STATUSES)
 
         story.status = WITHDRAWN_STATUS
-        session.add(
+        sess.add(
             StatusLog(
                 phase=LOG_PHASE,
                 status="warn",
@@ -278,19 +280,19 @@ async def unpublish_story(
                 },
             )
         )
-        await session.commit()
+        await sess.commit()
 
-        return UnpublishResult(
-            story_id=str(story.id),
-            previous_status=previous.value,
+        return result(
             new_status=WITHDRAWN_STATUS.value,
             was_public=previous in PUBLIC_STORY_STATUSES,
             changed=True,
-            headline=None,
-            day=story.day.date().isoformat() if story.day else None,
             detail_was_forced=bool(force),
-            still_public_siblings=siblings,
         )
+
+    if session is not None:
+        return await run(session)
+    async with get_session() as owned:
+        return await run(owned)
 
 
 def build_parser() -> argparse.ArgumentParser:
