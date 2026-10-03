@@ -258,7 +258,7 @@ async def extract_claims_from_article(
     Returns:
         List of Claim objects
     """
-    llm = get_llm_client()
+    llm = await get_llm_client()
 
     # Flatten entities
     all_entities = []
@@ -297,38 +297,71 @@ Do NOT include:
 Maximum 10 claims. Only return the JSON array."""
 
     try:
-        response = await llm.chat.completions.create(
-            model=llm.model,
+        response = await llm.chat_completion(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=2000,
         )
 
-        content = response.choices[0].message.content.strip()
-        claims_data = json.loads(content)
+        content = (response["choices"][0]["message"]["content"] or "").strip()
+    except Exception as exc:
+        # Distinguish a client we cannot drive from a quota or network failure:
+        # an un-awaited get_llm_client() surfaces here as
+        # AttributeError: 'coroutine' object has no attribute 'chat'.
+        logger.error(f"Claim extraction provider failure: {type(exc).__name__}: {exc}")
+        return []
 
+    if not content:
+        logger.warning("Claim extraction got empty content (model spent the budget on reasoning)")
+        return []
+
+    try:
+        # _parse_json_response strips a ``` fence; raw json.loads does not.
+        claims_data = llm._parse_json_response(content)
+    except Exception as exc:
+        logger.warning(
+            f"Failed to parse claim JSON: {type(exc).__name__}: {exc}; "
+            f"content={content[:200]!r}"
+        )
+        return []
+
+    if isinstance(claims_data, dict):
+        for key in ("claims", "results", "items", "data"):
+            if isinstance(claims_data.get(key), list):
+                claims_data = claims_data[key]
+                break
+        else:
+            logger.warning(f"claim JSON is an object with no claim array (keys={sorted(claims_data)})")
+            return []
+    if not isinstance(claims_data, list):
+        logger.warning(f"claim JSON is {type(claims_data).__name__}, expected a list")
+        return []
+
+    try:
         claims = []
         for c in claims_data:
-                claim_text = c.get("text", "").strip()
-                if not claim_text:
-                    continue
+            if not isinstance(c, dict):
+                continue
+            claim_text = c.get("text", "").strip()
+            if not claim_text:
+                continue
 
-                # Generate hash for dedup
-                claim_hash = hashlib.sha256(claim_text.encode()).hexdigest()
+            # Generate hash for dedup
+            claim_hash = hashlib.sha256(claim_text.encode()).hexdigest()
 
-                claims.append(Claim(
-                    text=claim_text,
-                    claim_hash=claim_hash,
-                    entities=c.get("entities", []),
-                    position=c.get("position", 0),
-                    context=c.get("context", ""),
-                    claim_type=c.get("type", "attribution"),
-                ))
+            claims.append(Claim(
+                text=claim_text,
+                claim_hash=claim_hash,
+                entities=c.get("entities", []),
+                position=c.get("position", 0),
+                context=c.get("context", ""),
+                claim_type=c.get("type", "attribution"),
+            ))
 
         return claims
 
-    except Exception as e:
-        logger.error(f"Claim extraction failed: {e}")
+    except Exception as exc:
+        logger.error(f"Claim post-processing failed: {type(exc).__name__}: {exc}")
         return []
 
 
