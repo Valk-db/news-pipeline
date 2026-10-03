@@ -5,6 +5,8 @@ verified manually on 2026-10-01 (FR/ES/DE/ZH/FA/UK/SQ news headlines).
 """
 
 import asyncio
+import json as _json
+import urllib.request as _req
 
 import pytest
 
@@ -12,6 +14,7 @@ from scripts import backfill_translations
 from scripts.backfill_translations import NEEDS_TRANSLATION
 from src.shared.budget import MYMEMORY_CHARS, spend, used
 from src.enrichment.translation import (
+    MYMEMORY_MAX_CHUNK,
     MyMemoryBackend,
     TranslationUnavailable,
     detect_language,
@@ -193,6 +196,117 @@ class TestTranslateArticle:
         with pytest.raises(TranslationUnavailable):
             backend.translate("c", "fr")
         assert sent == ["ab"]
+
+    def test_mymemory_chunk_size_is_under_the_real_free_limit(self):
+        """The anonymous tier rejects over 500 chars, measured 2026-10-02.
+
+        This was 4500, so every article body over 500 chars was sent as one
+        query, came back as HTTP 200 containing "QUERY LENGTH LIMIT EXCEEDED",
+        and that string was stored as the translation.
+        """
+        assert MYMEMORY_MAX_CHUNK <= 500
+
+    def test_mymemory_chunks_are_all_under_the_limit(self):
+        backend = MyMemoryBackend(politeness_seconds=0)
+        sent = []
+        backend._translate_chunk = lambda text, s, t: sent.append(text) or "EN"
+
+        backend.translate("x" * 4000, "fr")
+
+        assert len(sent) == 9
+        assert all(len(c) <= 500 for c in sent)
+        assert "".join(sent) == "x" * 4000
+
+    def test_mymemory_refuses_a_length_rejection_in_a_200_response(self, monkeypatch):
+        """A 200 whose body is the complaint must not become the translation.
+
+        The real payload was HTTP 200 / responseStatus 403 with
+        translatedText "QUERY LENGTH LIMIT EXCEEDED..."; accepting it is what
+        put that string in body_text_en and ORG "CHARS" in the entities.
+        """
+        import urllib.request as _req
+
+        payload = _json.dumps({
+            "responseData": {"translatedText":
+                             "QUERY LENGTH LIMIT EXCEEDED. MAX ALLOWED QUERY : 500 CHARS"},
+            "responseStatus": 403,
+        }).encode()
+
+        class _Resp:
+            def read(self):
+                return payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(_req, "urlopen", lambda *a, **k: _Resp())
+        backend = MyMemoryBackend(politeness_seconds=0)
+        with pytest.raises(TranslationUnavailable):
+            backend._translate_chunk("x" * 900, "fr", "en")
+
+    def test_mymemory_refuses_a_quota_warning_in_a_200_response(self, monkeypatch):
+        payload = _json.dumps({
+            "responseData": {"translatedText":
+                             "MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY"},
+            "responseStatus": 200,
+        }).encode()
+
+        class _Resp:
+            def read(self):
+                return payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(_req, "urlopen", lambda *a, **k: _Resp())
+        backend = MyMemoryBackend(politeness_seconds=0)
+        with pytest.raises(TranslationUnavailable):
+            backend._translate_chunk("Bonjour", "fr", "en")
+
+    def test_mymemory_accepts_a_normal_translation(self, monkeypatch):
+        payload = _json.dumps({
+            "responseData": {"translatedText": "The president spoke in Paris this morning"},
+            "responseStatus": 200,
+        }).encode()
+
+        class _Resp:
+            def read(self):
+                return payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(_req, "urlopen", lambda *a, **k: _Resp())
+        backend = MyMemoryBackend(politeness_seconds=0)
+        assert backend._translate_chunk("Le président a parlé", "fr", "en") == \
+            "The president spoke in Paris this morning"
+
+    def test_rejection_leaves_the_article_untranslated(self, monkeypatch):
+        """End to end through translate_article: a refusal is no translation."""
+        class RejectingBackend:
+            name = "rejecting"
+
+            def translate(self, text, source_lang, target_lang="en"):
+                raise TranslationUnavailable("rejected")
+
+        art = _article(
+            title="Yémen : le choléra et la rougeole menacent de gagner du terrain",
+            body=("Alors que plus de 148.000 personnes ont désormais été déplacées "
+                  "par les combats au Yémen, l'ONU s'inquiète d'une aggravation."),
+        )
+        stats = translate_article(art, backend=RejectingBackend())
+        assert stats["translated"] is False
+        assert art.body_text_en is None
+        assert art.detected_language == "fr"
 
     def test_mymemory_refuses_to_translate_without_a_counter(self, monkeypatch):
         """No reachable counter means no translation: the anonymous quota is the scarce thing."""

@@ -464,14 +464,25 @@ TIER2_SOURCES = {
         category=SourceCategory.GOVERNMENT,
         rss_urls=[
             "https://news.un.org/feed/subscribe/en/news/all/rss.xml",
+            # French edition, added 2026-10-02. Part C (NER on the translated
+            # body) is proven, so a non-English feed is no longer inert: these
+            # rows are translated in Phase 1.5 and their entities are extracted
+            # in Phase 1.6, which is the whole point of that fix. 30 items,
+            # 8 within 48h at the time of adding. Free, no key, no account.
+            "https://news.un.org/feed/subscribe/fr/news/all/rss.xml",
         ],
         geographic_focus="Global",
-        language="en",
+        language="en,fr",
         reliability_score=0.92,
         bias_rating="center",
         owner_group="United Nations",
         fetch_priority=1,
-        notes="UN News English feed. Re-enabled 2026-10-02 (see comment above). 30 items, 22 within 48h.",
+        notes=("UN News English + French feeds. English re-enabled 2026-10-02 "
+               "(see comment above). French added 2026-10-02: 30 items, 8 within "
+               "48h; the pipeline now translates then extracts entities, so these "
+               "rows are not inert. Deliberately only ONE non-English feed: the "
+               "free translation budget is 45,000 chars/day, about 10 article "
+               "bodies, so a second one would compete with the first for it."),
     ),
     # WORKING-BUT-DEDUPED: entries_in_feed>0, already_known>0, ok=0 in all 3 healthy runs (dedup, not failure)
     # 36434221800: entries_in_feed=25, already_known=25

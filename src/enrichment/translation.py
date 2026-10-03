@@ -22,9 +22,10 @@ Deliberately NOT used, with evidence:
   - LibreTranslate public instances: translate.argosopentech.com drops the
     connection through our proxy; libretranslate.com returns 403. Unreliable.
 
-MyMemory politeness: 1s between requests, 4500-char chunks (under the 5000
-per-request cap), and a daily char budget of 45000 (under the 50000 anonymous
-limit) counted in budget_counters. That counter was a JSON file under var/, a
+MyMemory politeness: 1s between requests, 480-char chunks (the anonymous tier
+rejects anything over 500 characters, measured 2026-10-02 -- see
+MYMEMORY_MAX_CHUNK), and a daily char budget of 45000 counted in
+budget_counters. That counter was a JSON file under var/, a
 gitignored directory on an ephemeral runner, so the cap was really per run and
 two runs a day could send twice the anonymous limit. Translation never breaks
 ingest: failures are caught, reported, and the article persists untranslated.
@@ -53,8 +54,27 @@ logger = logging.getLogger(__name__)
 
 MYMEMORY_URL = "https://api.mymemory.translated.net/get"
 MYMEMORY_DAILY_CHAR_BUDGET = 45000
-MYMEMORY_MAX_CHUNK = 4500
+# Measured 2026-10-02, not assumed: MyMemory's anonymous tier rejects any query
+# over 500 CHARACTERS with HTTP 200 + responseStatus 403 and
+# responseData.translatedText = "QUERY LENGTH LIMIT EXCEEDED. MAX ALLOWED QUERY
+# : 500 CHARS". 499 and 500 chars pass, 501 fails, every length above that fails
+# identically. This used to be 4500 ("under the 5000 per-request cap"), which is
+# wrong by 9x, and the consequence was silent: the error string is a perfectly
+# well-formed non-empty translation, so it was stored in body_text_en and NER
+# then dutifully extracted ORG "CHARS" and PERSON "MAX" from it. Chunks are now
+# under the real limit, and a response that looks like a rejection is refused
+# rather than stored (see _looks_like_rejection).
+MYMEMORY_MAX_CHUNK = 480
 MYMEMORY_POLITENESS_SECONDS = 1.0
+# MyMemory reports failures inside a 200 response, so the error text has to be
+# recognised rather than inferred from a status code.
+MYMEMORY_REJECTION_MARKERS = (
+    "QUERY LENGTH LIMIT EXCEEDED",
+    "MYMEMORY WARNING",
+    "YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY",
+    "INVALID LANGUAGE PAIR",
+    "PLEASE SELECT TWO DISTINCT LANGUAGES",
+)
 # Bodies are front-loaded in news copy; translating the whole archive would
 # blow the free daily budget on one long article. The cap is reported, not hidden.
 BODY_TRANSLATE_CHAR_CAP = 4000
@@ -140,6 +160,20 @@ def detect_language(text: str | None) -> str | None:
         return None
 
 
+def _looks_like_rejection(translated: str, status: object) -> bool:
+    """True when MyMemory's 200 response is actually a refusal.
+
+    Two independent signals, because either alone is insufficient: the quota
+    rejection comes back with responseStatus 200 and only the marker text, and
+    the length rejection comes back with status 403 whose translatedText is the
+    complaint. Trusting a status code alone is how the length bug hid.
+    """
+    if status not in (None, 200, "200"):
+        return True
+    upper = translated.upper()
+    return any(marker in upper for marker in MYMEMORY_REJECTION_MARKERS)
+
+
 class MyMemoryBackend:
     """Keyless MyMemory translation. Free, no account, no opt-ins.
 
@@ -179,6 +213,15 @@ class MyMemoryBackend:
         if not translated:
             raise TranslationUnavailable(
                 f"MyMemory returned no translation: {str(payload)[:160]}"
+            )
+        # A rejection arrives as HTTP 200 with the complaint in the body, so
+        # responseStatus has to be checked and so does the text itself: storing
+        # the complaint as the translation is worse than having none, because
+        # downstream stages then treat an error string as an article.
+        status = payload.get("responseStatus")
+        if _looks_like_rejection(translated, status):
+            raise TranslationUnavailable(
+                f"MyMemory rejected the request (status={status}): {translated[:120]}"
             )
         return translated
 
