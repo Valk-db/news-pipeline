@@ -501,24 +501,31 @@ def refresh_entities_after_translation(
     stays inert -- no canonical entity, no story merge, no corroboration, no
     topic label -- no matter how good the translation is.
 
-    On the dev database (2026-10-02): 28 non-English articles, every one of
-    them with a translated body, and only 5 carrying usable entities -- 3 of
-    those from the GDELT static join, 2 from the English-NER path. 23 had
-    nothing. Those 23 are the ones this function is about, and the cost of
-    having no entities is specific rather than cosmetic: build_stories()
-    builds a story's canonical entities from the unit's representative
-    article, and a unit with no entities creates a story with empty
-    primary_entities, which build_stories() then skips when matching later
-    units. Such a story is one unit forever, so the corroboration gate
-    (>=2 units, >=2 owners) can never be evaluated for it.
-    Reporting units themselves are not affected -- those cluster by shingle
-    containment on body_text, not by entities -- so the loss is at the story
-    layer and above, which is where the gate lives.
+    Measured on the dev database (2026-10-02, read-only, replaying this exact
+    function over real rows): 52 raw_articles have detected_language <> 'en',
+    49 of them with a body_text_en. Over the 40 most recently fetched of
+    those, 14 carried no entities at all, and after this step 0 do;
+    275 entity mentions were found and the per-article count rose on 21 of
+    40. The clearest cases are the un.org French feed (10 -> 25 mentions,
+    gaining NATO, the UN, the Economic Community of West African States) and
+    the GDELT Chinese rows (0 -> 31). The cost of having no entities is
+    specific rather than cosmetic: build_stories() builds a story's canonical
+    entities from the unit's representative article, and a unit with no
+    entities creates a story with empty primary_entities, which build_stories()
+    then skips when matching later units. Such a story is one unit forever, so
+    the corroboration gate (>=2 units, >=2 owners) can never be evaluated for
+    it. Reporting units themselves are not affected -- those cluster by
+    shingle containment on body_text, not by entities -- so the loss is at the
+    story layer and above, which is where the gate lives.
 
-    After this step, on those same 28 rows: 0 with no canonical entity (was
-    23), all 28 sharing at least one canonical entity with an existing story
-    and with an English article, and 2 already past the 0.4 Jaccard attach
-    threshold against today's stories.
+    One honest caveat from that measurement: 31 of the 49 translated dev rows
+    stored MyMemory's rejection string ("QUERY LENGTH LIMIT EXCEEDED...")
+    as their body_text_en, from before the chunk-size fix landed. Extracting
+    over that junk produces ORG "CHARS" / PERSON "MAX" noise, so a share of
+    the "gains" above are noise, not signal. This function faithfully reuses
+    whatever body_text_en holds; it cannot repair a poisoned translation, and
+    it deliberately does not skip those rows silently -- a row with a wrong
+    translation is a data bug to fix at the translation, not here.
 
     So translation without this step bought a translated string and nothing
     else. This runs the same extractor over body_text_en, in the same thread-
