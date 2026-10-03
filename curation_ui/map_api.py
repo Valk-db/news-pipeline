@@ -498,6 +498,9 @@ async def get_map_replay(
     /api/globe/events, so the map's marker rendering is reused verbatim) plus
     window metadata as foreign members. Result count is capped at
     MAP_EVENTS_MAX_LIMIT; see the comment above that constant.
+
+    Like the globe endpoint it excludes every story that is not public, via
+    PUBLIC_STORY_STATUSES inside _event_conditions.
     """
     db_ok, db_msg = check_database_public(request)
     if not db_ok:

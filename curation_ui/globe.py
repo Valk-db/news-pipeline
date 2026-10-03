@@ -58,6 +58,10 @@ async def get_globe_events(
     hours=0 for all time and min_tier1_sources=0 to turn the corroboration filter off.
     tiers (e.g. "1,2") keeps only events whose story has a unit in an included tier.
     limit is clamped to MAP_EVENTS_MAX_LIMIT and the effective cap is reported back.
+
+    Pins belonging to a story that is not public (PENDING, BLOCKED, REJECTED, EXPIRED) are
+    never served: _event_conditions applies PUBLIC_STORY_STATUSES, the same rule
+    /stories/{id} applies, so the map and the story page cannot disagree.
     """
     db_ok, db_msg = check_database_public(request)
     if not db_ok:
