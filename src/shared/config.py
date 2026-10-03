@@ -45,6 +45,43 @@ class Settings(BaseSettings):
     # than for one process: two ingest runs a day share one budget.
     groq_daily_request_budget: int = 900
 
+    # Phase 2 (claim extraction on gate-passed PENDING stories) budget and pacing.
+    #
+    # The cap is in tokens/day because tokens/day is what binds: Groq's free plan
+    # for openai/gpt-oss-20b publishes TPM 8,000 / TPD 200,000 against a 1,000
+    # requests/day, and a measured claim extraction costs 4,962 total tokens at
+    # 10 units (1,790 prompt + 647 completion at the 5-unit setting Phase 2 runs).
+    # 40,000 tokens/day is 20% of the published daily allowance, deliberately a
+    # slice rather than the whole thing: captions, classification and translation
+    # draw on the same free tier, and a cap sized to the provider's limit would
+    # starve them instead of protecting them. At the measured 2,437 tokens per
+    # story that is ~16 stories a day, which covers the daily inflow of gate-passed
+    # stories with room to work the PENDING backlog down. Raise it only with a
+    # measurement of what the other counters actually spent that day.
+    phase2_daily_token_cap: int = 40_000
+
+    # Units folded into one claim-extraction prompt. 5, not the 10 the stage was
+    # originally written with: at 10 units a single call measured 4,962 tokens,
+    # which is 62% of the per-minute token allowance for one story, so a handful
+    # of consecutive stories would trip the TPM limit rather than the daily cap.
+    # At 5 units a call measured 2,437 tokens, so the pacing below keeps a run
+    # inside the 8,000 TPM window on purpose instead of by luck.
+    phase2_units_per_story: int = Field(default=5, ge=2, le=10)
+
+    # Minimum wall-clock gap between two Phase 2 LLM calls. 2,437 tokens per call
+    # against TPM 8,000 allows three calls a minute; 25s allows 2.4, i.e. ~5,850
+    # tokens/minute, which leaves headroom for the counting error in the estimate
+    # above and for a run that shares the key with another job.
+    phase2_min_seconds_between_calls: float = Field(default=25.0, ge=0.0)
+
+    # How long to wait when the provider answers 429/402 with a retry-after, and
+    # how many times to honour it. One retry, never a widening sleep: the daily
+    # cap is the real limiter, and a request that is still throttled after the
+    # window the provider asked for is a story to skip and record, not a run to
+    # fail and not a reason to hold the job open.
+    phase2_retry_after_seconds: float = Field(default=60.0, ge=0.0)
+    phase2_max_rate_limit_retries: int = Field(default=1, ge=0, le=3)
+
     # Tiered ingestion schedules (cron expressions)
     tier1_schedule: str = "0 * * * *"      # Hourly
     tier2_schedule: str = "0 */4 * * *"    # Every 4 hours

@@ -4,12 +4,16 @@ One LLM call per story (not per unit) -- see AGENT_TASKS.md P2-B for why.
 """
 import logging
 import uuid
-from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import Story, Claim, ClaimEvidence, ClaimType, ClaimStance
 from src.verification.stories import _gather_unit_texts_for_story
-from src.shared.analyzer_versions import CLAIM_VERSION, compute_input_hash, hash_text
+from src.shared.analyzer_versions import (
+    CLAIM_VERSION,
+    compute_input_hash,
+    hash_id_set,
+    hash_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +41,78 @@ Return ONLY a JSON object of this exact shape, no explanation, no markdown fence
 }}
 """
 
+# The model's ceiling for one story's claim matrix, and the number of units folded
+# into the prompt. Both are measurements, not preferences: see the call site below.
+# Defaults are 4096 tokens and 5 units, which measured 2,437 total tokens per call
+# against Groq's published 8,000 tokens/minute for this model. The stage was
+# originally written at 10 units and 1,500 tokens, which measured 4,962 tokens per
+# call -- 62% of a minute's allowance for one story, and short enough that the
+# model could answer entirely inside its reasoning.
+CLAIM_MAX_TOKENS = 4096
+CLAIM_MAX_UNITS = 5
 
-async def extract_claims_for_story(session: AsyncSession, story_id: uuid.UUID) -> dict:
+
+def story_input_digest(unit_ids) -> str:
+    """Digest of the evidence a claim matrix for one story was computed from.
+
+    Sorted and de-duplicated (see analyzer_versions.hash_id_set), so the same set of
+    units reads the same however it was assembled and a re-run over unchanged
+    evidence is verifiably a re-run rather than new state.
+    """
+    return hash_id_set(CLAIM_VERSION, unit_ids)
+
+
+def claim_input_hash(story_id, unit_digest: str, claim_text: str) -> str:
+    """The input_hash a claim row carries.
+
+    Three inputs, not one. A claim is not a function of the story alone: it is a
+    reading of the story *as its units stood when the reading was taken*. Hashing
+    (story, claim_text) alone -- which is what this did before -- makes a claim
+    look current after the evidence under it changed, and leaves the caller with
+    no way to ask "has this story been read already?" without a second heuristic.
+    With the unit digest folded in, the stored hash is exactly re-derivable from
+    data the database already holds, which is what src/verification/phase2.py uses
+    to decide whether a story would re-spend.
+
+    Whitespace and case are normalized inside hash_text: the same claim re-worded
+    only in spacing or capitalization is the same claim, and a re-run that returned
+    it slightly differently must not look like new state.
+    """
+    return hash_text(CLAIM_VERSION, story_id, unit_digest, claim_text)
+
+
+async def claims_are_current(
+    session: AsyncSession, story_id: uuid.UUID, unit_digest: str,
+) -> bool:
+    """True when this story already carries a claim matrix for `unit_digest`.
+
+    The pre-spend half of the recomputable-derived-state contract. It re-derives
+    each stored claim's hash from the claim text that is already in the row and
+    compares it, rather than asking "are there any claims?" -- a row count cannot
+    distinguish "read once and unchanged" from "read once against different
+    evidence", and answering the second question wrongly is how a daily job spends
+    the same token budget twice.
+
+    False means the extraction should run: either no claims, or claims whose hash
+    no longer matches the evidence in front of the story.
+    """
+    stmt = select(Claim.text, Claim.input_hash, Claim.analyzer_version).where(
+        Claim.story_id == story_id
+    )
+    rows = (await session.execute(stmt)).all()
+    if not rows:
+        return False
+    for text, stored_hash, version in rows:
+        if version != CLAIM_VERSION:
+            return False
+        if stored_hash != claim_input_hash(story_id, unit_digest, text):
+            return False
+    return True
+
+
+async def extract_claims_for_story(
+    session: AsyncSession, story_id: uuid.UUID, *, max_units: int = CLAIM_MAX_UNITS,
+) -> dict:
     """Extract and persist the claim matrix for one story.
 
     Returns a result dict with counts, matching the shape enrich_story()
@@ -53,7 +127,7 @@ async def extract_claims_for_story(session: AsyncSession, story_id: uuid.UUID) -
         results["errors"].append("Story not found")
         return results
 
-    unit_texts = await _gather_unit_texts_for_story(session, story, max_units=10)
+    unit_texts = await _gather_unit_texts_for_story(session, story, max_units=max_units)
     if len(unit_texts) < 2:
         # Not enough units for a meaningful claim matrix -- same threshold
         # philosophy as cluster_viewpoints, doesn't need to match exactly.
@@ -62,6 +136,10 @@ async def extract_claims_for_story(session: AsyncSession, story_id: uuid.UUID) -
     texts_for_prompt = "\n\n---\n\n".join(
         f"unit_id: {u['unit_id']}\nSource: {u['source_tier']}\n{u['text']}" for u in unit_texts
     )
+    # The evidence this reading is taken against. Folded into every claim's
+    # input_hash so claims_are_current() can tell "already read, unchanged" from
+    # "read against different evidence" without spending anything.
+    unit_digest = story_input_digest(u["unit_id"] for u in unit_texts)
 
     from src.shared.llm import get_llm_client
     llm = await get_llm_client()
@@ -70,12 +148,32 @@ async def extract_claims_for_story(session: AsyncSession, story_id: uuid.UUID) -
         result = await llm.chat_completion(
             messages=[{"role": "user", "content": CLAIM_EXTRACTION_PROMPT.format(texts_for_prompt=texts_for_prompt)}],
             temperature=0.1,
-            max_tokens=1500,
+            # max_tokens and reasoning_effort are one decision, not two. The model
+            # this pipeline is configured against (openai/gpt-oss-20b) spends its
+            # completion budget on its own reasoning first: measured live on
+            # 2026-10-03, max_tokens=1500 with no reasoning_effort returned
+            # finish_reason="length" and, on a second identical call, an EMPTY
+            # message content -- a stage that costs a request and produces nothing.
+            # 4096 with reasoning_effort="low" returned finish_reason="stop" and
+            # complete JSON on every call. Groq rejects the literal "none", so
+            # "low" is the floor available, not "off".
+            max_tokens=CLAIM_MAX_TOKENS,
+            reasoning_effort="low",
         )
+        content = result["choices"][0]["message"]["content"]
+        if not (content or "").strip():
+            # An empty completion is the reasoning-model failure above, and the
+            # bare `except Exception` below would turn it into a silent zero. Say
+            # which of the two it was so the log can be read rather than guessed.
+            results["errors"].append(
+                f"empty completion (finish_reason={result.get('finish_reason')!r}, "
+                f"usage={result.get('usage')})"
+            )
+            return results
         # Use llm._parse_json_response, not raw json.loads -- it strips
         # fenced code blocks. cluster_viewpoints uses raw json.loads and is
         # fragile to this; don't repeat that in new code.
-        data = llm._parse_json_response(result["choices"][0]["message"]["content"])
+        data = llm._parse_json_response(content)
 
         for claim_data in data.get("claims", []):
             claim_text = claim_data["text"]
@@ -88,7 +186,7 @@ async def extract_claims_for_story(session: AsyncSession, story_id: uuid.UUID) -
                 # the same claim, and a re-run that returned it slightly differently must not
                 # look like new state.
                 analyzer_version=CLAIM_VERSION,
-                input_hash=hash_text(CLAIM_VERSION, story_id, claim_text),
+                input_hash=claim_input_hash(story_id, unit_digest, claim_text),
             )
             session.add(claim)
             await session.flush()  # get claim.id before adding evidence rows
@@ -129,35 +227,36 @@ async def extract_claims_for_recent_stories(
     session_factory, hours_back: int = 168, max_stories: int = 100,
 ) -> list[dict]:
     """Batch entry point -- mirrors enrich_recent_stories() in
-    src/enrichment/pipeline.py. Only processes QUEUED stories (see P2-B goal:
-    don't spend budget on stories that never got past the gate)."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+    src/enrichment/pipeline.py.
 
-    # Get recent QUEUED stories - use a temporary session for this query
+    Retargeted for Phase 2 (2026-10-03): the pool used to be QUEUED-only, which
+    on the dev database selected nothing (0 QUEUED stories existed), so claim
+    extraction had never produced a row. PENDING stories have already passed
+    the dynamic gate, so they are safe to spend on. Public exposure is a
+    separate, human-gated decision and is untouched by this change.
+    """
+    from src.verification.phase2 import select_phase2_stories
+
     async with session_factory() as session:
-        stmt = (
-            select(Story)
-            .where(Story.status == Story.Status.QUEUED)
-            .where(Story.created_at >= cutoff)
-            .order_by(Story.created_at.desc())
-            .limit(max_stories)
+        stories = await select_phase2_stories(
+            session, hours_back=hours_back, max_stories=max_stories
         )
-        result = await session.execute(stmt)
-        stories = result.scalars().all()
 
     story_ids = [str(s.id) for s in stories]
 
     if not story_ids:
-        logger.info("No QUEUED stories to extract claims for")
+        logger.info("No gate-passed stories to extract claims for")
         return []
 
-    logger.info(f"Extracting claims for {len(story_ids)} QUEUED stories")
+    logger.info(f"Extracting claims for {len(story_ids)} gate-passed stories")
 
     # Process each story in its own session (like enrich_stories_batch)
     results = []
     for story_id in story_ids:
         async with session_factory() as session:
-            result = await extract_claims_for_story(session, uuid.UUID(story_id))
+            result = await extract_claims_for_story(
+                session, uuid.UUID(story_id), max_units=CLAIM_MAX_UNITS
+            )
             results.append(result)
 
     return results
