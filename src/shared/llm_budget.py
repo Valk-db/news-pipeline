@@ -475,15 +475,10 @@ class RequestBudget:
             return BudgetStatus(used_today=self.daily_limit, limit=self.daily_limit,
                                 remaining=0, exhausted=True)
         return BudgetStatus(
-            used_today=spent_requests,
+            used_today=spent,
             limit=self.daily_limit,
-            remaining=max(0, self.daily_limit - spent_requests),
-            exhausted=requests_exhausted,
-            tokens_used_today=spent_tokens,
-            token_limit=self.token_limit,
-            tokens_remaining=max(0, self.token_limit - spent_tokens),
-            tokens_exhausted=tokens_exhausted,
-            exhausted_unit="tokens" if tokens_exhausted else "requests",
+            remaining=max(0, self.daily_limit - spent),
+            exhausted=spent >= self.daily_limit,
         )
 
     @staticmethod

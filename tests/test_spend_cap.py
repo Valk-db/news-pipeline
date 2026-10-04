@@ -1,0 +1,51 @@
+"""Tests for spend() cap enforcement on the INSERT path.
+
+The _SPEND SQL has a hole: the INSERT path (first spend of the day) does not check
+the cap. The WHERE clause only applies to the UPDATE path (subsequent spends).
+This means a cap of 0 does not refuse the first call, and any cap can be exceeded
+by exactly one request on the first spend of the day.
+
+These tests verify the fix: an early return in spend() when amount > cap.
+"""
+
+import pytest
+from src.shared.budget import spend, used
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_zero_fresh_counter_refuses(budget_counter):
+    """Fresh counter, cap 0, amount 1: must return None, no row created."""
+    result = await spend("test_cap_zero", 1, 0)
+    assert result is None, f"spend with cap 0 should refuse, got {result}"
+    # No row should have been created
+    assert await used("test_cap_zero") == 0
+
+
+@pytest.mark.asyncio
+async def test_spend_amount_exceeds_cap_fresh_counter_refuses(budget_counter):
+    """Fresh counter, cap 3, amount 5: must return None, no row created."""
+    result = await spend("test_cap_exceeded", 5, 3)
+    assert result is None, f"spend with amount > cap should refuse, got {result}"
+    assert await used("test_cap_exceeded") == 0
+
+
+@pytest.mark.asyncio
+async def test_spend_boundary_cap_one_amount_one_succeeds(budget_counter):
+    """Fresh counter, cap 1, amount 1: succeeds, next spend refused."""
+    result = await spend("test_boundary", 1, 1)
+    assert result == 1, f"spend at exactly cap should succeed, got {result}"
+    assert await used("test_boundary") == 1
+
+    # Second spend should be refused
+    result2 = await spend("test_boundary", 1, 1)
+    assert result2 is None, f"second spend over cap should refuse, got {result2}"
+
+
+@pytest.mark.asyncio
+async def test_spend_normal_under_cap_unchanged(budget_counter):
+    """Normal spend under cap works as before."""
+    result = await spend("test_normal", 1, 900)
+    assert result == 1
+    result2 = await spend("test_normal", 1, 900)
+    assert result2 == 2
+    assert await used("test_normal") == 2

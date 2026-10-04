@@ -281,6 +281,14 @@ class LLMClient:
                 "could not record token usage for %s: %s: %s",
                 rung.name, type(exc).__name__, exc,
             )
+            # A swallowed recording failure must not be silent: bump a stat so
+            # operators can see the gap. The call itself succeeded; only the
+            # accounting failed.
+            try:
+                from src.utils.ingest_stats import STATS
+                STATS.record(rung.name, "usage_record_failed")
+            except Exception:
+                pass  # stat recording must not fail the call either
 
     async def _check_token_headroom(self, rung: LLMRung, messages: List[Dict[str, str]],
                                     max_tokens: int) -> None:
@@ -537,9 +545,27 @@ class LLMClient:
             if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
             response = await self.groq_client.chat.completions.create(**kwargs)
-            message = response.choices[0].message
+            # Extract usage BEFORE touching choices[0]. A billed response with
+            # malformed choices (empty list, missing message) still cost tokens;
+            # the usage must survive even if content extraction fails below.
+            # _usage_int rejects non-counts, so malformed readings arrive as
+            # "unknown" and are recorded as unpriced, never as zero.
+            usage = {
+                "prompt_tokens": _usage_int(getattr(response.usage, "prompt_tokens", None)),
+                "completion_tokens": _usage_int(getattr(response.usage, "completion_tokens", None)),
+                "total_tokens": _usage_int(getattr(response.usage, "total_tokens", None)),
+            }
+            try:
+                message = response.choices[0].message
+                content = message.content
+                finish_reason = getattr(response.choices[0], "finish_reason", None)
+            except (IndexError, AttributeError):
+                # Malformed choices: content is unavailable but usage above is
+                # already captured. Return it so the wrapper can record the charge.
+                content = None
+                finish_reason = None
             return {
-                "choices": [{"message": {"content": message.content}}],
+                "choices": [{"message": {"content": content}}],
                 # The provider's own accounting of what the call cost. Callers
                 # that cap a shared daily token allowance cannot measure it any
                 # other way; everything that ignores this key is unaffected.
@@ -547,18 +573,12 @@ class LLMClient:
                 # None, not 0, when the attribute is absent. This used to default to
                 # 0, which is the one value that cannot be allowed through: a zero
                 # asserts the call was free, and a caller that trusts it under-
-                # reports the day while believing it has a cap. `usage_int` rejects
-                # anything that is not a real non-negative count, so a malformed
-                # reading arrives as "unknown" and is recorded as unpriced.
-                "usage": {
-                    "prompt_tokens": _usage_int(getattr(response.usage, "prompt_tokens", None)),
-                    "completion_tokens": _usage_int(getattr(response.usage, "completion_tokens", None)),
-                    "total_tokens": _usage_int(getattr(response.usage, "total_tokens", None)),
-                },
+                # reports the day while believing it has a cap.
+                "usage": usage,
                 # finish_reason is the only thing that distinguishes "the model
                 # answered" from "the model ran out of room", and the difference is
                 # invisible once the content is "".
-                "finish_reason": getattr(response.choices[0], "finish_reason", None),
+                "finish_reason": finish_reason,
             }
 
         # Route through budget + coalescing
@@ -592,18 +612,25 @@ class LLMClient:
             if response_format:
                 kwargs["response_format"] = response_format
             response = await self.cerebras_client.chat.completions.create(**kwargs)
+            # Extract usage before touching choices[0], same as Groq: a billed
+            # response with malformed choices must not lose its charge.
+            usage = {
+                "prompt_tokens": _usage_int(getattr(getattr(response, "usage", None), "prompt_tokens", None)),
+                "completion_tokens": _usage_int(getattr(getattr(response, "usage", None), "completion_tokens", None)),
+                "total_tokens": _usage_int(getattr(getattr(response, "usage", None), "total_tokens", None)),
+            }
+            try:
+                content = response.choices[0].message.content
+            except (IndexError, AttributeError):
+                content = None
             return {
-                "choices": [{"message": {"content": response.choices[0].message.content}}],
+                "choices": [{"message": {"content": content}}],
                 # Same shape as Groq's, and for the same reason: this rung used to
                 # return no usage at all, so its spend was counted in requests only
                 # and its token cost was invisible in the database -- which is the
                 # exact hole this batch exists to close. `usage` may be absent on
                 # the SDK object; that arrives as unpriced, not as zero.
-                "usage": {
-                    "prompt_tokens": _usage_int(getattr(getattr(response, "usage", None), "prompt_tokens", None)),
-                    "completion_tokens": _usage_int(getattr(getattr(response, "usage", None), "completion_tokens", None)),
-                    "total_tokens": _usage_int(getattr(getattr(response, "usage", None), "total_tokens", None)),
-                },
+                "usage": usage,
             }
 
         return await self._budget_for(self._rung("cerebras")).run(_do_cerebras_call, messages, model)
@@ -655,26 +682,34 @@ class LLMClient:
             response = await self._openrouter_http.post("/chat/completions", json=payload)
             response.raise_for_status()
             body = response.json()
+            # Extract usage BEFORE the empty-content check below. A billed 200 with
+            # no content still cost tokens; the usage must survive even if we raise
+            # LLMError for the empty completion.
+            raw_usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+            usage = {
+                "prompt_tokens": _usage_int(raw_usage.get("prompt_tokens")),
+                "completion_tokens": _usage_int(raw_usage.get("completion_tokens")),
+                "total_tokens": _usage_int(raw_usage.get("total_tokens")),
+            }
             content = (body.get("choices") or [{}])[0].get("message", {}).get("content") or ""
             if not content.strip():
                 # A 200 with no content is not a completion, it is a model that spent
                 # the budget on reasoning tokens and said nothing. Treating it as success
                 # would hand the caller an empty caption and hide the rung; the free
                 # reasoning models do this reliably at small max_tokens.
-                raise LLMError(f"{rung.model} returned an empty completion")
+                # Usage was extracted above; attach it to the exception so the
+                # wrapper can record the charge before re-raising.
+                exc = LLMError(f"{rung.model} returned an empty completion")
+                exc._billed_usage = usage
+                raise exc
             # The raw body's own usage, normalised to the same shape the other two
             # transports return, so one reader handles all three. OpenRouter has
             # been observed to send counts as strings, which is why this goes
             # through _usage_int and not an int() cast. Absent usage -> all None ->
             # recorded as unpriced.
-            usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
             return {
                 "choices": [{"message": {"content": content}}],
-                "usage": {
-                    "prompt_tokens": _usage_int(usage.get("prompt_tokens")),
-                    "completion_tokens": _usage_int(usage.get("completion_tokens")),
-                    "total_tokens": _usage_int(usage.get("total_tokens")),
-                },
+                "usage": usage,
             }
 
         return await self._budget_for(rung).run(_do_openrouter_call, messages, rung.model)
@@ -707,6 +742,45 @@ class LLMClient:
             rung, messages,
             max_tokens=max_tokens, temperature=temperature, response_format=response_format,
         )
+
+    async def _dispatch_and_record(
+        self,
+        rung: LLMRung,
+        messages: List[Dict[str, str]],
+        *,
+        max_tokens: int,
+        temperature: float,
+        response_format: Optional[Dict[str, str]] = None,
+        reasoning_effort: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Dispatch to a rung and record its token usage, as one unit.
+
+        The recording happens immediately after dispatch succeeds, before the
+        caller extracts content or validates the response. A malformed response
+        that fails content extraction still billed tokens; those must be
+        recorded. This is the single seam through which every transport call
+        records usage, whether via _walk or direct (preflight).
+
+        If the transport raises after the provider billed the call (e.g., empty
+        choices, empty content), it attaches the usage as exc._billed_usage.
+        The wrapper records it before re-raising, so the charge is not lost.
+        """
+        try:
+            result = await self._dispatch(
+                rung, messages,
+                max_tokens=max_tokens, temperature=temperature,
+                response_format=response_format, reasoning_effort=reasoning_effort,
+            )
+        except BaseException as exc:
+            # Transport failed after billing: record the usage it carried.
+            billed = getattr(exc, "_billed_usage", None)
+            if billed is not None:
+                await self._record_usage(rung, {"usage": billed})
+            raise
+        # Record before anything can fail. extract_total_tokens never raises;
+        # a response with no usable usage is recorded as unknown, not zero.
+        await self._record_usage(rung, result)
+        return result
 
     async def _walk(
         self,
@@ -764,7 +838,7 @@ class LLMClient:
         for rung in rungs:
             try:
                 await self._check_token_headroom(rung, messages, max_tokens)
-                result = await self._dispatch(
+                result = await self._dispatch_and_record(
                     rung, messages,
                     max_tokens=max_tokens, temperature=temperature, response_format=response_format,
                     reasoning_effort=reasoning_effort,
@@ -812,14 +886,21 @@ class LLMClient:
                 continue
 
             content = result["choices"][0]["message"]["content"]
+            if content is None:
+                # Transport returned None content (malformed choices). The charge
+                # was already recorded by _dispatch_and_record. Treat as a failed
+                # rung and fall through; never return None as a success.
+                logger.warning("%s returned no content, falling through", rung.name)
+                self._demote(rung, "empty content")
+                continue
             # The one place a completion is charged for its tokens. It sits after
             # the retry wrapper, so a call that burned three attempts is charged
-            # once for the answer that came back -- which is the provider's own
+            # Once for the answer that came back -- which is the provider's own
             # figure and therefore includes the tokens the failed attempts spent.
-            # It sits BEFORE the caller's `accept`, so a completion the caller then
-            # rejects (a caption that failed the paraphrase check) is still paid
-            # for, which it was: the tokens left the account.
-            await self._record_usage(rung, result)
+            # Recording now happens in _dispatch_and_record, before content
+            # extraction, so a malformed response that fails to parse still
+            # charges the rung. The comment about `accept` still holds: a
+            # completion the caller then rejects was still paid for.
             if accept is None:
                 self._pinned = rung.name
                 return rung.name, content

@@ -17,10 +17,28 @@ OK_RESPONSE = {"choices": [{"message": {"content": "pong"}}]}
 
 
 def _client(groq=None, cerebras=None):
-    """Mock LLMClient exposing the two per-provider entry points the preflight must use."""
+    """Mock LLMClient exposing the dispatch-and-record seam the preflight must use."""
     client = MagicMock()
-    client._chat_completion_groq = groq or AsyncMock(return_value=OK_RESPONSE)
-    client._chat_completion_cerebras = cerebras or AsyncMock(return_value=OK_RESPONSE)
+    groq_mock = groq or AsyncMock(return_value=OK_RESPONSE)
+    cerebras_mock = cerebras or AsyncMock(return_value=OK_RESPONSE)
+    # Keep the per-provider mocks as attributes so tests can assert they were used.
+    client._chat_completion_groq = groq_mock
+    client._chat_completion_cerebras = cerebras_mock
+    # _dispatch_and_record routes by rung.method; mock it to delegate to the
+    # per-provider mocks, preserving the "own transport, no fallback" invariant.
+    # Tests may set _chat_completion_openrouter directly; respect that too.
+    async def fake_dispatch_and_record(rung, messages, **kwargs):
+        if rung.method == "groq":
+            return await groq_mock()
+        if rung.method == "cerebras":
+            return await cerebras_mock()
+        # Openrouter or other methods: use the attribute if the test set it,
+        # else return OK.
+        handler = getattr(client, f"_chat_completion_{rung.method}", None)
+        if handler is not None:
+            return await handler(rung, messages, **kwargs)
+        return OK_RESPONSE
+    client._dispatch_and_record = fake_dispatch_and_record
     # The fallback-aware entry point must never be used to probe a specific provider.
     client.chat_completion = AsyncMock(return_value=OK_RESPONSE)
     return client

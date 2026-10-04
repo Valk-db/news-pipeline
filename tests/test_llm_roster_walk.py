@@ -376,11 +376,18 @@ class TestPreflightVisibility:
         from src.shared.llm_preflight import run_llm_preflight
 
         client = MagicMock()
-        client._chat_completion_groq = AsyncMock()
-        client._chat_completion_cerebras = AsyncMock()
-        client._chat_completion_openrouter = AsyncMock(
+        openrouter_mock = AsyncMock(
             return_value={"choices": [{"message": {"content": "pong"}}]}
         )
+        client._chat_completion_openrouter = openrouter_mock
+        # _dispatch_and_record routes by rung.method; delegate to per-method mocks.
+        async def fake_dispatch_and_record(rung, messages, **kwargs):
+            if rung.method == "groq":
+                return await AsyncMock()()
+            if rung.method == "cerebras":
+                return await AsyncMock()()
+            return await openrouter_mock(rung, messages, **kwargs)
+        client._dispatch_and_record = fake_dispatch_and_record
         client.chat_completion = AsyncMock()
         settings = MagicMock(
             groq_api_key="", cerebras_api_key="", groq_model="", cerebras_model="",
@@ -403,11 +410,17 @@ class TestPreflightVisibility:
         from src.shared.llm_preflight import run_llm_preflight
 
         client = MagicMock()
-        client._chat_completion_groq = AsyncMock(
+        groq_mock = AsyncMock(
             return_value={"choices": [{"message": {"content": "pong"}}]}
         )
-        client._chat_completion_cerebras = AsyncMock()
-        client._chat_completion_openrouter = AsyncMock(side_effect=Exception("Error code: 401"))
+        openrouter_mock = AsyncMock(side_effect=Exception("Error code: 401"))
+        async def fake_dispatch_and_record(rung, messages, **kwargs):
+            if rung.method == "groq":
+                return await groq_mock()
+            if rung.method == "cerebras":
+                return await AsyncMock()()
+            return await openrouter_mock(rung, messages, **kwargs)
+        client._dispatch_and_record = fake_dispatch_and_record
         settings = MagicMock(
             groq_api_key="gsk_test", cerebras_api_key="", groq_model="m", cerebras_model="",
             openrouter_api_key="sk-or-test", openrouter_gemma_model="",

@@ -25,7 +25,6 @@ from src.shared.llm_roster import (
     LLMRung,
     check_free_model_roster,
     configured_rungs,
-    model_for,
 )
 
 # The prompt matters more than the budget, and the live free tier is what proved it.
@@ -81,16 +80,9 @@ async def _probe(call: Callable[[], Awaitable[Any]]) -> dict:
 def _probe_call(client, settings, rung: LLMRung) -> Callable[[], Awaitable[Any]]:
     """The one call that exercises exactly this rung, with no fallback behind it."""
     max_tokens = _PING_MAX_TOKENS.get(rung.method, _PING_MAX_TOKENS_DEFAULT)
-    model = model_for(rung, settings)
-    if rung.method == "groq":
-        return lambda: client._chat_completion_groq(
-            model, _PING, max_tokens=max_tokens, temperature=0
-        )
-    if rung.method == "cerebras":
-        return lambda: client._chat_completion_cerebras(
-            model, _PING, max_tokens=max_tokens, temperature=0
-        )
-    return lambda: client._chat_completion_openrouter(
+    # Route through _dispatch_and_record so the probe's tokens are charged to
+    # the rung's budget, exactly once, via the same seam as normal traffic.
+    return lambda: client._dispatch_and_record(
         rung, _PING, max_tokens=max_tokens, temperature=0
     )
 

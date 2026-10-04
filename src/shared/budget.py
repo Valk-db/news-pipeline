@@ -391,6 +391,14 @@ async def spend(name: str, amount: int, cap: int, *, day: date | None = None) ->
     retrying or hiding it converts a bug that would take one run to diagnose into a
     condition that reads as a healthy exhausted budget forever.
     """
+    # The _SPEND SQL only enforces the cap on the UPDATE path (existing row). The INSERT
+    # path (first spend of the day) has no WHERE clause, so without this guard a cap of 0
+    # would not refuse the first call, and any cap could be exceeded by exactly one request.
+    # This guard closes that hole. It is safe for all callers: TokenBudget.record uses
+    # _NO_GATE (2**62) which no real amount can exceed, and RequestBudget._counted uses the
+    # real daily_limit where amount=1.
+    if amount > cap:
+        return None
     engine = _get_engine()
     if engine is None:
         logger.warning("budget %s: no database engine, treating %s as spent", name, amount)
