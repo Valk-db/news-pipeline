@@ -378,13 +378,38 @@ class TestPostgresDialect:
         assert types["cap"].__class__ is BigInteger
         assert types["day"].__class__ is Date
 
-    def test_the_statement_does_not_use_the_broken_select_form(self):
-        """`INSERT .. SELECT :amount WHERE :amount <= :cap` does not parse on Postgres and
-        is the form a sibling branch shipped. Guard the regression by name so the next
-        person to try it finds this instead of production."""
-        sql = " ".join(str(_SPEND).split()).upper()
-        assert "VALUES (" in sql, "the VALUES form is the one that runs on both dialects"
-        assert "SELECT :AMOUNT" not in sql
+    def test_spend_binds_carry_bigint_casts_for_asyncpg(self):
+        """Every use of :amount and :cap must render with ::BIGINT under asyncpg.
+
+        The untyped SELECT form failed on Postgres with "inconsistent types deduced".
+        Typed binds (BigInteger) fix it. This test compiles with the asyncpg dialect
+        and requires the cast on every parameter use, so a regression to untyped
+        binds is caught before it reaches Postgres.
+        """
+        import re
+        from sqlalchemy.dialects.postgresql import asyncpg
+        compiled = _SPEND.compile(dialect=asyncpg.dialect())
+        sql = str(compiled)
+        # Find the positional numbers for amount and cap from the compiled
+        # statement, so the test does not hardcode parameter order.
+        positions = {name: i + 1 for i, name in enumerate(compiled.positiontup)}
+        assert "amount" in positions, f"amount not in statement: {sql}"
+        assert "cap" in positions, f"cap not in statement: {sql}"
+        amount_pos = positions["amount"]
+        cap_pos = positions["cap"]
+        # Vacuity guard: the casts must actually appear, so a rewrite that
+        # drops the parameters cannot pass vacuously.
+        assert f"${amount_pos}::BIGINT" in sql, f"amount cast missing: {sql}"
+        assert f"${cap_pos}::BIGINT" in sql, f"cap cast missing: {sql}"
+        # No use of amount or cap may appear without a ::BIGINT cast.
+        # A bare parameter means a typed bind was lost, and Postgres will fail
+        # with "inconsistent types deduced".
+        assert not re.search(rf"\${amount_pos}(?!::BIGINT)", sql), (
+            f"amount missing BIGINT cast: {sql}"
+        )
+        assert not re.search(rf"\${cap_pos}(?!::BIGINT)", sql), (
+            f"cap missing BIGINT cast: {sql}"
+        )
 
     def test_used_statement_types_its_day_parameter(self):
         day_bind = _USED.compile(dialect=postgresql.dialect()).binds["day"]
