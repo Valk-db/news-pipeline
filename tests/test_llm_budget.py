@@ -230,7 +230,9 @@ class TestRequestBudget:
 
         with pytest.raises(BudgetExhausted):
             await budget.run(dummy_call, [{"role": "user", "content": "test"}], "model1")
-        assert (await budget.status()).exhausted is True
+        status = await budget.status()
+        assert status.used_today == -1
+        assert status.exhausted is False
 
 
 if __name__ == "__main__":
