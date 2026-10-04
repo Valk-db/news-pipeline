@@ -38,3 +38,32 @@ async def test_status_does_not_claim_exhausted_when_unreadable(monkeypatch):
     status = await budget.status()
     assert status.used_today == -1
     assert status.exhausted is False
+
+
+async def test_used_propagates_programming_error(monkeypatch):
+    """used() must let ProgrammingError propagate, not swallow it as unreadable.
+    
+    A broken SQL statement is a defect, not an exhausted budget. This test uses
+    a fake engine whose connect() raises ProgrammingError, which proves the
+    except clauses work. It does NOT prove that Postgres raises ProgrammingError
+    for a bad _USED statement; that is a database behavior, not a code behavior.
+    """
+    from sqlalchemy.exc import ProgrammingError
+    import src.shared.budget as budget_module
+    
+    class FakeConn:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def execute(self, *args, **kwargs):
+            raise ProgrammingError("fake", {}, Exception("bad statement"))
+    
+    class FakeEngine:
+        def connect(self):
+            raise ProgrammingError("fake", {}, Exception("connection failed"))
+    
+    monkeypatch.setattr(budget_module, "_get_engine", lambda: FakeEngine())
+    
+    with pytest.raises(ProgrammingError):
+        await budget_module.used("test_counter")
