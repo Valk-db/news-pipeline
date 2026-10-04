@@ -435,6 +435,14 @@ async def used(name: str, *, day: date | None = None) -> int | None:
     try:
         async with engine.connect() as conn:
             row = (await conn.execute(_USED, {"name": name, "day": day or today()})).first()
+    except ProgrammingError:
+        logger.error(
+            "budget %s: the used statement was rejected by the server. This is a "
+            "defect, not an unreadable budget, and it is raised rather than reported as "
+            "'unreadable'.",
+            name,
+        )
+        raise
     except Exception as exc:
         logger.warning("budget %s unreadable: %s", name, type(exc).__name__)
         return None
