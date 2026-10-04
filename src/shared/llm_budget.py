@@ -92,9 +92,12 @@ class BudgetStatus:
 class BudgetExhausted(Exception):
     def __init__(self, status: BudgetStatus, name: str = GROQ_REQUESTS,
                  message: str | None = None):
-        super().__init__(
-            message or f"{name} daily budget exhausted: {status.used_today}/{status.limit}"
-        )
+        if message is None:
+            if status.used_today == -1:
+                message = f"{name} daily budget unreadable: cannot verify spend, refusing"
+            else:
+                message = f"{name} daily budget exhausted: {status.used_today}/{status.limit}"
+        super().__init__(message)
         self.status = status
         self.name = name
 
