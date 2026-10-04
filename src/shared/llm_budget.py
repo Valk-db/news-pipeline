@@ -457,8 +457,10 @@ class RequestBudget:
         try:
             spent = await used(self.name)
         except Exception:
-            # If the read itself raises, do not let a database exception escape
-            # where the caller expects BudgetExhausted. The caller (run) does
+            # used() raises ProgrammingError for a broken statement (fail loudly),
+            # and returns None for an unreadable counter. If the read itself raises,
+            # do not let a database exception escape where the caller expects
+            # BudgetExhausted. The caller (run) does
             # `raise BudgetExhausted(await self.status())` after spend() returns
             # None; a raise here would give the walk a database exception instead
             # of BudgetExhausted, and the wrong stat key.
