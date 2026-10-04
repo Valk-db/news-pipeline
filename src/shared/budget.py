@@ -89,9 +89,15 @@ OPENROUTER_NEMOTRON_REQUESTS = "openrouter_nemotron_requests"
 # lands in a row nobody reads. Deriving both from the same string makes that
 # impossible to write by accident. `groq_requests` -> `groq_tokens`.
 def token_counter_name(request_counter: str) -> str:
-    """The token-denominated counterpart of a request counter's row name."""
-    return (request_counter[:-len("_requests")] if request_counter.endswith("_requests")
-            else request_counter) + "_tokens"
+    """The token-denominated counterpart of a request counter's row name.
+    
+    "groq_requests" -> "groq_request_tokens" (keeps singular "request" to match
+    the explicit GROQ_REQUEST_TOKENS constant).
+    """
+    if request_counter.endswith("_requests"):
+        # Remove just the trailing 's': "groq_requests" -> "groq_request" + "_tokens"
+        return request_counter[:-1] + "_tokens"
+    return request_counter + "_tokens"
 
 
 def unpriced_calls_counter_name(token_counter: str) -> str:
@@ -150,6 +156,8 @@ GROQ_PHASE2_TOKENS = "groq_phase2_tokens"
 # Explicit names for the Groq pairs (documented in AGENTS.md).
 GROQ_REQUEST_TOKENS = "groq_request_tokens"
 GROQ_TRANSLATION_TOKENS = "groq_translation_tokens"
+# Backwards compatibility alias: HEAD's code used GROQ_TOKENS for the request token counter.
+GROQ_TOKENS = GROQ_REQUEST_TOKENS
 
 # Derived names for the newer rungs via token_counter_name() above.
 CEREBRAS_TOKENS = token_counter_name(CEREBRAS_REQUESTS)
@@ -306,8 +314,7 @@ def counter_cap(spec: CounterSpec) -> int:
 
 _SPEND = text(
     """
-    INSERT INTO budget_counters (name, day, used)
-    SELECT :name, :day, :amount WHERE :amount <= :cap
+    INSERT INTO budget_counters (name, day, used) VALUES (:name, :day, :amount)
     ON CONFLICT (name, day) DO UPDATE
         SET used = budget_counters.used + :amount
         WHERE budget_counters.used + :amount <= :cap

@@ -440,11 +440,32 @@ class RequestBudget:
     """
 
     def __init__(self, daily_limit: int, name: str = GROQ_REQUESTS,
-                 minute_limiter: MinuteLimiter | None = None):
+                 minute_limiter: MinuteLimiter | None = None,
+                 token_limit: int | None = None):
         self.daily_limit = daily_limit
         self.name = name
         self.minute_limiter = minute_limiter
         self._inflight: dict[str, "asyncio.Future"] = {}
+        # token_limit for backwards compatibility with vm-main's API.
+        # HEAD's architecture uses separate TokenBudget, but vm-main's tests
+        # construct RequestBudget with token_limit directly.
+        self.token_limit = token_limit if token_limit is not None else 0
+
+    async def token_headroom(self) -> int:
+        """Tokens left in today's allowance, or 0 when the counter is unreadable."""
+        from src.shared.budget import GROQ_REQUEST_TOKENS
+        spent = await used(GROQ_REQUEST_TOKENS)
+        if spent is None:
+            return 0
+        return max(0, self.token_limit - spent)
+
+    async def record_tokens(self, total_tokens: int | None) -> int:
+        """Charge the provider's reported usage against the day's token allowance."""
+        from src.shared.budget import GROQ_REQUEST_TOKENS, record
+        if total_tokens is None:
+            total_tokens = 1  # Charge 1 for unpriced calls (conservative)
+        await record(GROQ_REQUEST_TOKENS, total_tokens)
+        return total_tokens
 
     async def status(self) -> BudgetStatus:
         spent = await used(self.name)

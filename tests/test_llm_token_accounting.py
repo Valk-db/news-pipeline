@@ -479,14 +479,14 @@ class TestWhatDidTheRosterCostToday:
         """Derived, so a rung cannot acquire two names for the same spend, and two rungs
         cannot collide on one row."""
         names = [llm_budget.token_counter_name(r.budget_name) for r in ROSTER]
-        assert names == [GROQ_TOKENS, "openrouter_gemma_tokens",
-                         "openrouter_nemotron_tokens", CEREBRAS_TOKENS]
+        assert names == [GROQ_TOKENS, "openrouter_gemma_request_tokens",
+                         "openrouter_nemotron_request_tokens", CEREBRAS_TOKENS]
         assert len(set(names)) == len(names)
-        assert unpriced_calls_counter_name(GROQ_TOKENS) == "groq_unpriced_calls"
+        assert unpriced_calls_counter_name(GROQ_TOKENS) == "groq_request_unpriced_calls"
 
         budget = TokenBudget(GROQ_REQUESTS, 1000)
         assert (budget.name, budget.request_counter, budget.unpriced_name) == (
-            GROQ_TOKENS, GROQ_REQUESTS, "groq_unpriced_calls",
+            GROQ_TOKENS, GROQ_REQUESTS, "groq_request_unpriced_calls",
         )
 
 
