@@ -305,6 +305,12 @@ class LLMClient:
         provider noticing, and a 429 on a shared free pool takes the whole roster
         down with it.
         """
+        # Note: empty daily_token_cap_attr means "not token-gated" (skips the check).
+        # This contradicts the _token_budget_for docstring which says a missing cap
+        # means "refuse everything". test_roster_attr_consistency.py forbids empty
+        # for every ROSTER rung, so this path cannot fire for a real rung today.
+        # If the guard is removed, empty falls through to _token_budget_for which
+        # creates a budget with cap 0, and ensure_headroom raises TokenBudgetExhausted.
         if not rung.daily_token_cap_attr:
             return
         await self._token_budget_for(rung).ensure_headroom(
