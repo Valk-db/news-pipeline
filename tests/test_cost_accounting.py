@@ -488,29 +488,69 @@ class TestDispatchAndRecordSeam:
         assert await used(GROQ_REQUEST_TOKENS) == 2_437
 
     async def test_failed_rung_charges_before_fallthrough(self, budget_counter):
-        """When rung A returns a bad response and _walk falls to rung B, both rungs'
-        usage must be recorded. The seam records A's usage before _walk extracts
-        content and decides to fall through.
+        """When rung A returns malformed content and _walk falls to rung B, both
+        rungs' usage must be recorded exactly once.
+
+        Protects: the seam records A's usage before _walk extracts content and
+        decides to fall through. Without the seam ordering, A's charge would be
+        lost when content extraction fails.
         """
-        # This test verifies the seam's ordering guarantee at the unit level:
-        # _dispatch_and_record records even when the result would fail content
-        # extraction. The full walk-fallthrough path is covered by the malformed
-        # test above combined with the existing walk tests.
-        from src.shared.llm_roster import ROSTER
-        rung = next(r for r in ROSTER if r.name == "groq")
+        from types import SimpleNamespace
+        from src.shared.budget import GROQ_REQUEST_TOKENS, CEREBRAS_TOKENS
 
-        client = make_client(ReplayedTransport([]))
-        bad_result = {
-            "choices": [],  # malformed: no content to extract
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-        }
-        async def fake_dispatch(*args, **kwargs):
-            return bad_result
-        client._dispatch = fake_dispatch
+        # Rung A (groq): malformed (empty choices) but with usage billed
+        class MalformedTransport:
+            def __init__(self):
+                self.calls = []
+                outer = self
+                class _Completions:
+                    async def create(self, **kwargs):
+                        outer.calls.append(kwargs)
+                        return SimpleNamespace(
+                            choices=[],  # malformed: no content
+                            usage=SimpleNamespace(
+                                prompt_tokens=10, completion_tokens=5, total_tokens=15
+                            ),
+                        )
+                self.chat = SimpleNamespace(completions=_Completions())
 
-        await client._dispatch_and_record(rung, MESSAGES, max_tokens=100, temperature=0)
-        # The 15 tokens were recorded despite the malformed choices
-        assert await used(GROQ_REQUEST_TOKENS) == 15
+        # Rung B (cerebras): succeeds
+        class GoodTransport:
+            def __init__(self):
+                self.calls = []
+                outer = self
+                class _Completions:
+                    async def create(self, **kwargs):
+                        outer.calls.append(kwargs)
+                        return SimpleNamespace(
+                            choices=[SimpleNamespace(
+                                message=SimpleNamespace(content="from cerebras", reasoning=None),
+                                finish_reason="stop",
+                            )],
+                            usage=SimpleNamespace(
+                                prompt_tokens=20, completion_tokens=10, total_tokens=30
+                            ),
+                        )
+                self.chat = SimpleNamespace(completions=_Completions())
+
+        groq_transport = MalformedTransport()
+        cerebras_transport = GoodTransport()
+
+        client = make_client(groq_transport)
+        # Wire cerebras as rung B
+        client.cerebras_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=cerebras_transport.chat.completions)
+        )
+        # Ensure cerebras has an API key so the rung is not skipped
+        client.settings.cerebras_api_key = "test-key"
+
+        result = await client.chat_completion(MESSAGES, max_tokens=100)
+
+        # Rung B succeeded
+        assert cerebras_transport.calls != []
+        # Both rungs were charged exactly once
+        assert await used(GROQ_REQUEST_TOKENS) == 15, "rung A usage lost"
+        assert await used(CEREBRAS_TOKENS) == 30, "rung B usage not recorded"
 
     async def test_failing_probe_does_not_demote(self, budget_counter):
         """A probe that fails (e.g., 401) must not demote the rung or trip
