@@ -582,3 +582,33 @@ class TestDispatchAndRecordSeam:
         with pytest.raises(RuntimeError, match="transport exploded"):
             await client._dispatch_and_record(rung, MESSAGES, max_tokens=100, temperature=0)
         assert await used(GROQ_REQUEST_TOKENS) == 0
+    async def test_recording_failure_does_not_fail_the_call(self, budget_counter, monkeypatch):
+        """If token accounting fails, the provider result is still returned.
+
+        Protects: a database hiccup during usage recording must not turn a
+        successful provider call into an error. The failure is logged and
+        counted in the usage_record_failed stat; the caller gets their answer.
+        """
+        from src.shared import llm_budget as budget_module
+        from src.utils.ingest_stats import STATS
+
+        async def failing_record(self, total_tokens):
+            raise ConnectionError("database is down")
+
+        monkeypatch.setattr(budget_module.TokenBudget, "record", failing_record)
+
+        transport = ReplayedTransport([("hello", GROQ_USAGE, "stop")])
+        client = make_client(transport)
+
+        snapshot_before = STATS.snapshot()
+        failed_before = snapshot_before.get("groq.usage_record_failed", 0)
+
+        # Must not raise; the provider result is returned despite record failing.
+        result = await client.chat_completion(MESSAGES, max_tokens=100)
+        assert result["choices"][0]["message"]["content"] == "hello"
+
+        snapshot_after = STATS.snapshot()
+        failed_after = snapshot_after.get("groq.usage_record_failed", 0)
+        assert failed_after - failed_before == 1, (
+            f"usage_record_failed delta should be exactly 1, got {failed_after - failed_before}"
+        )
