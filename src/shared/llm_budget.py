@@ -468,12 +468,22 @@ class RequestBudget:
         return total_tokens
 
     async def status(self) -> BudgetStatus:
-        spent = await used(self.name)
+        try:
+            spent = await used(self.name)
+        except Exception:
+            # If the read itself raises, do not let a database exception escape
+            # where the caller expects BudgetExhausted. The caller (run) does
+            # `raise BudgetExhausted(await self.status())` after spend() returns
+            # None; a raise here would give the walk a database exception instead
+            # of BudgetExhausted, and the wrong stat key.
+            spent = None
         if spent is None:
-            # Unreadable is not unspent. Report the cap as reached so the caller's next
-            # move is the same as for a spent budget.
-            return BudgetStatus(used_today=self.daily_limit, limit=self.daily_limit,
-                                remaining=0, exhausted=True)
+            # Unreadable is not exhausted. Report -1 (unknown), following the
+            # spent_today convention, so the message cannot be read as a measured
+            # spend. The refusal was already decided by spend(); this status is
+            # informational only.
+            return BudgetStatus(used_today=-1, limit=self.daily_limit,
+                                remaining=0, exhausted=False)
         return BudgetStatus(
             used_today=spent,
             limit=self.daily_limit,
