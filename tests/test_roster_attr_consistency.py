@@ -19,6 +19,14 @@ def test_every_rung_cap_attr_is_a_real_settings_field():
     errors = []
 
     for rung in ROSTER:
+        # daily_token_cap_attr must be non-empty: empty skips the token check
+        # entirely (llm.py:308), contradicting the documented requirement that
+        # a missing token cap must not let calls through.
+        if not rung.daily_token_cap_attr:
+            errors.append(
+                f"rung {rung.name!r}: daily_token_cap_attr is empty; "
+                f"empty skips the token check, which is not allowed"
+            )
         for attr_name in (
             rung.daily_cap_attr,
             rung.daily_token_cap_attr,
