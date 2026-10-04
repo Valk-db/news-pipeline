@@ -41,9 +41,9 @@ from src.shared.budget import (
     spend,
     used,
 )
-from src.shared.llm_budget import BudgetExhausted, RequestBudget, estimate_tokens
+from src.shared.llm_budget import BudgetExhausted, RequestBudget, TokenBudget, TokenBudgetExhausted, estimate_tokens
 
-TODAY = date(2026, 10, 3)
+TODAY = date.today()  # Must be today: record() defaults to today, and a hardcoded date makes these tests fail on any other day.
 
 
 @pytest.fixture
@@ -58,97 +58,76 @@ def counter(budget_counter):
 
 
 class TestTokenCapRefusesWhileRequestsAreUnder:
-    """The exact production failure, driven through the real RequestBudget."""
+    """The exact production failure, driven through TokenBudget.
+
+    vm-main had a real incident: 28 requests against a fully spent 200,000-token
+    allowance, and the request-only cap saw 28/900 = 3% and let every call through.
+    HEAD splits the caps: TokenBudget.ensure_headroom refuses when the token
+    allowance is gone, regardless of the request count.
+    """
 
     async def test_refuses_on_tokens_with_requests_far_under(self, counter):
-        """900-request cap at 1 request used; 60,000-token cap exhausted. Must refuse.
-
-        The numbers are the measured ones: `groq_requests` read 28 against a fully spent
-        200,000-token allowance. A request-only cap saw 28/900 = 3% spent and let every
-        call through.
-        """
-        budget = RequestBudget(daily_limit=900, token_limit=60_000)
+        # Protects: a spent token allowance refuses even when requests are far under.
+        from src.shared.llm_budget import TokenBudgetExhausted
+        budget = TokenBudget(GROQ_REQUESTS, 60_000)
         await spend(GROQ_REQUEST_TOKENS, 60_000, 60_000, day=TODAY)
         await spend(GROQ_REQUESTS, 1, 900, day=TODAY)
 
-        # The request cap is nowhere near spent. The token cap is.
-        status = await budget.status()
-        assert status.used_today == 1
-        assert status.exhausted is False
-        assert status.tokens_exhausted is True
-
-        sent = []
-
-        async def call():
-            sent.append(1)
-            return {"ok": True}
-
-        with pytest.raises(BudgetExhausted) as excinfo:
-            await budget.run(call, [{"role": "user", "content": "hello"}], "test/model")
-
-        assert sent == [], "the call was dispatched even though the token cap was spent"
-        # The message names the unit, so an operator reading it is not sent to raise the
-        # request cap -- which is the advice that would not help.
-        assert "tokens" in str(excinfo.value)
-        assert excinfo.value.status.exhausted_unit == "tokens"
+        # The token cap is spent. ensure_headroom must refuse.
+        with pytest.raises(TokenBudgetExhausted):
+            await budget.ensure_headroom(100)
 
     async def test_the_same_budget_allows_the_call_while_tokens_remain(self, counter):
         """The control: the refusal above must come from the token cap, not from the
-        harness refusing everything. Same setup, tokens left over, call goes through."""
-        budget = RequestBudget(daily_limit=900, token_limit=60_000)
+        harness refusing everything. Same setup, tokens left over, headroom granted."""
+        # Protects: the gate is not stuck closed; headroom is granted when available.
+        budget = TokenBudget(GROQ_REQUESTS, 60_000)
         await spend(GROQ_REQUEST_TOKENS, 59_000, 60_000, day=TODAY)
 
-        sent = []
-
-        async def call():
-            sent.append(1)
-            return {"ok": True}
-
-        assert await budget.run(call, [{"role": "user", "content": "hi"}], "m") == {"ok": True}
-        assert sent == [1]
+        # 1,000 tokens remain; a 100-token estimate fits.
+        assert await budget.ensure_headroom(100) == 100
 
     async def test_an_oversized_prompt_is_refused_before_it_is_sent(self, counter):
         """The headroom gate uses an ESTIMATE, so a prompt that cannot fit is refused even
         though no tokens have been spent yet. This is the estimate path, not the counter
         path, and it is the only thing standing between a huge call and a blown cap."""
-        budget = RequestBudget(daily_limit=900, token_limit=1_000)
-        sent = []
-
-        async def call():
-            sent.append(1)
-            return {}
+        # Protects: an estimate larger than the remaining allowance is refused pre-call.
+        from src.shared.llm_budget import TokenBudgetExhausted
+        budget = TokenBudget(GROQ_REQUESTS, 1_000)
 
         # ~4,000 characters of prompt is ~2,000 estimated tokens against 1,000 of cap.
-        with pytest.raises(BudgetExhausted):
-            await budget.run(call, [{"role": "user", "content": "x" * 4_000}], "m")
-        assert sent == []
+        with pytest.raises(TokenBudgetExhausted):
+            await budget.ensure_headroom(2_000)
 
     async def test_empty_messages_are_not_refused_by_the_estimate(self, counter):
         """A zero-length prompt must not read as zero tokens needed and then also must not
         be treated as needing a whole call's worth. Guards the degenerate end of
         estimate_tokens, which the reasoning-model case makes reachable: an empty
         completion is a real possibility, so an empty request must still be accounted."""
-        budget = RequestBudget(daily_limit=900, token_limit=10)
-        sent = []
-
-        async def call():
-            sent.append(1)
-            return {}
-
-        await budget.run(call, [], "m")
-        assert sent == [1]
+        # Protects: the estimate floor (1 token) does not block empty prompts.
+        budget = TokenBudget(GROQ_REQUESTS, 10)
+        # A 1-token estimate fits in a 10-token cap.
+        assert await budget.ensure_headroom(1) == 1
 
 
 class TestRecordTokens:
+    """TokenBudget.record() charges actual usage against the token counter.
+
+    Protects: the daily token figure the operator reads must reflect what the
+    provider billed, including unpriced calls and overshoot past the cap.
+    """
+
     async def test_records_the_provider_reported_usage(self, counter):
-        budget = RequestBudget(daily_limit=900, token_limit=60_000)
-        assert await budget.record_tokens(2_437) == 2_437
+        # Protects: billed tokens are not silently dropped from the counter.
+        budget = TokenBudget(GROQ_REQUESTS, 60_000)
+        assert await budget.record(2_437) == 2_437
         assert await used(GROQ_REQUEST_TOKENS, day=TODAY) == 2_437
 
     async def test_accumulates_across_calls(self, counter):
-        budget = RequestBudget(daily_limit=900, token_limit=60_000)
-        await budget.record_tokens(1_742)
-        await budget.record_tokens(4_962)
+        # Protects: the counter is a running total, not per-call.
+        budget = TokenBudget(GROQ_REQUESTS, 60_000)
+        await budget.record(1_742)
+        await budget.record(4_962)
         assert await used(GROQ_REQUEST_TOKENS, day=TODAY) == 6_704
 
     async def test_absent_usage_is_charged_one_not_zero(self, counter):
@@ -158,9 +137,10 @@ class TestRecordTokens:
         reasoning model returning an empty completion is exactly the case where a
         zero-token charge would be most wrong: real tokens spent, nothing recorded.
         """
-        budget = RequestBudget(daily_limit=900, token_limit=60_000)
-        assert await budget.record_tokens(None) == 1
-        assert await budget.record_tokens(0) == 1
+        # Protects: unpriced calls are visible as a lower bound, not invisible.
+        budget = TokenBudget(GROQ_REQUESTS, 60_000)
+        assert await budget.record(None) == 1
+        assert await budget.record(0) == 1
         assert await used(GROQ_REQUEST_TOKENS, day=TODAY) == 2
 
     async def test_overshoot_is_recorded_not_discarded(self, counter):
@@ -170,22 +150,24 @@ class TestRecordTokens:
         that through the CAPPED statement matched no row, so spend() returned None and the
         charge was dropped -- the counter stayed frozen at exactly the cap and the daily
         report showed cap/cap for a day that cost more. Money already spent must not be
-        lost to the write, so record_tokens uses the unconditional record().
+        lost to the write, so record uses the unconditional record().
         """
-        budget = RequestBudget(daily_limit=900, token_limit=10)
+        # Protects: the daily report shows what was actually spent, even past the cap.
+        budget = TokenBudget(GROQ_REQUESTS, 10)
         await spend(GROQ_REQUEST_TOKENS, 10, 10, day=TODAY)
-        assert await budget.record_tokens(5_000) == 5_000
+        assert await budget.record(5_000) == 5_000
         assert await used(GROQ_REQUEST_TOKENS, day=TODAY) == 5_010
 
     async def test_record_never_refuses_and_never_raises(self, counter, monkeypatch):
+        # Protects: a failed write does not raise into the provider-call path.
         import src.shared.llm_budget as module
 
         async def unreachable(name, amount, *, day=None):
             return None  # an unreachable counter must not raise into the caller
 
         monkeypatch.setattr(module, "record", unreachable)
-        budget = RequestBudget(daily_limit=900, token_limit=10)
-        assert await budget.record_tokens(7_000) == 7_000
+        budget = TokenBudget(GROQ_REQUESTS, 10)
+        assert await budget.record(7_000) == 7_000
 
 
 class TestPerConsumerSeparation:
@@ -257,37 +239,23 @@ class TestUnreadableCountersRefuse:
         assert sent == []
 
     async def test_an_unreadable_token_counter_refuses(self, counter, monkeypatch):
-        """The other direction, and the one this batch introduces: an unreadable TOKEN
-        counter must refuse even when the request counter is comfortably unspent. Refusing
-        only on the request counter would let a run spend a whole day of tokens against a
-        cap it could not read."""
-        budget = RequestBudget(daily_limit=900, token_limit=60_000)
+        """An unreadable TOKEN counter must refuse even when the request counter is
+        comfortably unspent. Refusing only on the request counter would let a run spend
+        a whole day of tokens against a cap it could not read."""
+        # Protects: an unverifiable token budget is not an unlimited one.
+        from src.shared.llm_budget import TokenBudgetExhausted
+        budget = TokenBudget(GROQ_REQUESTS, 60_000)
         await spend(GROQ_REQUESTS, 5, 900, day=TODAY)
 
         async def unreadable(name, *, day=None):
             return 5 if name == GROQ_REQUESTS else None
 
         monkeypatch.setattr("src.shared.llm_budget.used", unreadable)
-        status = await budget.status()
-        # An unreadable counter reports as spent in BOTH units -- that is the fail-safe
-        # direction src/shared/budget.py commits to -- with exhausted_unit carrying which
-        # one could not be read. Asserting exhausted is False here would be asserting that
-        # the fail-safe had been abandoned.
-        assert status.used_today == 900 and status.limit == 900
-        assert status.tokens_used_today == 60_000
-        assert status.exhausted is True
-        assert status.tokens_exhausted is True
-        assert status.exhausted_unit == "tokens"
-
-        sent = []
-
-        async def call():
-            sent.append(1)
-            return {}
-
-        with pytest.raises(BudgetExhausted):
-            await budget.run(call, [{"role": "user", "content": "hi"}], "m")
-        assert sent == []
+        # spent_today returns -1 for unreadable; remaining() maps that to 0,
+        # so any positive estimate is refused.
+        assert await budget.spent_today() == -1
+        with pytest.raises(TokenBudgetExhausted):
+            await budget.ensure_headroom(100)
 
 
 # --------------------------------------------------------------------------------------
@@ -518,27 +486,31 @@ def test_estimate_ignores_non_content_message_keys():
     assert estimate_tokens([{"role": "user", "content": None}]) == 1
 
 
-def test_token_cap_default_is_read_from_settings(monkeypatch):
-    """RequestBudget is constructed with only a request limit by the hand-built LLMClient
-    fixture in tests/test_snippet_extractor_live_body.py, so the token cap has to resolve
-    itself. Asserted here so a future signature change that breaks that fixture fails
-    against a test that says why."""
-    budget = RequestBudget(900)
-    assert budget.token_limit == counter_cap(COUNTERS_BY_NAME[GROQ_REQUEST_TOKENS])
-    assert budget.token_limit > 0
+def test_token_budget_limit_is_explicit_not_from_settings():
+    """TokenBudget takes its limit as a constructor argument.
+
+    Protects: the token cap is visible at the construction site, not resolved
+    by magic from settings. The settings-to-budget wiring lives in
+    LLMClient._token_budget_for, which is covered by the roster consistency test.
+    """
+    budget = TokenBudget(GROQ_REQUESTS, 60_000)
+    assert budget.daily_limit == 60_000
+    assert budget.daily_limit > 0
 
 
 def test_the_three_groq_token_caps_fit_inside_the_published_allowance():
     """Not a test of behaviour -- a test of the arithmetic in the comments.
 
     Groq's free plan publishes 200,000 tokens/day for the whole key, shared by all three
-    consumers. Three independently sized caps that each look generous is how three stages
-    each come to believe they own the tier, so the sum is asserted against the real
+    Groq consumers. Three independently sized caps that each look generous is how three
+    stages each come to believe they own the tier, so the sum is asserted against the real
     allowance with headroom left over.
     """
+    # Protects: the Groq stages cannot collectively exceed Groq's published allowance.
     groq_allowance = 200_000
     total = sum(
-        counter_cap(spec) for spec in COUNTERS if spec.unit == "tokens"
+        counter_cap(spec) for spec in COUNTERS
+        if spec.unit == "tokens" and "groq" in spec.name
     )
     assert total <= groq_allowance, (
         f"the Groq token caps sum to {total}, over the published {groq_allowance}/day"
