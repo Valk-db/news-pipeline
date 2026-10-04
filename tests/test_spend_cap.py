@@ -1,11 +1,11 @@
 """Tests for spend() cap enforcement on the INSERT path.
 
-The _SPEND SQL has a hole: the INSERT path (first spend of the day) does not check
-the cap. The WHERE clause only applies to the UPDATE path (subsequent spends).
-This means a cap of 0 does not refuse the first call, and any cap can be exceeded
-by exactly one request on the first spend of the day.
+The _SPEND SQL uses SELECT ... WHERE :amount <= :cap for the INSERT path, enforcing
+the cap on the first spend of the day. The UPDATE path has WHERE
+budget_counters.used + :amount <= :cap. Both paths enforce the cap.
 
-These tests verify the fix: an early return in spend() when amount > cap.
+The typed bind parameters (BigInteger for amount and cap) ensure the statement parses
+on Postgres. A direct SQL test pins the SQL behavior, bypassing the Python guard.
 """
 
 import pytest
