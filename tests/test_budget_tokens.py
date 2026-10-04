@@ -227,7 +227,7 @@ class TestUnreadableCountersRefuse:
             return None  # exactly what spend() returns for an unreachable counter
 
         monkeypatch.setattr(module, "spend", unreachable)
-        budget = RequestBudget(daily_limit=900, token_limit=60_000)
+        budget = RequestBudget(daily_limit=900)
         sent = []
 
         async def call():

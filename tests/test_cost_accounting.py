@@ -55,7 +55,7 @@ class ReplayedTransport:
         self.chat = SimpleNamespace(completions=_Completions())
 
 
-def make_client(transport, token_limit=60_000):
+def make_client(transport, groq_token_cap=60_000):
     """A client with only the fields the code under test reads.
 
     Built by hand rather than via LLMClient() so no SDK client, API key or settings object
@@ -69,7 +69,7 @@ def make_client(transport, token_limit=60_000):
         cerebras_api_key=None,
         cerebras_model=None,
         groq_daily_request_budget=900,
-        groq_daily_token_cap=token_limit,
+        groq_daily_token_cap=groq_token_cap,
         cerebras_daily_request_budget=900,
         cerebras_daily_token_cap=60000,
         openrouter_gemma_daily_request_budget=900,
@@ -80,7 +80,7 @@ def make_client(transport, token_limit=60_000):
     client.groq_client = transport
     client.cerebras_client = None
     # HEAD's per-rung architecture: _budgets dict, not singular _budget
-    groq_budget = RequestBudget(900, token_limit=token_limit)
+    groq_budget = RequestBudget(900)
     client._budgets = {"groq": groq_budget}
     client._minute_limiters = {}
     client._token_budgets = {}
@@ -231,7 +231,7 @@ class TestTokenCapStopsTheNextCallThroughTheRealClient:
         """
         usage = SimpleNamespace(prompt_tokens=100, completion_tokens=4_862, total_tokens=4_962)
         transport = ReplayedTransport([("{}", usage, "stop"), ("{}", usage, "stop")])
-        client = make_client(transport, token_limit=5_000)
+        client = make_client(transport, groq_token_cap=5_000)
 
         await client.chat_completion([{"role": "user", "content": "short"}], max_tokens=100)
         assert await used(GROQ_REQUEST_TOKENS) == 4_962
