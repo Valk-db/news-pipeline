@@ -64,6 +64,11 @@ class TestRosterShape:
         assert len(names) == len(set(names))
 
     def test_every_rung_names_real_settings(self):
+        """Attribute names are non-empty and lowercase.
+
+        This does NOT verify the names exist on Settings; see
+        tests/test_roster_attr_consistency.py for the test that does.
+        """
         for rung in ROSTER:
             for attr in (rung.key_attr, rung.model_attr, rung.daily_cap_attr, rung.minute_cap_attr):
                 assert attr, f"{rung.name} has an unnamed settings field"
