@@ -82,6 +82,10 @@ def _probe_call(client, settings, rung: LLMRung) -> Callable[[], Awaitable[Any]]
     max_tokens = _PING_MAX_TOKENS.get(rung.method, _PING_MAX_TOKENS_DEFAULT)
     # Route through _dispatch_and_record so the probe's tokens are charged to
     # the rung's budget, exactly once, via the same seam as normal traffic.
+    # Intentional: the probe bypasses the REQUEST cap (it does not call spend()).
+    # A preflight is a health check, not traffic; consuming the request budget
+    # for probes would starve real work. The TOKEN usage is still recorded, so
+    # the daily token figure remains honest.
     return lambda: client._dispatch_and_record(
         rung, _PING, max_tokens=max_tokens, temperature=0
     )
