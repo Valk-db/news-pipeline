@@ -899,11 +899,7 @@ class LLMClient:
                 logger.warning("%s returned no content, falling through", rung.name)
                 self._demote(rung, "empty content")
                 continue
-            # The one place a completion is charged for its tokens. It sits after
-            # the retry wrapper, so a call that burned three attempts is charged
-            # Once for the answer that came back -- which is the provider's own
-            # figure and therefore includes the tokens the failed attempts spent.
-            # Recording now happens in _dispatch_and_record, before content
+            # Recording happens in _dispatch_and_record, before content
             # extraction, so a malformed response that fails to parse still
             # charges the rung. The comment about `accept` still holds: a
             # completion the caller then rejects was still paid for.
