@@ -1,0 +1,58 @@
+{
+  "_README": [
+    "Committed floors for the two CI ratchets in ci/gates.py. Every number here",
+    "was measured on the commit named below, on a clean checkout of that commit,",
+    "with the tool versions named below. Changing one of these numbers is a",
+    "deliberate act: re-measure it, and say in the batch report what you measured",
+    "and why. The gate treats an unreadable or keyless baseline as a FAILURE.",
+    "",
+    "To re-measure (from a clean checkout of the commit you are measuring):",
+    "  python -m ci.gates mypy --floor 999999   # prints the real count in its detail line",
+    "  python -m ci.gates tests --floor 999999  # ditto for collected tests"
+  ],
+  "measured_on": {
+    "commit": "fc71887f2f6e2619d9bd37572211feeedcb178d2",
+    "commit_subject": "procmon: merge batch-drift-deadflow (health verdict no longer hijacked by the deleted approve flow; docs reconciled)",
+    "measured_on_date": "2026-10-03",
+    "measured_by": "batch drift-ci, on a clean detached worktree at that commit",
+    "why_this_commit": "The floor must be MAIN's number. A floor measured on a feature branch arrives already-broken if another batch merges off main first, because main's count can only have gone up in the meantime. It can also arrive LOOSE if main's count fell, which is the quieter version of the same mistake: five fixed mypy errors would have bought this branch five free new ones.",
+    "earlier_measurement": "Taken when this batch started, before main moved: commit 73789dc gave 445 mypy errors and 1899 collected tests. Main then advanced 9 commits (fc71887) and fixed 5 mypy errors, so both floors were re-measured on fc71887 rather than left stale. The ratchet itself reported both moves: 'mypy error count fell: 440 ... Lower mypy_error_floor to 440' and 'collected test count rose: 2026 ... Raise pytest_collected_floor to 2026'."
+  },
+  "mypy_error_floor": 440,
+  "mypy_targets": [
+    "src/",
+    "curation_ui/"
+  ],
+  "mypy_version": "2.3.1",
+  "mypy_measurement": {
+    "command": "python -m mypy src/ curation_ui/",
+    "raw_summary": "Found 440 errors in 58 files (checked 87 source files)",
+    "note": "440 is main's count at fc71887 and is what the gate enforces. The version matters as much as the number: 440 and 445 are the SAME tree under mypy 2.3.1 (uv.lock's pin, therefore CI's) and mypy 2.4.0 respectively differing by 5 on 73789dc. A floor taken from the wrong mypy is wrong by more than the change it is trying to police, so the version is pinned here and checked at run time.",
+    "why_a_ratchet_and_not_a_pass_fail_gate": "445 pre-existing errors make a pass/fail gate unreachable, and `continue-on-error: true` with nothing comparing counts is not a soft gate, it is no gate. The ratchet fails when the count RISES and passes when it falls, which is enforceable today and gets stricter as the backlog clears.",
+    "raw_summary_at_73789dc": "Found 445 errors in 58 files (checked 87 source files)"
+  },
+  "pytest_collected_floor": 2117,
+  "pytest_collect_paths": [
+    "tests/"
+  ],
+  "pytest_measurement": {
+    "command": "python -m pytest tests/ --collect-only -q",
+    "raw_summary_at_the_measured_commit": "1942 tests collected in 6.62s",
+    "raw_summary_on_this_branch": "2098 tests collected (raised from 2026 -> 2090 by the coordinator after batch-costacct-tokens, then to 2098 after batch-drift-transparency added 8 coupling tests)",
+    "floor_raised_by": {
+      "from_main_at_73789dc": 1899,
+      "from_main_at_fc71887": 1942,
+      "to": 2026,
+      "reason": "main's count at fc71887 is 1942; this branch adds 84 tests (tests/test_ci_gates.py 43, tests/test_batch_scratch_removed.py 27, tests/test_secret_scan.py 14), and the merged tree collects 2026. The gate asks for the floor to be raised whenever the count rises, so a later removal is measured against the real suite rather than against main's older, smaller one.",
+      "commits": "f80dfd0 (the scanner and its tests), 7063f96 (the removal guard), 7b09cab (the ratchet), 34e6c16, 93770c7",
+      "raised_again_by_the_coordinator": "batch-costacct-tokens (merge c6f23e3) added 64 tests across tests/test_budget_tokens.py, tests/test_cost_accounting.py and tests/test_report_budget_usage.py, taking the merged tree from 2026 to 2090. Left at 2026 the gate would have gone red on its own -- which is it working, not a defect -- so the floor is re-measured here rather than by editing ci.yml.",
+      "raw_summary_after_costacct_merge": "2090 tests collected in 2.90s"
+    },
+    "pytest_version": "9.1.1",
+    "why_collected_and_not_executed": "The floor is on COLLECTED tests, not executed ones. `--collect-only` needs no database and returned the identical 1899 with and without DATABASE_URL set, so the number is environment-independent and a batch on this VM can reproduce it. An executed-count floor cannot be: on this VM main executes 1899 tests as 1851 passed / 14 failed / 34 skipped, and in CI with Postgres those 14 run and pass, so the executed count is a property of the machine, not of the suite. A floor on a number that changes with the environment is a flaky gate.",
+    "executed_count_on_this_vm_at_the_measured_commit": "14 failed, 1851 passed, 34 skipped (all 14 failures are langdetect/translation tests, pre-existing on the measured commit)",
+    "known_limitation": "A collected-count floor does not notice a test that is renamed, or marked `skip` instead of deleted, or moved behind a collection error in a file that still collects. It catches the case the backlog names - a test silently disappearing - and nothing more. The gate also fails when the count cannot be parsed at all, which is the shape a collection error takes when it takes out every test in the suite.",
+    "raw_summary_after_drift_transparency_merge": "2098 tests collected in 2.9s",
+    "raw_summary_after_public_status_gate_merge": "2117 tests collected (raised 2090 -> 2098 -> 2117 as batches landed)"
+  }
+}

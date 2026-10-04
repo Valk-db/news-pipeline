@@ -78,3 +78,15 @@ eval/.cache/
 
 # db-hygiene batch scratch (credential-adjacent query scripts, never committed)
 .dbhygiene-scratch/
+# Batch scratch that was tracked by mistake and removed 2026-10-03
+# (BACKLOG "Drift cleanup batch" item 2). These are per-batch worker briefs,
+# per-batch task lists and dead worker source copies - never part of the
+# product. STEALTH-REPORT.md carried the dev Supabase project ref; it is
+# intentionally NOT scrubbed from history (the repo is public, Claude scanned
+# all 475 commits and found placeholders only, and rewriting history is worse
+# than leaving it). tests/test_batch_scratch_removed.py fails if any of these
+# paths is tracked again or stops being ignored.
+STEALTH-REPORT.md
+BRIEF-*.md
+AGENT_TASKS_v*.md
+.batch-refs/

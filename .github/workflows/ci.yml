@@ -39,22 +39,19 @@ jobs:
       - name: Run ruff
         run: uv run ruff check .
 
-      # The gate this job used to fake. `mypy` used to run here with
-      # `continue-on-error: true` and the comment "Allow pre-existing errors,
-      # only fail on new ones" -- but nothing compared the count to anything, so
-      # the step could not fail and the comment described an intention the
-      # workflow did not implement. It is now a ratchet against
-      # ci_quality_floor.json: the build fails if the count goes UP, and stays
-      # green when somebody fixes some. mypy exits 1 whenever it finds
-      # anything, which is the normal state of this tree, so its exit status is
-      # discarded here on purpose and the comparison below is the verdict.
-      # scripts/ci_quality_gate.py exits 2 if it cannot find mypy's summary
-      # line, so a crashed mypy fails the build rather than passing it.
-      - name: Run mypy
-        run: |
-          uv run mypy src/ curation_ui/ > /tmp/mypy.txt 2>&1 || true
-          tail -3 /tmp/mypy.txt
-          uv run python -m scripts.ci_quality_gate mypy /tmp/mypy.txt
+      # Ratchet, not a soft gate. `continue-on-error: true` with nothing comparing
+      # counts is a no-op that prints a wall of pre-existing errors and moves on;
+      # there is no code anywhere that compares error counts. ci/gates.py fails
+      # when the count RISES above the floor and passes when it falls. The floor
+      # lives in ci/baseline.json, was measured on main (not on a branch), and a
+      # run whose output cannot be parsed is a FAILURE, never an implicit pass.
+      - name: Ratchet mypy error count
+        run: uv run python -m ci.gates mypy
+
+      # Floor on collected tests so a test cannot silently disappear. Both floors
+      # and their provenance live in the same committed file.
+      - name: Check collected test count
+        run: uv run python -m ci.gates tests
 
       # Free, offline, no account, no token, no Docker: Yelp's detect-secrets,
       # installed by the dev extra. Everything else needs a binary this job

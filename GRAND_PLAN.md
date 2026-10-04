@@ -27,6 +27,7 @@ the human-gated exposure decision in `DECISIONS.md`, which is the file to read b
 anything here about publication.
 
 - **Ingestion**: 8 tier-1 + 4 enabled tier-2 RSS (12 configured), sensors, Reddit tier-3,
+- **Ingestion**: 8 enabled tier-1 (10 configured) + 13 enabled tier-2 (23 configured) RSS, sensors, Reddit tier-3,
   GDELT disabled in the workflow (`src/ingestion/source_registry.py`)
 - **Verification**: MinHash near-dup clustering → `ReportingUnit`
   (`src/verification/units.py`, `OWNERSHIP_GROUPS`)

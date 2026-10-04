@@ -1,6 +1,6 @@
 """Public inclusion-proof permalinks: the server-rendered view model.
 
-The route lives in curation_ui.main (/proof/{article_id}); this module builds
+The route lives in curation_ui.public_pages (/proof/{article_id}); this module builds
 the view. Read-only: nothing here writes to the session.
 
 States, all rendered honestly:

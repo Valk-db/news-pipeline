@@ -40,6 +40,14 @@ that:
               (False, False) pair here so a future refactor cannot quietly turn
               a token route into an open one, or an open one into a token route,
               without this file changing.
+
+  2026-10-03  /api/globe/stats removed. Its last caller was the /globe page's
+              Cesium script, deleted with the page in 73ffd28, so the route has
+              had no consumer since; /api/globe/events and /api/globe/layers
+              stay because map.js plots the first and GRAND_PLAN Phase 4 plans
+              the second. A path that stops being listed is a silent deletion, so
+              test_globe_stats_is_gone pins the ABSENCE here as well as the two
+              survivors' presence.
 """
 
 import curation_ui.main as main_module
@@ -226,20 +234,20 @@ class TestGlobeRemoved:
         assert "/api/globe/layers" in paths
 
     def test_globe_stats_is_gone(self):
-        """Drift cleanup removed /api/globe/stats; nothing renders it, so pin the removal.
+        """/api/globe/stats is deleted, not merely unlisted.
 
-        The route counted events by type and by layer for a stats panel that no
-        template or script ever drew. Left in place it was the widest anonymous
-        read in the app (four unbounded aggregate queries over the whole events
-        table, no window, no limit) for zero readers. If someone wants a stats
-        panel back, the honest shape is the bounded one the event endpoints
-        already use: a window, a limit, and a report of the effective cap.
+        An assertion that stops mentioning a path passes whether the route was
+        removed or left behind, so the deletion is pinned as an absence at both
+        levels: no route claims the path, and an anonymous GET is a 404 rather
+        than a 500 (a 500 would mean something still tries to serve it).
         """
         from fastapi.testclient import TestClient
 
-        paths = {row[0] for row in route_table(app)}
-        assert "/api/globe/stats" not in paths
-        assert TestClient(app).get("/api/globe/stats").status_code == 404
+        assert "/api/globe/stats" not in {row[0] for row in route_table(app)}
+        assert "/api/globe/stats" not in app.openapi()["paths"]
+
+        response = TestClient(app).get("/api/globe/stats")
+        assert response.status_code == 404
 
     def test_no_surviving_route_renders_the_globe_template(self):
         """globe.html is deleted; a route reaching for it would 500 at request time."""

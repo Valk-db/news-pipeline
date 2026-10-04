@@ -6,16 +6,22 @@ one module per surface, so curation_ui/health.py can gate a route without
 importing main and each surface can be read on its own:
 
   cron.py           /api/cron/checkpoint (+ watchdog): bearer-token checkpoint signing
-  curation.py       the auth-gated triage workbench (queue index, story detail)
+curation.py       the auth-gated read-only queue: / and /story/{story_id}
   story_api.py      the auth-gated per-story JSON APIs
-  globe.py          public /api/globe/* JSON
+  globe.py          public /api/globe/* JSON (the /globe page was removed 2026-10-02)
   map_api.py        public /api/map/* JSON plus the freshness and story serializers
   public_pages.py   public /stories/{id}, /proof/{id}, /map
   health.py         /healthz and the authenticated /healthz/details
   security.py       require_auth, the failed-auth limiter, CSRF
-  discovery.py      the public read filter/ranking rules the map and story pages share
+  discovery.py      the read filter/ranking rules the map, story and queue surfaces share
   events.py         the event query and GeoJSON Feature serializer shared by events and replay
-  app_state.py      the Jinja environment, the error page, and the availability checks
+  proofs.py         the /proof/{id} view model, rendered by public_pages
+  cache.py          the edge Cache-Control middleware, registered below
+  app_state.py      the Jinja environment, the error page, and the database check
+
+There are no state-changing routes: approve, reject, edit and save were removed
+on 2026-10-02, so nothing here mutates a row and require_csrf guards nothing
+(tests/test_route_table.py pins both).
 """
 
 import logging
@@ -69,6 +75,26 @@ def check_database_available() -> tuple[bool, str]:
     return True, ""
 
 
+def check_llm_available() -> tuple[bool, str]:
+    """Check if LLM is available, return (available, error_message).
+
+    Availability is either a configured provider API key, or an already
+    -initialized/injected client (e.g. the mock LLMClient tests set on
+    src.shared.llm._llm_client). Gating on settings.has_llm alone made this
+    return False even when a working client was already in place.
+
+    No route calls this any more. It was the gate the approve and edit routes
+    opened with, and both were removed on 2026-10-02, so the deterministic-
+    caption fallback this used to describe is gone with them
+    (tests/test_no_llm_fallback.py records that build_deterministic_caption is
+    no longer part of any flow). Kept because /healthz/details still reports
+    whether an LLM key is configured and the next surface that needs the check
+    should reach it the same way.
+    """
+    import src.shared.llm as llm_module
+    if not settings.has_llm and llm_module._llm_client is None:
+        return False, "No LLM configured. Set GROQ_API_KEY or CEREBRAS_API_KEY environment variable."
+    return True, ""
 # Router order matches the order the routes appeared when they all lived here, so
 # a path that used to be matched by an earlier literal still is. No two of these
 # patterns overlap, so the order is a readability property rather than a dispatch

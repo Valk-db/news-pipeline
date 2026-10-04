@@ -13,6 +13,7 @@ sitting in MAP_READ_PATHS by accident.
 """
 
 import json
+import uuid
 
 import pytest
 from starlette.applications import Starlette
@@ -261,10 +262,7 @@ class TestEndToEndThroughTheRealApp:
     def test_database_outage_is_not_cached(self, client):
         """The real app, no mocking. /api/globe/events returns 200 with
         {"error": ...} here, which is exactly the shape that must not reach a
-        shared cache.
-
-        It was /api/globe/stats until drift cleanup removed that route; the
-        point of the test is the 200-with-an-error-body shape, not the path."""
+        shared cache."""
         response = client.get("/api/globe/events")
         assert response.status_code == 200
         assert response.json()["error"]
@@ -296,34 +294,31 @@ class TestEndToEndThroughTheRealApp:
         above would pass even if the middleware never attached a header at all,
         which is the shape a broken registration takes.
 
-        This used to be pinned against /api/globe/stats. That route is gone
-        (drift cleanup: no template or script ever drew the panel it fed), so
-        the positive case rides on /api/globe/layers instead, which is the same
-        module, the same public-read guard, and the same single-query shape.
+        /api/globe/stats used to be the path here and was removed on 2026-10-03,
+        so the positive case moved to a route that still exists rather than
+        going away with it.
         """
         import contextlib
-        import uuid
 
         import curation_ui.globe as globe_module
 
         class _Layer:
-            """Every field the handler copies out, because a stand-in missing
-            one turns this into an AttributeError test instead of a cache test."""
+            """The handler reads these attributes by name off the ORM row."""
 
             def __init__(self):
-                self.id = uuid.UUID("11111111-2222-3333-4444-555555555555")
-                self.name = "world"
-                self.description = "Everywhere"
-                self.filter_criteria = {}
-                self.style = {}
+                self.id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+                self.name = "conflict"
+                self.description = "Armed conflicts"
+                self.filter_criteria = {"event_type": ["conflict"]}
+                self.style = {"color": "#e74c3c"}
                 self.is_default = True
                 self.is_visible = True
-                self.min_zoom = 1
-                self.max_zoom = 12
-                self.color = "#4488ff"
+                self.min_zoom = 1.0
+                self.max_zoom = 10.0
+                self.color = "#e74c3c"
 
         class _Result:
-            def __init__(self, rows=()):
+            def __init__(self, rows):
                 self._rows = rows
 
             def scalars(self):
@@ -334,7 +329,7 @@ class TestEndToEndThroughTheRealApp:
 
         class _Session:
             async def execute(self, _statement):
-                return _Result(rows=[_Layer()])
+                return _Result([_Layer()])
 
         @contextlib.asynccontextmanager
         async def fake_session():
@@ -347,9 +342,23 @@ class TestEndToEndThroughTheRealApp:
         assert response.status_code == 200
         payload = response.json()
         assert payload["count"] == 1
-        assert payload["layers"][0]["name"] == "world"
+        assert payload["layers"][0]["name"] == "conflict"
         assert response.headers["Cache-Control"] == map_read_cache_control()
         assert "Content-Security-Policy" in response.headers
+
+    def test_the_removed_globe_stats_path_is_not_cached(self, client):
+        """A deleted route must not linger in the allowlist.
+
+        /api/globe/stats was removed on 2026-10-03. Its 404 is not cacheable
+        anyway, but a stale entry would be a path in MAP_READ_PATHS that no
+        longer resolves, which is exactly the drift
+        test_allowlist_paths_all_exist_in_the_app exists to catch -- pinned here
+        from the other direction so the deletion cannot be half-reverted.
+        """
+        assert "/api/globe/stats" not in MAP_READ_PATHS
+        response = client.get("/api/globe/stats")
+        assert response.status_code == 404
+        assert "Cache-Control" not in response.headers
 
 
 class TestOnABareApp:
@@ -358,14 +367,14 @@ class TestOnABareApp:
 
     def build(self):
         application = Starlette(routes=[
-            Route("/api/map/freshness", _ok, methods=["GET"]),
+            Route("/api/globe/events", _ok, methods=["GET"]),
             Route("/api/map/replay", _boom, methods=["GET"]),
         ])
         application.add_middleware(BaseHTTPMiddleware, dispatch=map_read_cache)
         return TestClient(application)
 
     def test_ok_route_is_cached(self):
-        response = self.build().get("/api/map/freshness")
+        response = self.build().get("/api/globe/events")
         assert response.headers["Cache-Control"] == map_read_cache_control()
         assert response.json() == {"ok": True}
 

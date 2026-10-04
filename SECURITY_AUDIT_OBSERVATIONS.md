@@ -130,6 +130,9 @@ describes — it has no such import or decorator. The dependency entry the audit
 (`slowapi>=0.1`) *is* in `pyproject.toml`, and in `requirements.txt`, but nothing imports it, so
 both are dead weight awaiting removal. The batch task note that used to track this was scratch
 (`AGENT_TASKS_v38.md`) and is deleted; the dependency is still there, the removal is still owed.
+both are dead weight awaiting removal (unowned: the `AGENT_TASKS_v38.md` item that
+tracked this was removed from the tree on 2026-10-03, and no backlog item covers
+the dependency removal).
 
 ---
 

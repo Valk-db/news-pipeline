@@ -14,11 +14,13 @@ This guide walks through deploying the FastAPI curation UI to Vercel with a Supa
 2. Apply the schema — `supabase/migrations/*.sql` is the only thing that creates it, so either run
    `uv run python -m scripts.migrate` locally against the new database or paste the files into the
    **SQL Editor** in order. No extension needs enabling by hand: `pg_trgm` is created by its own
-   migration, and so is `vector` (`20261002220200_pgvector_readiness.sql`, verified
+migration, and so is `vector` (`20261002220200_pgvector_readiness.sql`, verified
    installed on dev as pgvector 0.8.2). The extension being present is not a vector
    search feature: no column uses it, embeddings are JSON array columns, and there is
    no HNSW index or `match_articles` RPC. That is deliberate — see the migration
    header and the pgvector note in `README.md`
+migration, and so is `pgvector` (`20261002220200_pgvector_readiness.sql`). No column uses pgvector
+   yet — embeddings are still JSON array columns
 3. Go to **Settings → Database** and copy the **Connection string** (URI format)
    - **Direct (IPv6, may fail in CI/GitHub Actions):** `postgresql+asyncpg://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres`
    - **Pooler (IPv4, RECOMMENDED for CI/edge):** `postgresql+asyncpg://postgres.[PROJECT-REF]:[YOUR-PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres`
@@ -52,7 +54,7 @@ vercel env add CURATION_PASSWORD
 # Without both, every authenticated route answers 503 (see the table below)
 
 vercel env add GROQ_API_KEY
-# Paste your Groq API key (optional: without it the UI writes deterministic captions)
+# Paste your Groq API key (optional: no UI surface needs it — the curation app is read-only)
 
 vercel env add GROQ_MODEL
 # Enter: openai/gpt-oss-20b
@@ -90,6 +92,9 @@ reads them, and `/healthz` works with no database at all (it reports `degraded`)
 It used to be otherwise — the approve/edit routes fell back to a deterministic
 LLM-free caption — and those routes are gone, so the availability check that
 handled the fallback went with them.
+without them. The LLM keys are optional for the deployment and unused by it:
+`/healthz/details` reports whether one is set, and nothing else in the curation
+app calls an LLM. `/healthz` works with no database at all (it reports `degraded`).
 
 ## 3. Deploy to Vercel
 
@@ -110,7 +115,9 @@ vercel
    `degraded` otherwise (anonymous, and it never returns a secret)
 3. The UI itself asks for HTTP Basic credentials — a browser that gets 401 there means auth is
    wired, not broken. `GET /healthz/details` with the same credentials is the diagnostic page
-4. Test keyboard shortcuts: **A**pprove, **R**eject, **E**dit
+4. Open `/map` (public) and `/` (Basic auth) — both are read-only; there is no triage control on
+   either page, and there is no keyboard shortcut any more (approve/reject/edit were removed
+   on 2026-10-02)
 
 ## Troubleshooting
 
@@ -131,7 +138,7 @@ The function is configured for 60s max duration (`vercel.json`). If you hit time
 ### Static Files Not Loading
 
 The FastAPI app self-mounts static files via `app.mount("/static", StaticFiles(...))` in
-`curation_ui/main.py:42`, and `vercel.json` rewrites every path to the single function, so the
+`curation_ui/main.py:64`, and `vercel.json` rewrites every path to the single function, so the
 app — not Vercel — serves `/static`. If CSS doesn't load:
 - Check browser dev tools for 404s on `/static/style.css`
 - Verify `curation_ui/static/` is included in deployment (not in `.vercelignore`)
@@ -152,15 +159,21 @@ If you see module import errors:
 ```json
 {
   "functions": {
-    "api/index.py": {
-      "maxDuration": 60
-    }
+    "api/index.py": { "maxDuration": 60 }
   },
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/index" }
+  ],
+  "crons": [
+    { "path": "/api/cron/checkpoint", "schedule": "0 6 * * *" },
+    { "path": "/api/cron/checkpoint/watchdog", "schedule": "30 6 * * *" }
   ]
 }
 ```
+
+The two cron paths are served by `curation_ui/cron.py` and are bearer-token routes, not
+`require_auth` — Vercel Cron sends a GET with an `Authorization` header and no page to have
+issued a token. They refuse outright (503, not 401) when `TRANSPARENCY_CRON_TOKEN` is unset.
 
 `api/index.py` is the function Vercel builds; it is three lines that re-export the ASGI app
 (`from curation_ui.main import app`). The catch-all rewrite sends every request to it, so the
@@ -185,6 +198,14 @@ close this section no longer has anything to describe. The CSRF machinery is sti
 (`curation_ui/security.py`) for whatever comes next, and
 `tests/test_curation_read_only_ui.py` pins the absence of state-changing curation routes so this
 list cannot quietly go stale a second time.
+**Routing** (verified against the code, not a live deployment): `/healthz` → 200 with
+`{"status", "database"}` only; `/healthz/details` → the topology report behind
+`require_auth`; `/`, `/story/{id}`, `/api/stories/{id}/viewpoints` and
+`/api/stories/{id}/sources` → 401 without credentials; `/map`, `/stories/{id}`,
+`/proof/{id}` and the `/api/map/*` and `/api/globe/*` JSON → anonymous; a nonexistent
+path → 404. There are no state-changing routes and nothing requires `X-CSRF-Token`
+any more: approve, reject, edit, save and the four CSRF-guarded POSTs were removed
+on 2026-10-02, and `tests/test_route_table.py` pins both facts.
 
 ## Cost
 

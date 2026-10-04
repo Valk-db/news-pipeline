@@ -154,7 +154,14 @@ async def healthz_details(user: str = Depends(require_auth)):
     except Exception as exc:
         report["transparency"] = f"FAILED: {type(exc).__name__}: {_scrub(str(exc), s.database_url)}"
 
-    if isinstance(report.get("transparency"), dict) and report["transparency"].get("verdict") != "ok":
+# The verdict is derived from the transparency block and nothing else. It
+    # used to be set inside the try that counted curated_posts rows: the approve
+    # /reject/edit flow that wrote them was removed on 2026-10-02, so the count
+    # was never displayed and its query only ever ran to be able to overwrite
+    # this verdict with "run the SQL migration" -- an instruction about a flow
+    # that no longer exists, raised by a table the app never reads.
+    transparency = report.get("transparency")
+    if isinstance(transparency, dict) and transparency.get("verdict") != "ok":
         report["verdict"] = "App and database are fine, but transparency checkpoint signing is behind"
     else:
         report["verdict"] = "ok"
