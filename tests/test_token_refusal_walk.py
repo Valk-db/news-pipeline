@@ -46,6 +46,10 @@ def make_test_client(transport, token_cap=100):
         groq_daily_token_cap=token_cap,
         cerebras_daily_request_budget=900,
         cerebras_daily_token_cap=60_000,
+        openrouter_gemma_daily_request_budget=900,
+        openrouter_gemma_daily_token_cap=60000,
+        openrouter_nemotron_daily_request_budget=900,
+        openrouter_nemotron_daily_token_cap=60000,
     )
     client.groq_client = transport
     # Cerebras transport for fallthrough verification
@@ -92,11 +96,12 @@ async def test_token_cap_refusal_through_real_walk(budget_counter):
 
     client = make_test_client(mock_groq, token_cap=100)
 
-    # Spend the token counter past the 100-token cap
+    # Spend the token counter to exactly the cap (100)
+    # With the SQL fix, spend(150, 100) is refused. We spend 100 to reach the cap.
     # TokenBudget uses token_counter_name("groq_requests") = GROQ_REQUEST_TOKENS
-    result = await spend(GROQ_REQUEST_TOKENS, 150, 100)
-    assert result is not None, "spend should succeed to set up the exhausted state"
-    assert await used(GROQ_REQUEST_TOKENS) == 150
+    result = await spend(GROQ_REQUEST_TOKENS, 100, 100)
+    assert result == 100, f"spend should succeed to set up the exhausted state, got {result}"
+    assert await used(GROQ_REQUEST_TOKENS) == 100
 
     # Record stat baselines using snapshot()
     snapshot_before = STATS.snapshot()

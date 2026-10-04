@@ -70,6 +70,12 @@ def make_client(transport, token_limit=60_000):
         cerebras_model=None,
         groq_daily_request_budget=900,
         groq_daily_token_cap=token_limit,
+        cerebras_daily_request_budget=900,
+        cerebras_daily_token_cap=60000,
+        openrouter_gemma_daily_request_budget=900,
+        openrouter_gemma_daily_token_cap=60000,
+        openrouter_nemotron_daily_request_budget=900,
+        openrouter_nemotron_daily_token_cap=60000,
     )
     client.groq_client = transport
     client.cerebras_client = None

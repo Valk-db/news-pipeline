@@ -49,3 +49,37 @@ async def test_spend_normal_under_cap_unchanged(budget_counter):
     result2 = await spend("test_normal", 1, 900)
     assert result2 == 2
     assert await used("test_normal") == 2
+
+
+@pytest.mark.asyncio
+async def test_spend_sql_directly_enforces_cap_on_insert(budget_counter):
+    """Execute _SPEND directly, bypassing the Python guard.
+
+    The Python guard in spend() catches amount > cap before the SQL runs. If someone
+    reverts the SQL to the VALUES form (which has the hole), these tests would still
+    pass because the guard hides the SQL. This test executes _SPEND directly to verify
+    the SQL itself enforces the cap on INSERT.
+    """
+    from src.shared.budget import _SPEND, _get_engine, today
+    engine = _get_engine()
+    assert engine is not None, "budget_counter fixture must provide an engine"
+
+    # Fresh counter, cap 0, amount 1: SQL must return no row
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            _SPEND, {"name": "test_sql_direct_1", "day": today(), "amount": 1, "cap": 0}
+        )
+        row = result.first()
+        await conn.commit()
+    assert row is None, f"_SPEND with cap 0 should return no row, got {row}"
+    assert await used("test_sql_direct_1") == 0, "no row should have been created"
+
+    # Fresh counter, cap 3, amount 5: SQL must return no row
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            _SPEND, {"name": "test_sql_direct_2", "day": today(), "amount": 5, "cap": 3}
+        )
+        row = result.first()
+        await conn.commit()
+    assert row is None, f"_SPEND with amount > cap should return no row, got {row}"
+    assert await used("test_sql_direct_2") == 0, "no row should have been created"

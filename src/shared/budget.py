@@ -314,7 +314,8 @@ def counter_cap(spec: CounterSpec) -> int:
 
 _SPEND = text(
     """
-    INSERT INTO budget_counters (name, day, used) VALUES (:name, :day, :amount)
+    INSERT INTO budget_counters (name, day, used)
+    SELECT :name, :day, :amount WHERE :amount <= :cap
     ON CONFLICT (name, day) DO UPDATE
         SET used = budget_counters.used + :amount
         WHERE budget_counters.used + :amount <= :cap
@@ -391,12 +392,11 @@ async def spend(name: str, amount: int, cap: int, *, day: date | None = None) ->
     retrying or hiding it converts a bug that would take one run to diagnose into a
     condition that reads as a healthy exhausted budget forever.
     """
-    # The _SPEND SQL only enforces the cap on the UPDATE path (existing row). The INSERT
-    # path (first spend of the day) has no WHERE clause, so without this guard a cap of 0
-    # would not refuse the first call, and any cap could be exceeded by exactly one request.
-    # This guard closes that hole. It is safe for all callers: TokenBudget.record uses
-    # _NO_GATE (2**62) which no real amount can exceed, and RequestBudget._counted uses the
-    # real daily_limit where amount=1.
+    # Defense in depth: the _SPEND SQL enforces the cap on both INSERT and UPDATE paths
+    # via the WHERE clause. This Python guard provides an early return without a database
+    # round-trip when the amount obviously exceeds the cap. It is safe for all callers:
+    # TokenBudget.record uses _NO_GATE (2**62) which no real amount can exceed, and
+    # RequestBudget._counted uses the real daily_limit where amount=1.
     if amount > cap:
         return None
     engine = _get_engine()
