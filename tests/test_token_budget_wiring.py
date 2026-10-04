@@ -23,15 +23,15 @@ def test_token_budget_wiring_uses_rung_specific_caps():
     # Create rungs with different cap attributes
     rung1 = LLMRung(
         name="groq", method="groq", key_attr="x", client_attr="y",
-        budget_name="groq_tokens", daily_token_cap_attr="groq_token_cap",
+        budget_name="groq_tokens", model_attr="", daily_token_cap_attr="groq_token_cap",
     )
     rung2 = LLMRung(
         name="cerebras", method="cerebras", key_attr="x", client_attr="y",
-        budget_name="cerebras_tokens", daily_token_cap_attr="cerebras_token_cap",
+        budget_name="cerebras_tokens", model_attr="", daily_token_cap_attr="cerebras_token_cap",
     )
     rung3 = LLMRung(
         name="openrouter", method="openrouter", key_attr="x", client_attr="y",
-        budget_name="openrouter_tokens", daily_token_cap_attr="openrouter_token_cap",
+        budget_name="openrouter_tokens", model_attr="", daily_token_cap_attr="openrouter_token_cap",
     )
     
     b1 = client._token_budget_for(rung1)
