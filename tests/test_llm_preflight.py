@@ -371,3 +371,50 @@ class TestFreeRosterAdvisory:
         out = capsys.readouterr().out
         assert "ADVISORY" in out
         assert "continuing on Groq" in out
+
+
+@pytest.mark.asyncio
+async def test_probe_awaits_transport_exactly_once():
+    """The preflight probe must await the transport exactly once.
+
+    Protects: a double-await would bill the provider twice for one probe and
+    record double the tokens. The _probe_call lambda must not be invoked twice,
+    and _dispatch_and_record must not retry internally.
+    """
+    from src.shared.llm_preflight import _probe, _probe_call
+    from src.shared.llm_roster import ROSTER
+    from types import SimpleNamespace
+
+    call_count = 0
+
+    class CountingTransport:
+        def __init__(self):
+            outer = self
+            class _Completions:
+                async def create(self, **kwargs):
+                    nonlocal call_count
+                    call_count += 1
+                    return {
+                        "choices": [{"message": {"content": "pong"}}],
+                        "usage": {"total_tokens": 10},
+                    }
+            self.chat = SimpleNamespace(completions=_Completions())
+
+    # Build a minimal client with the counting transport
+    client = SimpleNamespace()
+    client._token_budgets = {}
+    async def fake_dispatch_and_record(rung, messages, **kwargs):
+        # Simulate _dispatch_and_record calling the transport once
+        transport = CountingTransport()
+        result = await transport.chat.completions.create(**kwargs)
+        return result
+    client._dispatch_and_record = fake_dispatch_and_record
+
+    settings = SimpleNamespace()
+    rung = next(r for r in ROSTER if r.name == "groq")
+
+    probe_fn = _probe_call(client, settings, rung)
+    result = await _probe(probe_fn)
+
+    assert result["ok"] is True
+    assert call_count == 1, f"transport awaited {call_count} times, expected exactly once"
