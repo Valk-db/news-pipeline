@@ -59,9 +59,8 @@ def make_client(transport, token_limit=60_000):
     """A client with only the fields the code under test reads.
 
     Built by hand rather than via LLMClient() so no SDK client, API key or settings object
-    is needed. LLMClient gained no instance field in this batch precisely so that a
-    hand-built fixture like this keeps working; if a field is ever added here, the fixture
-    is the thing that will tell you (AttributeError, not a silently wrong test).
+    is needed. Updated for HEAD's per-rung architecture: _budgets is now a dict,
+    and the fixture initializes the fields HEAD's LLMClient.__init__ sets.
     """
     client = LLMClient.__new__(LLMClient)
     client.settings = SimpleNamespace(
@@ -70,10 +69,23 @@ def make_client(transport, token_limit=60_000):
         cerebras_api_key=None,
         cerebras_model=None,
         groq_daily_request_budget=900,
+        groq_daily_token_cap=token_limit,
     )
     client.groq_client = transport
     client.cerebras_client = None
-    client._budget = RequestBudget(900, token_limit=token_limit)
+    # HEAD's per-rung architecture: _budgets dict, not singular _budget
+    groq_budget = RequestBudget(900, token_limit=token_limit)
+    client._budgets = {"groq": groq_budget}
+    client._minute_limiters = {}
+    client._token_budgets = {}
+    client._pinned = None
+    client._last_walk_error = None
+    client._demoted = set()
+    client._auth_warned = set()
+    client._openrouter_key = None
+    client._openrouter_http = None
+    # Backwards compat: tests access client._budget directly
+    client._budget = groq_budget
     client._groq_auth_warned = False
     client._cerebras_auth_warned = False
     return client
