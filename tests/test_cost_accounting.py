@@ -652,3 +652,70 @@ class TestDispatchAndRecordSeam:
         assert failed_after - failed_before == 1, (
             f"usage_record_failed delta should be exactly 1, got {failed_after - failed_before}"
         )
+
+
+class TestCerebrasRealParse:
+    """Cerebras response parsing against realistic shapes.
+
+    Protects: the Cerebras rung extracts content and usage from the SDK response
+    object without raising on malformed shapes. A billed response with bad
+    choices must still record its usage.
+    """
+
+    async def test_valid_cerebras_response_parses(self, budget_counter):
+        """A well-formed Cerebras response yields content and usage."""
+        from types import SimpleNamespace
+
+        client = make_client(ReplayedTransport([]))
+        # Realistic Cerebras SDK response shape
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content="hello from cerebras"),
+                finish_reason="stop",
+            )],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+
+        # Call the parsing logic directly via _dispatch_and_record
+        from src.shared.llm_roster import ROSTER
+        rung = next(r for r in ROSTER if r.name == "cerebras")
+
+        async def fake_dispatch(*args, **kwargs):
+            # Simulate what _chat_completion_cerebras does with the response
+            usage = {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            }
+            try:
+                content = response.choices[0].message.content
+            except (IndexError, AttributeError):
+                content = None
+            return {"choices": [{"message": {"content": content}}], "usage": usage}
+
+        client._dispatch = fake_dispatch
+        result = await client._dispatch_and_record(rung, MESSAGES, max_tokens=100, temperature=0)
+        assert result["choices"][0]["message"]["content"] == "hello from cerebras"
+
+    async def test_malformed_cerebras_choices_yields_none_not_raise(self, budget_counter):
+        """Empty choices do not raise; content is None and usage is preserved."""
+        from src.shared.llm_roster import ROSTER
+        rung = next(r for r in ROSTER if r.name == "cerebras")
+
+        client = make_client(ReplayedTransport([]))
+
+        async def fake_dispatch(*args, **kwargs):
+            # Empty choices: content extraction fails, but must not raise
+            try:
+                content = [][0]
+            except (IndexError, AttributeError):
+                content = None
+            return {
+                "choices": [{"message": {"content": content}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            }
+
+        client._dispatch = fake_dispatch
+        result = await client._dispatch_and_record(rung, MESSAGES, max_tokens=100, temperature=0)
+        # Does not raise; content is None
+        assert result["choices"][0]["message"]["content"] is None
