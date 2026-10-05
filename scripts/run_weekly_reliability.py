@@ -9,7 +9,7 @@ Usage:
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from src.shared.database import get_session
 from src.reliability.consensus_analyzer import compute_daily_reliability_snapshots
@@ -17,7 +17,7 @@ from src.reliability.consensus_analyzer import compute_daily_reliability_snapsho
 
 async def main() -> None:
     async with get_session() as session:
-        yesterday = datetime.now(timezone.utc).replace(
+        yesterday = datetime.now(UTC).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
         count = await compute_daily_reliability_snapshots(session, yesterday)

@@ -23,7 +23,7 @@ import argparse
 import asyncio
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 # Add project root to path so `src` imports work both as `uv run python scripts/run_transparency_demo.py`
 # and `uv run python -m scripts.run_transparency_demo` without PYTHONPATH.
@@ -45,7 +45,7 @@ from src.transparency.checkpoint import (
 from src.transparency.log import InMemoryMerkleLog, verify_chain
 from src.transparency.proofs import InclusionProof, inclusion_proof, verify_inclusion
 
-BASE_TIME = datetime(2026, 10, 1, 6, 0, 0, tzinfo=timezone.utc)
+BASE_TIME = datetime(2026, 10, 1, 6, 0, 0, tzinfo=UTC)
 
 SYNTHETIC_SOURCES = [
     ("reuters.com", "tier1"),

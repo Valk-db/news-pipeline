@@ -9,7 +9,7 @@ import argparse
 import asyncio
 import os
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,7 +47,7 @@ async def check_freshness(hours: int = 30) -> int:
     engine = create_async_engine(url, echo=False, connect_args=connect_args)
     async_session = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
 
     async with async_session() as session:
         # Count tier-1 articles in window
