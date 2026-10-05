@@ -31,7 +31,6 @@ Usage:
 import argparse
 import asyncio
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,7 +43,7 @@ from src.utils.trafilatura_extract import canonicalize_url_v1, compute_url_hash
 BATCH_SIZE = 200
 
 
-def derive(url: Optional[str]) -> Tuple[str, str]:
+def derive(url: str | None) -> tuple[str, str]:
     """Return (canonical_url_v1, url_hash_v1) for a stored url."""
     canonical = canonicalize_url_v1(url or "")
     return canonical, compute_url_hash(url or "")
@@ -62,7 +61,7 @@ async def backfill(
     dry_run: bool = True,
     limit: int = 0,
     batch_size: int = BATCH_SIZE,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     settings = get_settings()
     if not settings.has_database:
         raise SystemExit(
@@ -82,7 +81,7 @@ async def backfill(
         "collision_examples": [],
     }
     # v1 hash to the legacy hashes that produced it, for the collision report.
-    owners: Dict[str, List[str]] = defaultdict(list)
+    owners: dict[str, list[str]] = defaultdict(list)
 
     async with session_maker() as session:
         totals["pending"] = await count_pending(session)
@@ -166,7 +165,7 @@ async def backfill(
     return totals
 
 
-def report(totals: Dict[str, object], dry_run: bool, limit: int) -> None:
+def report(totals: dict[str, object], dry_run: bool, limit: int) -> None:
     prefix = "dry run, would write" if dry_run else "wrote"
     print(f"raw_articles rows missing url_hash_v1: {totals['pending']}")
     print(f"scanned {totals['scanned']} rows")

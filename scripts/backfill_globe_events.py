@@ -30,7 +30,6 @@ Usage:
 import argparse
 import asyncio
 import uuid
-from typing import Dict, List, Optional
 
 from sqlalchemy import String, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
@@ -85,7 +84,7 @@ LOCATED_ENTITIES_FOR_STORIES = (
 )
 
 
-def most_specific(entities: List[CanonicalEntity]) -> CanonicalEntity:
+def most_specific(entities: list[CanonicalEntity]) -> CanonicalEntity:
     """The place a story should be dotted at.
 
     Finest granularity first, so a story naming both "United States" and "Tel
@@ -108,7 +107,7 @@ def most_specific(entities: List[CanonicalEntity]) -> CanonicalEntity:
 
 
 def story_event(
-    story: Story, entity: CanonicalEntity, layer_id: Optional[uuid.UUID] = None
+    story: Story, entity: CanonicalEntity, layer_id: uuid.UUID | None = None
 ) -> Event:
     """The single Event a story gets, from its most specific located entity."""
     units = sum(
@@ -154,9 +153,9 @@ def story_event(
     )
 
 
-def group_by_story(rows) -> Dict[uuid.UUID, tuple]:
+def group_by_story(rows) -> dict[uuid.UUID, tuple]:
     """Collapse (story, entity) rows into {story: (story, [entity, ...])}."""
-    grouped: Dict[uuid.UUID, tuple] = {}
+    grouped: dict[uuid.UUID, tuple] = {}
     for story, entity in rows:
         if story.id not in grouped:
             grouped[story.id] = (story, [])

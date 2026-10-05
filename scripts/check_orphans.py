@@ -25,7 +25,7 @@ import asyncio
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable
 
 # Add project root to path so `src` imports work both as `python scripts/check_orphans.py`
 # and `python -m scripts.check_orphans` without PYTHONPATH.
@@ -90,7 +90,7 @@ def _dead_letters(cutoff: datetime):
 # Report order. Each entry is a label for the line and a function returning the count
 # statement. Every builder takes the window cutoff so the buckets stay uniform, but only the
 # two that are about recency use it.
-BUCKETS: List[Tuple[Callable[[int], str], Callable[[datetime], Any]]] = [
+BUCKETS: list[tuple[Callable[[int], str], Callable[[datetime], Any]]] = [
     (lambda hours: f"raw_articles pending older than {hours}h", _pending_articles),
     (lambda hours: "reporting_units with no story", _units_without_story),
     (lambda hours: "stories with no event", _stories_without_event),
@@ -99,7 +99,7 @@ BUCKETS: List[Tuple[Callable[[int], str], Callable[[datetime], Any]]] = [
 ]
 
 
-async def gather(session: AsyncSession, hours: int = WINDOW_HOURS) -> Tuple[List[str], int]:
+async def gather(session: AsyncSession, hours: int = WINDOW_HOURS) -> tuple[list[str], int]:
     """Return one report line per bucket, in report order, and how many could not be counted.
 
     A bucket that fails prints its own error line and does not stop the others, so one
@@ -107,7 +107,7 @@ async def gather(session: AsyncSession, hours: int = WINDOW_HOURS) -> Tuple[List
     turns into an exit code.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    lines: List[str] = []
+    lines: list[str] = []
     failed = 0
     for label, build in BUCKETS:
         try:
