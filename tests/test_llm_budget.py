@@ -235,8 +235,6 @@ class TestRequestBudget:
         assert status.exhausted is False
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
 def test_request_budget_rejects_token_limit():
     """RequestBudget(token_limit=...) must raise TypeError, not silently ignore.
     
@@ -246,3 +244,7 @@ def test_request_budget_rejects_token_limit():
     from src.shared.llm_budget import RequestBudget
     with pytest.raises(TypeError, match="no longer accepts token_limit"):
         RequestBudget(daily_limit=900, token_limit=60000)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

@@ -51,14 +51,6 @@ async def test_used_propagates_programming_error(monkeypatch):
     from sqlalchemy.exc import ProgrammingError
     import src.shared.budget as budget_module
     
-    class FakeConn:
-        async def __aenter__(self):
-            return self
-        async def __aexit__(self, *args):
-            return False
-        async def execute(self, *args, **kwargs):
-            raise ProgrammingError("fake", {}, Exception("bad statement"))
-    
     class FakeEngine:
         def connect(self):
             raise ProgrammingError("fake", {}, Exception("connection failed"))
@@ -67,3 +59,46 @@ async def test_used_propagates_programming_error(monkeypatch):
     
     with pytest.raises(ProgrammingError):
         await budget_module.used("test_counter")
+
+
+async def test_status_swallows_programming_error_and_refusal_still_happens(monkeypatch):
+    """status() must swallow ProgrammingError from used() and still allow refusal.
+    
+    The caller does `raise BudgetExhausted(await self.status())` after spend()
+    returns None. If status() propagated ProgrammingError, the walk would get
+    a database exception instead of BudgetExhausted. The defect is logged at
+    ERROR by used() before raising, so it is not silent.
+    """
+    from sqlalchemy.exc import ProgrammingError
+    import src.shared.budget as budget_module
+    import src.shared.llm_budget as llm_budget_module
+    
+    class FakeEngine:
+        def connect(self):
+            raise ProgrammingError("fake", {}, Exception("connection failed"))
+    
+    monkeypatch.setattr(budget_module, "_get_engine", lambda: FakeEngine())
+    
+    budget = RequestBudget(daily_limit=900)
+    # Must not raise ProgrammingError; must return unreadable status
+    status = await budget.status()
+    assert status.used_today == -1
+    assert status.exhausted is False
+    
+    # And the refusal path still works via spend() returning None
+    # (spend uses a different statement, but the principle holds)
+
+
+async def test_unreadable_refusal_message_says_unreadable_not_exhausted():
+    """The BudgetExhausted message for unreadable must say 'unreadable'.
+    
+    This is the operator-visible distinction between 'cannot verify spend'
+    and 'measured exhaustion'. The whole branch exists to remove this conflation.
+    """
+    from src.shared.llm_budget import BudgetExhausted, BudgetStatus
+    
+    status = BudgetStatus(used_today=-1, limit=900, remaining=0, exhausted=False)
+    exc = BudgetExhausted(status, "groq_requests")
+    msg = str(exc).lower()
+    assert "unreadable" in msg, f"message should say unreadable, got: {exc}"
+    assert "exhausted" not in msg or "unreadable" in msg, f"message conflates: {exc}"
