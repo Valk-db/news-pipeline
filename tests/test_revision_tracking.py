@@ -8,7 +8,6 @@ row missing when one should exist.
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
 
 import pytest
 import pytest_asyncio
@@ -92,11 +91,11 @@ async def db_session(db_engine) -> AsyncGenerator[AsyncSession, None]:
 
 async def _make_article(
     session: AsyncSession,
-    body: Optional[str] = ORIGINAL_BODY,
-    url: Optional[str] = None,
+    body: str | None = ORIGINAL_BODY,
+    url: str | None = None,
     domain: str = "apnews.com",
-    fetched_at: Optional[datetime] = None,
-    content_hash: Optional[str] = None,
+    fetched_at: datetime | None = None,
+    content_hash: str | None = None,
 ) -> RawArticle:
     """An ingested article: body_text and content_hash are what the page served then.
 
@@ -125,7 +124,7 @@ async def _count(session: AsyncSession, model) -> int:
     return int(rows.scalar_one())
 
 
-async def _revisions(session: AsyncSession, article_id) -> List[ArticleRevision]:
+async def _revisions(session: AsyncSession, article_id) -> list[ArticleRevision]:
     stmt = (
         select(ArticleRevision)
         .where(ArticleRevision.article_id == article_id)
@@ -134,7 +133,7 @@ async def _revisions(session: AsyncSession, article_id) -> List[ArticleRevision]
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def _corrections(session: AsyncSession, article_id) -> List[ArticleCorrection]:
+async def _corrections(session: AsyncSession, article_id) -> list[ArticleCorrection]:
     stmt = select(ArticleCorrection).where(ArticleCorrection.article_id == article_id)
     return list((await session.execute(stmt)).scalars().all())
 
@@ -448,8 +447,8 @@ class TestScanRevisions:
     """The batch job: dry runs write nothing, real runs record and report."""
 
     @staticmethod
-    def _fetcher(bodies: Dict[str, str]):
-        async def fetch(url: str) -> Optional[str]:
+    def _fetcher(bodies: dict[str, str]):
+        async def fetch(url: str) -> str | None:
             return bodies.get(url)
 
         return fetch
@@ -539,7 +538,7 @@ class TestScanRevisions:
         await _make_article(db_session, url="https://apnews.com/article/gone")
         await db_session.commit()
 
-        async def fetch(url: str) -> Optional[str]:
+        async def fetch(url: str) -> str | None:
             if url == dead.url:
                 raise RuntimeError("connection reset")
             return None
@@ -560,9 +559,9 @@ class TestScanRevisions:
         )
         recent = await _make_article(db_session, url="https://apnews.com/article/recent")
         await db_session.commit()
-        fetched: List[str] = []
+        fetched: list[str] = []
 
-        async def fetch(url: str) -> Optional[str]:
+        async def fetch(url: str) -> str | None:
             fetched.append(url)
             return SILENT_EDIT_BODY
 
@@ -582,7 +581,7 @@ class TestScanRevisions:
         ]
         await db_session.commit()
 
-        async def fetch(url: str) -> Optional[str]:
+        async def fetch(url: str) -> str | None:
             return SILENT_EDIT_BODY
 
         result = await scan_revisions(db_session, limit=1, fetch_text=fetch)
