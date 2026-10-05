@@ -8,7 +8,7 @@ anonymous reader, the same answer as an id that never existed.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -221,7 +221,7 @@ async def map_page(
     if sort not in ("top", "newest", "oldest"):
         sort = "top"
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with get_session() as session:
         freshness = await _collect_map_freshness(session, now)
         top_stories = await _collect_top_stories(

@@ -32,7 +32,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any
 
 from sqlalchemy import func, select
@@ -149,8 +149,8 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 async def _stamping_scale(session) -> dict[str, Any] | None:
@@ -193,7 +193,7 @@ def _scale_sentence(scale: dict[str, Any]) -> str:
     if newest is None:
         parts.append("The log itself is empty, so nothing has ever been stamped.")
         return " ".join(parts)
-    age_hours = (datetime.now(timezone.utc) - newest).total_seconds() / 3600
+    age_hours = (datetime.now(UTC) - newest).total_seconds() / 3600
     if age_hours < 0:
         parts.append(f"The newest stamp is timestamped {newest.isoformat()}.")
     else:

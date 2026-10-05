@@ -12,7 +12,7 @@ internals are still loaded.
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -161,7 +161,7 @@ def _freshness(when, now: datetime) -> str:
         return "timestamp not recorded"
     # SQLite hands back naive datetimes; the pipeline writes UTC, so a naive
     # value is UTC that has simply lost its marker.
-    moment = when if when.tzinfo is not None else when.replace(tzinfo=timezone.utc)
+    moment = when if when.tzinfo is not None else when.replace(tzinfo=UTC)
     seconds = (now - moment).total_seconds()
     if seconds < 0:
         return "just now"
@@ -377,7 +377,7 @@ async def _render_stories_grid(
         if not search_ids:
             return []
 
-    window_start, _window_end = _resolve_window(hours, datetime.now(timezone.utc))
+    window_start, _window_end = _resolve_window(hours, datetime.now(UTC))
 
     stmt = (
         select(Story)
@@ -432,7 +432,7 @@ async def _render_stories_grid(
     filter_query = _filter_query(tiers=tiers, sort=_normalize_sort(sort), hours=hours, q=q)
 
     story_data = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # Keep as UUID objects for the IN-clause bind params (the UUID column type
     # expects actual uuid.UUID instances, not strings); str() versions are used
     # below only as dict keys for grouping.
@@ -871,7 +871,7 @@ async def story_detail(
         "tier_sentence": _tier_sentence(verification["tier_mix"], len(articles)),
         "corroboration_sentence": _corroboration_sentence(verification, len(articles)),
         "status_sentence": _status_sentence(story),
-        "freshness": _freshness(story.created_at, datetime.now(timezone.utc)),
+        "freshness": _freshness(story.created_at, datetime.now(UTC)),
         "back_query": back_query,
         **bundle,
     })

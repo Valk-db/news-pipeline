@@ -7,7 +7,7 @@ serve anonymously live here next to the parameters they bound.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from fastapi import APIRouter, Request
 from sqlalchemy import and_, desc, select
@@ -67,7 +67,7 @@ async def get_globe_events(
     if not db_ok:
         return {"error": db_msg}
 
-    window_start, window_end = _resolve_window(hours, datetime.now(timezone.utc))
+    window_start, window_end = _resolve_window(hours, datetime.now(UTC))
     threshold = _corroboration_filter(min_tier1_sources)
     effective_limit = max(1, min(limit, MAP_EVENTS_MAX_LIMIT))
 
