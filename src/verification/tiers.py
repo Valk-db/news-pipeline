@@ -2,7 +2,7 @@
 
 import uuid
 from collections import defaultdict
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import (
@@ -20,9 +20,9 @@ from src.shared.config import get_settings
 
 async def recompute_story_counters(
     session: AsyncSession,
-    story_ids: List[uuid.UUID],
+    story_ids: list[uuid.UUID],
     *,
-    unit_exclusions: Optional[dict[uuid.UUID, set[uuid.UUID]]] = None,
+    unit_exclusions: dict[uuid.UUID, set[uuid.UUID]] | None = None,
 ) -> None:
     """
     Recompute story tier1_unit_count, tier2_unit_count, tier3_unit_count, tier4_unit_count, and distinct_owners
@@ -392,9 +392,9 @@ def record_gate_decision(
     tier1_unit_count: int,
     corroboration: Corroboration,
     units: Iterable,
-    score: Optional[int] = None,
-    pass_threshold: Optional[int] = None,
-    breakdown: Optional[dict] = None,
+    score: int | None = None,
+    pass_threshold: int | None = None,
+    breakdown: dict | None = None,
 ) -> GateDecision:
     """Append one row to `gate_decisions`: the decision, and the evidence behind it.
 
@@ -456,7 +456,7 @@ def record_gate_decision(
     return decision
 
 
-def evaluate_tier1_gate(unit_owner_pairs: List[Tuple[uuid.UUID, str]]) -> Tuple[bool, str]:
+def evaluate_tier1_gate(unit_owner_pairs: list[tuple[uuid.UUID, str]]) -> tuple[bool, str]:
     """
     Pure function to evaluate if a story passes the tier-1 gate.
 
@@ -536,8 +536,8 @@ def _apply_unit_exclusions(
 
 async def apply_tier1_gate(
     session: AsyncSession,
-    story_ids: Optional[List[uuid.UUID]] = None,
-    corroboration: Optional[Corroboration] = None,
+    story_ids: list[uuid.UUID] | None = None,
+    corroboration: Corroboration | None = None,
 ) -> dict:
     """
     Apply the tier-1 gate: stories need ≥2 tier-1 reporting units
@@ -841,7 +841,7 @@ def _record_gate_error(
 
 async def apply_dynamic_gate(
     session: AsyncSession,
-    story_ids: Optional[List[uuid.UUID]] = None,
+    story_ids: list[uuid.UUID] | None = None,
 ) -> dict:
     """Apply the dynamic admission score gate.
 

@@ -1,7 +1,6 @@
 """Article body extraction using trafilatura."""
 
 import trafilatura
-from typing import Optional, Tuple
 import hashlib
 import asyncio
 import httpx
@@ -75,7 +74,7 @@ _ABSOLUTE_HTTP_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 # Module-level HTTP client for connection pooling
 # Created lazily and lives for process lifetime (short-lived GitHub Actions jobs)
-_http_client: Optional[httpx.Client] = None
+_http_client: httpx.Client | None = None
 
 
 def _get_http_client() -> httpx.Client:
@@ -173,7 +172,7 @@ def _strip_host_label(host: str) -> str:
     return rest
 
 
-def _normalize_host(parts) -> Optional[str]:
+def _normalize_host(parts) -> str | None:
     """Fold the netloc into the canonical host, or None when there is no host."""
     try:
         hostname = parts.hostname
@@ -222,7 +221,7 @@ def _canonical_query(query: str) -> str:
     return urlencode(sorted(pairs))
 
 
-def _unwrap_redirector(parts, depth: int) -> Optional[str]:
+def _unwrap_redirector(parts, depth: int) -> str | None:
     """Return the destination URL a known redirector carries, or None."""
     host = _ascii_lower(parts.hostname or "")
     path = parts.path or ""
@@ -403,7 +402,7 @@ def canonicalize_url(url: str) -> str:
     return canonicalize_url_v1(url)
 
 
-def _extract_article_sync(url: str, html: Optional[str] = None, source_key: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+def _extract_article_sync(url: str, html: str | None = None, source_key: str | None = None) -> tuple[str | None, str | None]:
     """
     Synchronous article extraction (blocking).
     Internal function - use extract_article() for async version.
@@ -463,7 +462,7 @@ def _extract_article_sync(url: str, html: Optional[str] = None, source_key: Opti
         return None, None
 
 
-async def extract_article(url: str, html: Optional[str] = None, source_key: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+async def extract_article(url: str, html: str | None = None, source_key: str | None = None) -> tuple[str | None, str | None]:
     """
     Extract article body text and title from URL or HTML (async).
     Runs blocking trafilatura call in a thread pool to avoid blocking event loop.
