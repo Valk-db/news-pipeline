@@ -248,7 +248,7 @@ async def test_snippet_body_returns_a_real_snippet():
     # Pinning the literal names rather than a total is what makes this able to fail
     # if either counter starts being written twice or stops being written at all.
     assert spend.spends == 2
-    assert spend.by_name == {"groq_requests": 1, "groq_tokens": 1}
+    assert spend.by_name == {"groq_requests": 1, "groq_request_tokens": 1}
 
     # and the counter is the signature the function actually uses: n=, positional
     assert stats.events == [("snippets", "extracted", 1)]
