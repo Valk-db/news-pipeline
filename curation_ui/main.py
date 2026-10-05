@@ -6,7 +6,7 @@ one module per surface, so curation_ui/health.py can gate a route without
 importing main and each surface can be read on its own:
 
   cron.py           /api/cron/checkpoint (+ watchdog): bearer-token checkpoint signing
-curation.py       the auth-gated read-only queue: / and /story/{story_id}
+  curation.py       the auth-gated read-only queue: / and /story/{story_id}
   story_api.py      the auth-gated per-story JSON APIs
   globe.py          public /api/globe/* JSON (the /globe page was removed 2026-10-02)
   map_api.py        public /api/map/* JSON plus the freshness and story serializers

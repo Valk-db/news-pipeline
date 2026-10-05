@@ -176,14 +176,28 @@ class TestRecordTokens:
 
     async def test_record_never_refuses_and_never_raises(self, counter, monkeypatch):
         # Protects: a failed write does not raise into the provider-call path.
+        # TokenBudget.record writes through spend(), so patch spend, not record.
         import src.shared.llm_budget as module
 
-        async def unreachable(name, amount, *, day=None):
+        async def unreachable(name, amount, cap, *, day=None):
             return None  # an unreachable counter must not raise into the caller
 
-        monkeypatch.setattr(module, "record", unreachable)
+        monkeypatch.setattr(module, "spend", unreachable)
         budget = TokenBudget(GROQ_REQUESTS, 10)
         assert await budget.record(7_000) == 7_000
+
+    async def test_record_raises_loudly_on_programming_error(self, counter, monkeypatch):
+        # A broken spend (e.g. bad SQL) must fail loudly, not silently skip.
+        from sqlalchemy.exc import ProgrammingError
+        import src.shared.llm_budget as module
+
+        async def broken(name, amount, cap, *, day=None):
+            raise ProgrammingError("fake", {}, Exception("bad sql"))
+
+        monkeypatch.setattr(module, "spend", broken)
+        budget = TokenBudget(GROQ_REQUESTS, 10)
+        with __import__("pytest").raises(ProgrammingError):
+            await budget.record(7_000)
 
 
 class TestPerConsumerSeparation:
