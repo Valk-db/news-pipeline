@@ -9,7 +9,6 @@ renders anything, so the rules are testable on their own.
 
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Tuple
 
 from fastapi import HTTPException, status
 from sqlalchemy import select, desc, or_, func
@@ -302,7 +301,7 @@ async def _search_story_ids(
 def _resolve_window(
     hours: int,
     now: datetime,
-) -> Tuple[datetime, datetime]:
+) -> tuple[datetime, datetime]:
     """Turn an hours-bounded window into an inclusive (start, end) pair.
 
     hours of None or 0 means unbounded, which is how the UI asks for full
