@@ -188,7 +188,7 @@ class FieldScore:
     def exact_match(self) -> float:
         return self.exact_hit / self.exact_total if self.exact_total else 0.0
 
-    def merge(self, other: "FieldScore") -> None:
+    def merge(self, other: FieldScore) -> None:
         self.tp += other.tp
         self.fp += other.fp
         self.fn += other.fn
