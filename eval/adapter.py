@@ -88,7 +88,7 @@ class _CompletionResponse:
 
 
 class _Completions:
-    def __init__(self, shim: "TransportShim"):
+    def __init__(self, shim: TransportShim):
         self._shim = shim
 
     async def create(self, *, model: str, messages: list[dict[str, str]], temperature: float, max_tokens: int, **_: Any):
@@ -98,7 +98,7 @@ class _Completions:
 
 
 class _Chat:
-    def __init__(self, shim: "TransportShim"):
+    def __init__(self, shim: TransportShim):
         self.completions = _Completions(shim)
 
 
