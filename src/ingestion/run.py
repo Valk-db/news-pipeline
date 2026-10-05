@@ -17,7 +17,6 @@ import logging
 import sys
 import os
 from datetime import datetime, timezone
-from typing import List, Dict, Tuple
 from src.ingestion.adapter import SourceHealth
 from src.ingestion.gdelt import GDELT_TIER1_CRITICAL_DOMAINS
 from src.ingestion.source_registry import SourceTier, get_enabled_sensor_feeds
@@ -87,7 +86,7 @@ def dedupe_articles(all_articles, existing_url_hashes, existing_content_hashes):
     return new_articles, url_dup, content_dup
 
 
-def classify_tier1_sources_broken(stats_snapshot: Dict, tier1_sources: Dict) -> Tuple[List[str], Dict[str, Dict]]:
+def classify_tier1_sources_broken(stats_snapshot: dict, tier1_sources: dict) -> tuple[list[str], dict[str, dict]]:
     """
     Classify each enabled tier-1 source as BROKEN or OK.
 

@@ -25,7 +25,6 @@ import logging
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -76,11 +75,11 @@ def _http_get(url: str) -> bytes:
         return resp.read()
 
 
-def _clean(text: Optional[str]) -> str:
+def _clean(text: str | None) -> str:
     return WHITESPACE_RE.sub(" ", text or "").strip()
 
 
-def _magnitude_band(mag: Optional[float]) -> str:
+def _magnitude_band(mag: float | None) -> str:
     if mag is None:
         return "Unrated"
     for threshold, label in MAGNITUDE_BANDS:
@@ -89,7 +88,7 @@ def _magnitude_band(mag: Optional[float]) -> str:
     return "Very small"
 
 
-def _valid_coords(lat: Optional[float], lon: Optional[float]) -> Optional[Tuple[float, float]]:
+def _valid_coords(lat: float | None, lon: float | None) -> tuple[float, float] | None:
     if lat is None or lon is None:
         return None
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
@@ -97,14 +96,14 @@ def _valid_coords(lat: Optional[float], lon: Optional[float]) -> Optional[Tuple[
     return lat, lon
 
 
-def _to_float(value) -> Optional[float]:
+def _to_float(value) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
 
 
-def _epoch_ms_to_datetime(value) -> Optional[datetime]:
+def _epoch_ms_to_datetime(value) -> datetime | None:
     ms = _to_float(value)
     if ms is None or ms <= 0:
         return None
@@ -114,7 +113,7 @@ def _epoch_ms_to_datetime(value) -> Optional[datetime]:
         return None
 
 
-def _parse_pubdate(value: str) -> Optional[datetime]:
+def _parse_pubdate(value: str) -> datetime | None:
     """Parse an RFC 822 pubDate, as GDACS emits."""
     value = _clean(value)
     if not value:
@@ -130,7 +129,7 @@ def _parse_pubdate(value: str) -> Optional[datetime]:
         return None
 
 
-def _geo_entities(name: str, lat: float, lon: float, **extra) -> Dict:
+def _geo_entities(name: str, lat: float, lon: float, **extra) -> dict:
     geo = {"name": name, "lat": lat, "lon": lon}
     geo.update({k: v for k, v in extra.items() if v not in (None, "")})
     return {"GEO": geo}
@@ -140,11 +139,11 @@ def _article(
     url: str,
     title: str,
     body_text: str,
-    published_at: Optional[datetime],
+    published_at: datetime | None,
     source_domain: str,
-    entities: Dict,
+    entities: dict,
     source_name: str,
-) -> Dict:
+) -> dict:
     """Assemble one article shaped dict in the adapter article shape."""
     return {
         "url": url,
@@ -164,7 +163,7 @@ def _article(
 # ------------------------------------------------------------------- USGS
 
 
-def parse_usgs_geojson(payload: str) -> Tuple[List[Dict], int]:
+def parse_usgs_geojson(payload: str) -> tuple[list[dict], int]:
     """Parse the USGS all_day GeoJSON into article dicts.
 
     Returns (articles, skipped) where skipped counts features with no usable
@@ -172,7 +171,7 @@ def parse_usgs_geojson(payload: str) -> Tuple[List[Dict], int]:
     reverse of our lat/lon field names, so this is swapped explicitly.
     """
     data = json.loads(payload)
-    articles: List[Dict] = []
+    articles: list[dict] = []
     skipped = 0
     seen_urls = set()
 
@@ -254,7 +253,7 @@ def parse_usgs_geojson(payload: str) -> Tuple[List[Dict], int]:
     return articles, skipped
 
 
-def usgs_earthquakes() -> List[Dict]:
+def usgs_earthquakes() -> list[dict]:
     """Fetch the USGS all_day earthquake feed and return article dicts.
 
     A transport failure returns an empty list and logs, so one dead sensor does
@@ -284,14 +283,14 @@ def _strip_html(text: str) -> str:
     return _clean(text)
 
 
-def parse_gdacs_rss(payload: str) -> Tuple[List[Dict], int]:
+def parse_gdacs_rss(payload: str) -> tuple[list[dict], int]:
     """Parse the GDACS RSS feed into article dicts.
 
     Namespace agnostic on purpose: the feed mixes georss, gdacs and default
     namespaces, and the tag local names are stable. Returns (articles, skipped)
     where skipped counts items with no usable coordinates.
     """
-    articles: List[Dict] = []
+    articles: list[dict] = []
     skipped = 0
     seen_urls = set()
 
@@ -310,11 +309,11 @@ def parse_gdacs_rss(payload: str) -> Tuple[List[Dict], int]:
                 return child
         return None
 
-    def find_text(node, name: str) -> Optional[str]:
+    def find_text(node, name: str) -> str | None:
         child = find_child(node, name)
         return _clean(child.text) if child is not None else None
 
-    def find_descendant_text(node, name: str) -> Optional[str]:
+    def find_descendant_text(node, name: str) -> str | None:
         """Search the whole subtree.
 
         The live feed nests geo:lat and geo:long inside a geo:Point wrapper, so
@@ -421,7 +420,7 @@ def parse_gdacs_rss(payload: str) -> Tuple[List[Dict], int]:
     return articles, skipped
 
 
-def gdacs_alerts() -> List[Dict]:
+def gdacs_alerts() -> list[dict]:
     """Fetch the GDACS RSS feed and return article dicts.
 
     A transport failure returns an empty list and logs rather than raising.

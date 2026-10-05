@@ -67,7 +67,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -211,10 +211,10 @@ class FeedState:
     re-downloads every feed.
     """
 
-    etag: Optional[str] = None
-    last_modified: Optional[str] = None
-    last_poll_ts: Optional[float] = None
-    last_yield_ts: Optional[float] = None
+    etag: str | None = None
+    last_modified: str | None = None
+    last_poll_ts: float | None = None
+    last_yield_ts: float | None = None
     consecutive_304s: int = 0
     backoff_until_ts: float = 0.0
     consecutive_failures: int = 0
@@ -233,7 +233,7 @@ class FeedState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "FeedState":
+    def from_dict(cls, data: dict[str, Any] | None) -> FeedState:
         data = data or {}
         return cls(
             etag=data.get("etag") or None,
@@ -246,7 +246,7 @@ class FeedState:
         )
 
 
-def _as_float(value: Any) -> Optional[float]:
+def _as_float(value: Any) -> float | None:
     try:
         if value is None:
             return None
@@ -308,7 +308,7 @@ def build_request_headers(state: FeedState | None) -> dict[str, str]:
     return headers
 
 
-def _retry_after_seconds(raw: Optional[str]) -> Optional[int]:
+def _retry_after_seconds(raw: str | None) -> int | None:
     """Parse a Retry-After header as delta-seconds, or None if unusable.
 
     Only the delta-seconds form is honored. The HTTP-date form would need a
@@ -356,7 +356,7 @@ def maybe_decompress(body: bytes) -> bytes:
 def fetch_feed_polite(
     feed_url: str,
     state: FeedState | None = None,
-) -> tuple[int, bytes, Optional[str], Optional[str], Optional[int]]:
+) -> tuple[int, bytes, str | None, str | None, int | None]:
     """One polite GET. Returns (status, body, etag, last_modified, retry_after).
 
     status is the HTTP status, or 0 when the request never completed (DNS,
@@ -395,11 +395,11 @@ def fetch_feed_polite(
 # --------------------------------------------------------------------- parsing
 
 
-def _clean(text: Optional[str]) -> str:
+def _clean(text: str | None) -> str:
     return WHITESPACE_RE.sub(" ", text or "").strip()
 
 
-def _strip_html(text: Optional[str]) -> str:
+def _strip_html(text: str | None) -> str:
     """Feed descriptions are HTML fragments; keep the words, drop the markup."""
     if not text:
         return ""
@@ -512,7 +512,7 @@ def _item_fields(item: Any) -> dict[str, str]:
     return fields
 
 
-def parse_published(raw: str | None) -> Optional[datetime]:
+def parse_published(raw: str | None) -> datetime | None:
     """Parse a feed date to tz-aware UTC. RFC 822 (pubDate) first, then ISO 8601."""
     value = _clean(raw)
     if not value:
@@ -570,7 +570,7 @@ def should_poll(state: FeedState, now: float) -> bool:
 # -------------------------------------------------------------------- refresh
 
 
-def _defer(report: "RefreshReport", key: str, count: int) -> None:
+def _defer(report: RefreshReport, key: str, count: int) -> None:
     """Mark a feed as deferred by the cap, once, counting the entries it cost."""
     if key not in report.feeds_deferred:
         report.feeds_deferred.append(key)
@@ -605,7 +605,7 @@ async def refresh(
     now_fn=None,
     extract=None,
     max_body_fetches: int = MAX_BODY_FETCHES_PER_REFRESH,
-    known_url_hashes: Optional[Iterable[str]] = None,
+    known_url_hashes: Iterable[str] | None = None,
 ) -> RefreshReport:
     """Poll every due feed, parse it, and extract bodies for the new items.
 
@@ -769,7 +769,7 @@ async def refresh(
 
 async def build_articles(
     items: Sequence[dict[str, Any]],
-    known_url_hashes: Optional[Iterable[str]] = None,
+    known_url_hashes: Iterable[str] | None = None,
 ) -> list[RawArticle]:
     """Turn extracted items into RawArticle rows, skipping known and batch dupes.
 
@@ -1112,7 +1112,7 @@ async def link_to_gdelt_radar(session: AsyncSession, articles: Sequence[RawArtic
 
 async def run_evidence_refresh(
     session: AsyncSession,
-    known_url_hashes: Optional[Iterable[str]] = None,
+    known_url_hashes: Iterable[str] | None = None,
     *,
     feeds: Sequence[dict[str, Any]] | None = None,
     state_store_path: Path | None = None,

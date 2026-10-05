@@ -454,7 +454,7 @@ class RequestBudget:
         self.daily_limit = daily_limit
         self.name = name
         self.minute_limiter = minute_limiter
-        self._inflight: dict[str, "asyncio.Future"] = {}
+        self._inflight: dict[str, asyncio.Future] = {}
 
     async def status(self) -> BudgetStatus:
         try:

@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 from src.schema.models import SourceTier
 
 
@@ -31,15 +30,15 @@ class SourceConfig:
     tier: SourceTier
     category: SourceCategory
     rss_urls: list[str]
-    geographic_focus: Optional[str] = None  # e.g., "US", "UK", "EU", "Global"
+    geographic_focus: str | None = None  # e.g., "US", "UK", "EU", "Global"
     language: str = "en"
     reliability_score: float = 0.5  # 0-1, will be updated by reliability system
-    bias_rating: Optional[str] = None  # e.g., "center", "left", "right", "mixed"
-    owner_group: Optional[str] = None  # e.g., "BBC", "Guardian Media Group"
+    bias_rating: str | None = None  # e.g., "center", "left", "right", "mixed"
+    owner_group: str | None = None  # e.g., "BBC", "Guardian Media Group"
     enabled: bool = True
     fetch_priority: int = 1  # Higher = more frequent
     max_articles_per_fetch: int = 50
-    custom_headers: Optional[dict] = None
+    custom_headers: dict | None = None
     notes: str = ""
 
 
@@ -971,7 +970,7 @@ def get_enabled_sources_by_tier(tier: SourceTier) -> dict[str, SourceConfig]:
     return {k: v for k, v in ALL_SOURCES.items() if v.tier == tier and v.enabled}
 
 
-def get_source_config(domain: str) -> Optional[SourceConfig]:
+def get_source_config(domain: str) -> SourceConfig | None:
     """Get source configuration by domain."""
     return ALL_SOURCES.get(domain)
 

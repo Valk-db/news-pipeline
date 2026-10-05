@@ -1,7 +1,7 @@
 """Consensus analysis for source reliability - compare source claims against tier-1 baseline."""
 
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional
+from typing import Any
 from collections import defaultdict
 import numpy as np
 import logging
@@ -35,7 +35,7 @@ class ConsensusAnalyzer:
         session: AsyncSession,
         source_domain: str,
         days_back: int = 30,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Analyze a source's alignment with tier-1 consensus over a period.
 
@@ -110,7 +110,7 @@ class ConsensusAnalyzer:
         session: AsyncSession,
         source_domain: str,
         cutoff: datetime,
-    ) -> List[RawArticle]:
+    ) -> list[RawArticle]:
         """Get tier-1 articles that cover the same stories as the given source."""
         # Get stories covered by this source
         stmt = (
@@ -144,7 +144,7 @@ class ConsensusAnalyzer:
         session: AsyncSession,
         source_domain: str,
         cutoff: datetime,
-    ) -> List[RawArticle]:
+    ) -> list[RawArticle]:
         """Get articles from a specific source."""
         stmt = (
             select(RawArticle)
@@ -159,8 +159,8 @@ class ConsensusAnalyzer:
     async def _compute_story_consensus_embeddings(
         self,
         session: AsyncSession,
-        tier1_articles: List[RawArticle],
-    ) -> Dict[str, List[float]]:
+        tier1_articles: list[RawArticle],
+    ) -> dict[str, list[float]]:
         """Compute consensus embedding for each story from tier-1 articles."""
         # Group articles by story
         story_articles = defaultdict(list)
@@ -204,7 +204,7 @@ class ConsensusAnalyzer:
         self,
         session: AsyncSession,
         article_id: str,
-    ) -> Optional[Story]:
+    ) -> Story | None:
         """Get the story an article belongs to."""
         stmt = (
             select(Story)
@@ -218,7 +218,7 @@ class ConsensusAnalyzer:
 
 async def compute_daily_reliability_snapshots(
     session: AsyncSession,
-    date: Optional[datetime] = None,
+    date: datetime | None = None,
 ) -> int:
     """
     Compute reliability snapshots for all sources for a given date.
@@ -321,7 +321,7 @@ async def _get_fact_check_stats(
     session: AsyncSession,
     source_domain: str,
     snapshot_date: datetime,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get fact-check statistics for a source up to snapshot date."""
     stmt = (
         select(FactCheckRecord)
@@ -362,7 +362,7 @@ async def _get_correction_stats(
     session: AsyncSession,
     source_domain: str,
     snapshot_date: datetime,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get correction statistics for a source up to snapshot date."""
     stmt = (
         select(CorrectionRecord)
@@ -493,7 +493,7 @@ async def detect_corrections(session: AsyncSession) -> int:
     return corrections_found
 
 
-async def _fetch_article_text(url: str) -> Optional[str]:
+async def _fetch_article_text(url: str) -> str | None:
     """Fetch current article text from URL."""
     import httpx
     from src.utils.trafilatura_extract import extract_article

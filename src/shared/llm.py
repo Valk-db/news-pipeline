@@ -10,7 +10,7 @@ one. Both are now properties of the roster rather than of any single call site.
 import logging
 import os
 import re
-from typing import Optional, List, Dict, Any, Tuple, Callable
+from typing import Any, Callable
 from src.shared.config import get_settings
 from src.shared.llm_budget import (
     BudgetExhausted,
@@ -64,7 +64,7 @@ PLATFORM_LIMITS = {
 logger = logging.getLogger(__name__)
 
 
-def _first_non_empty(values: Optional[List[str]]) -> str:
+def _first_non_empty(values: list[str] | None) -> str:
     """Return the first non-empty stripped string from values, else ""."""
     for value in values or []:
         text = (value or "").strip()
@@ -75,8 +75,8 @@ def _first_non_empty(values: Optional[List[str]]) -> str:
 
 def build_deterministic_caption(
     story_title: str,
-    key_facts: Optional[List[str]] = None,
-    source_urls: Optional[List[str]] = None,
+    key_facts: list[str] | None = None,
+    source_urls: list[str] | None = None,
     platform: str = "twitter",
 ) -> str:
     """Build a caption without calling an LLM.
@@ -114,10 +114,10 @@ def _extract_ngrams(text: str, n: int = 7) -> set[str]:
 def validate_caption(
     caption: str,
     platform: str,
-    source_texts: List[str],
+    source_texts: list[str],
     min_ngram_overlap: int = 6,
     allow_override: bool = False,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """
     Validate a generated caption.
 
@@ -159,26 +159,26 @@ class LLMClient:
 
     def __init__(self):
         self.settings = get_settings()
-        self.groq_client: Optional[AsyncGroq] = None
-        self.cerebras_client: Optional[AsyncCerebras] = None
+        self.groq_client: AsyncGroq | None = None
+        self.cerebras_client: AsyncCerebras | None = None
         # One budget per rung, built eagerly from settings. Cerebras and the free tiers
         # used to have no counter, so their spend was invisible and uncapped; the dict
         # is keyed by rung name so a new rung cannot silently join without one.
-        self._budgets: Dict[str, RequestBudget] = {}
-        self._minute_limiters: Dict[str, MinuteLimiter] = {}
+        self._budgets: dict[str, RequestBudget] = {}
+        self._minute_limiters: dict[str, MinuteLimiter] = {}
         # One TOKEN budget per rung, same dict-per-rung discipline as _budgets.
         # Separate from _budgets because a request cap and a token cap have
         # different numbers and capping only one is not a budget: on 2026-10-03
         # dev's groq_requests read 28 while the day's 200,000 tokens were spent.
-        self._token_budgets: Dict[str, TokenBudget] = {}
+        self._token_budgets: dict[str, TokenBudget] = {}
         # Rung that last produced a usable answer, and rungs ruled out for the rest of
         # the process. See _candidates for why that is worth the two fields.
-        self._pinned: Optional[str] = None
+        self._pinned: str | None = None
         # The last rung failure, kept so a caller that must raise can chain it.
-        self._last_walk_error: Optional[BaseException] = None
+        self._last_walk_error: BaseException | None = None
         self._demoted: set[str] = set()
         self._auth_warned: set[str] = set()
-        self._openrouter_key: Optional[str] = None
+        self._openrouter_key: str | None = None
         self._openrouter_http = None
         self._init_clients()
 
@@ -290,7 +290,7 @@ class LLMClient:
             except Exception:
                 pass  # stat recording must not fail the call either
 
-    async def _check_token_headroom(self, rung: LLMRung, messages: List[Dict[str, str]],
+    async def _check_token_headroom(self, rung: LLMRung, messages: list[dict[str, str]],
                                     max_tokens: int) -> None:
         """Refuse this rung before the call if the day's tokens cannot cover it.
 
@@ -319,7 +319,7 @@ class LLMClient:
 
     # ---------------------------------------------------------------- roster
 
-    def _candidates(self) -> List[LLMRung]:
+    def _candidates(self) -> list[LLMRung]:
         """The live rungs, demoted ones removed and the pinned one first.
 
         The demotion is the reason this is not just `live_rungs`. OpenRouter's free pool
@@ -525,12 +525,12 @@ class LLMClient:
     async def _chat_completion_groq(
         self,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         max_tokens: int = 500,
         temperature: float = 0.3,
-        response_format: Optional[Dict[str, str]] = None,
-        reasoning_effort: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        response_format: dict[str, str] | None = None,
+        reasoning_effort: str | None = None,
+    ) -> dict[str, Any]:
         """Make a chat completion request to Groq, routed through budget + coalescing."""
         if not self.groq_client:
             raise LLMError("Groq client not initialized")
@@ -602,11 +602,11 @@ class LLMClient:
     async def _chat_completion_cerebras(
         self,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         max_tokens: int = 500,
         temperature: float = 0.3,
-        response_format: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        response_format: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """Make a chat completion request to Cerebras."""
         if not self.cerebras_client:
             raise LLMError("Cerebras client not initialized")
@@ -653,11 +653,11 @@ class LLMClient:
     async def _chat_completion_openrouter(
         self,
         rung: LLMRung,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         max_tokens: int = 500,
         temperature: float = 0.3,
-        response_format: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        response_format: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """Make a chat completion request to an OpenRouter rung, over plain httpx.
 
         Raw httpx rather than a new SDK dependency, for one concrete reason: Retry-After.
@@ -677,7 +677,7 @@ class LLMClient:
             )
 
         async def _do_openrouter_call():
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "model": rung.model,
                 "messages": messages,
                 "max_tokens": max_tokens,
@@ -725,13 +725,13 @@ class LLMClient:
     async def _dispatch(
         self,
         rung: LLMRung,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         *,
         max_tokens: int,
         temperature: float,
-        response_format: Optional[Dict[str, str]] = None,
-        reasoning_effort: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        response_format: dict[str, str] | None = None,
+        reasoning_effort: str | None = None,
+    ) -> dict[str, Any]:
         """One completion from one rung, however that rung is reached."""
         if rung.method == "groq":
             return await self._chat_completion_groq(
@@ -752,13 +752,13 @@ class LLMClient:
     async def _dispatch_and_record(
         self,
         rung: LLMRung,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         *,
         max_tokens: int,
         temperature: float,
-        response_format: Optional[Dict[str, str]] = None,
-        reasoning_effort: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        response_format: dict[str, str] | None = None,
+        reasoning_effort: str | None = None,
+    ) -> dict[str, Any]:
         """Dispatch to a rung and record its token usage, as one unit.
 
         The recording happens immediately after dispatch succeeds, before the
@@ -790,14 +790,14 @@ class LLMClient:
 
     async def _walk(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         *,
         max_tokens: int,
         temperature: float,
-        response_format: Optional[Dict[str, str]] = None,
-        accept: Optional[Callable[[str], Any]] = None,
-        reasoning_effort: Optional[str] = None,
-    ) -> Optional[Tuple[str, Any]]:
+        response_format: dict[str, str] | None = None,
+        accept: Callable[[str], Any] | None = None,
+        reasoning_effort: str | None = None,
+    ) -> tuple[str, Any] | None:
         """Try the roster in order and return (rung name, accepted value), or None.
 
         None and LLMError mean two different things, and the difference is the whole
@@ -839,7 +839,7 @@ class LLMClient:
         # provider limit, and the runner cannot tell "you are rate limited" from
         # "this is a bug". Measured 2026-10-03; the old hand-written chain had the
         # `from e`, and replacing it with the walk dropped it.
-        last_transient: Optional[BaseException] = None
+        last_transient: BaseException | None = None
 
         for rung in rungs:
             try:
@@ -925,10 +925,10 @@ class LLMClient:
     async def generate_caption(
         self,
         story_title: str,
-        key_facts: List[str],
-        source_urls: List[str],
+        key_facts: list[str],
+        source_urls: list[str],
         platform: str = "twitter",
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Generate a caption for a curated post.
         CRITICAL: Paraphrase only. One link to source. Never reproduce
@@ -970,7 +970,7 @@ OUTPUT: Just the post text, nothing else."""
         # Source texts for validation (from key_facts and story_title)
         source_texts = [story_title] + key_facts
 
-        def _accept_caption(content: str) -> Optional[str]:
+        def _accept_caption(content: str) -> str | None:
             caption = (content or "").strip()
             is_valid, error = validate_caption(caption, platform, source_texts)
             if not is_valid:
@@ -997,7 +997,7 @@ OUTPUT: Just the post text, nothing else."""
         self,
         title: str,
         body: str,
-        topics: Optional[List[str]] = None,
+        topics: list[str] | None = None,
     ) -> float:
         """Classify article relevance to target topics (0-1)."""
         if topics is None:
@@ -1016,7 +1016,7 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
 
         response_format = {"type": "json_object"}
 
-        def _accept_score(content: str) -> Optional[float]:
+        def _accept_score(content: str) -> float | None:
             data = self._parse_json_response(content)
             return float(data.get("score", 0))
 
@@ -1038,7 +1038,7 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
             return 0.5  # Default neutral
         return walked[1]
 
-    def _parse_json_response(self, content: str) -> Dict[str, Any]:
+    def _parse_json_response(self, content: str) -> dict[str, Any]:
         """Parse JSON response, handling fenced code blocks if present."""
         content = content.strip()
         if content.startswith("```"):
@@ -1058,11 +1058,11 @@ Return a JSON object: {{"score": 0.0-1.0, "reason": "brief explanation"}}"""
 
     async def chat_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         max_tokens: int = 500,
         temperature: float = 0.3,
-        reasoning_effort: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        reasoning_effort: str | None = None,
+    ) -> dict[str, Any]:
         """
         General chat completion interface compatible with OpenAI API format.
 
