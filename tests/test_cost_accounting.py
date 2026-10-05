@@ -663,7 +663,12 @@ class TestCerebrasRealParse:
     """
 
     async def test_valid_cerebras_response_parses(self, budget_counter):
-        """A well-formed Cerebras response yields content and usage."""
+        """A well-formed Cerebras response yields content and usage.
+
+        Calls the real _chat_completion_cerebras, not a fake that replicates
+        its parsing. The mock transport returns an SDK-shaped response; the
+        method under test does the extraction.
+        """
         from types import SimpleNamespace
 
         client = make_client(ReplayedTransport([]))
@@ -676,46 +681,50 @@ class TestCerebrasRealParse:
             usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         )
 
-        # Call the parsing logic directly via _dispatch_and_record
-        from src.shared.llm_roster import ROSTER
-        rung = next(r for r in ROSTER if r.name == "cerebras")
+        # Mock the SDK client to return our response
+        async def fake_create(**kwargs):
+            return response
 
-        async def fake_dispatch(*args, **kwargs):
-            # Simulate what _chat_completion_cerebras does with the response
-            usage = {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15,
-            }
-            try:
-                content = response.choices[0].message.content
-            except (IndexError, AttributeError):
-                content = None
-            return {"choices": [{"message": {"content": content}}], "usage": usage}
+        client.cerebras_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+        )
 
-        client._dispatch = fake_dispatch
-        result = await client._dispatch_and_record(rung, MESSAGES, max_tokens=100, temperature=0)
+        result = await client._chat_completion_cerebras(
+            model="llama-3.3-70b",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=100,
+        )
         assert result["choices"][0]["message"]["content"] == "hello from cerebras"
+        assert result["usage"]["total_tokens"] == 15
 
     async def test_malformed_cerebras_choices_yields_none_not_raise(self, budget_counter):
-        """Empty choices do not raise; content is None and usage is preserved."""
-        from src.shared.llm_roster import ROSTER
-        rung = next(r for r in ROSTER if r.name == "cerebras")
+        """Empty choices do not raise; content is None and usage is preserved.
+
+        Calls the real _chat_completion_cerebras with a malformed SDK response.
+        """
+        from types import SimpleNamespace
 
         client = make_client(ReplayedTransport([]))
 
-        async def fake_dispatch(*args, **kwargs):
-            # Empty choices: content extraction fails, but must not raise
-            try:
-                content = [][0]
-            except (IndexError, AttributeError):
-                content = None
-            return {
-                "choices": [{"message": {"content": content}}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-            }
+        # Malformed: empty choices, but usage is present (billed response)
+        response = SimpleNamespace(
+            choices=[],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
 
-        client._dispatch = fake_dispatch
-        result = await client._dispatch_and_record(rung, MESSAGES, max_tokens=100, temperature=0)
+        async def fake_create(**kwargs):
+            return response
+
+        client.cerebras_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+        )
+
+        result = await client._chat_completion_cerebras(
+            model="llama-3.3-70b",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=100,
+        )
         # Does not raise; content is None
         assert result["choices"][0]["message"]["content"] is None
+        # Usage is preserved even when choices are malformed
+        assert result["usage"]["total_tokens"] == 15
