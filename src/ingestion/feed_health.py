@@ -91,7 +91,7 @@ class FeedHealth:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "FeedHealth":
+    def from_dict(cls, data: dict) -> FeedHealth:
         fields = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
         return cls(**{k: v for k, v in data.items() if k in fields})
 

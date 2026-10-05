@@ -1,7 +1,7 @@
 """Snippet extraction from articles using LLM for key quotes, stats, facts."""
 
 import re
-from typing import List, Dict, Any
+from typing import Any
 import logging
 
 from src.shared.llm import get_llm_client
@@ -68,7 +68,7 @@ async def extract_snippets_from_article(
     text: str,
     title: str,
     max_snippets: int = 5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Extract key snippets (quotes, stats, facts) from an article using LLM.
 
@@ -230,9 +230,9 @@ Only return the JSON array, no explanation. Maximum {max_snippets} snippets."""
 
 async def extract_snippets_for_story(
     story_id: str,
-    articles: List[Dict[str, Any]],
+    articles: list[dict[str, Any]],
     max_per_article: int = 3,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Extract snippets from all articles in a story.
 
@@ -270,7 +270,7 @@ async def extract_snippets_for_story(
     return all_snippets
 
 
-def deduplicate_snippets(snippets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def deduplicate_snippets(snippets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Remove duplicate snippets using MinHash similarity.
 
@@ -307,7 +307,7 @@ def deduplicate_snippets(snippets: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 async def extract_key_quotes(
     text: str,
     max_quotes: int = 5,
-) -> List[str]:
+) -> list[str]:
     """
     Extract direct quotes from text using regex patterns.
 
@@ -341,7 +341,7 @@ async def extract_key_quotes(
     return unique_quotes[:max_quotes]
 
 
-async def extract_statistics(text: str, max_stats: int = 5) -> List[Dict[str, Any]]:
+async def extract_statistics(text: str, max_stats: int = 5) -> list[dict[str, Any]]:
     """
     Extract statistical claims from text.
 
@@ -384,7 +384,7 @@ async def extract_statistics(text: str, max_stats: int = 5) -> List[Dict[str, An
 async def extract_factual_claims(
     text: str,
     max_claims: int = 5,
-) -> List[str]:
+) -> list[str]:
     """
     Extract definitive factual claims from text.
 

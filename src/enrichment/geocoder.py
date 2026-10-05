@@ -34,7 +34,6 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +67,7 @@ class GeoResult:
     importance: float = 0.0
 
 
-def parse_nominatim_hit(hit: dict) -> Optional[GeoResult]:
+def parse_nominatim_hit(hit: dict) -> GeoResult | None:
     """One Nominatim hit as a GeoResult, or None when it carries no usable point."""
     try:
         latitude = float(hit["lat"])
@@ -90,7 +89,7 @@ def parse_nominatim_hit(hit: dict) -> Optional[GeoResult]:
     )
 
 
-def _fetch_nominatim(name: str) -> Optional[GeoResult]:
+def _fetch_nominatim(name: str) -> GeoResult | None:
     """Blocking single-place lookup. Runs in a worker thread, never on the loop."""
     params = urllib.parse.urlencode(
         {"q": name, "format": "json", "limit": 1, "addressdetails": 1}
@@ -114,7 +113,7 @@ class Geocoder:
     def __init__(self) -> None:
         # A None value is a remembered failure, not a missing entry: see the
         # module docstring.
-        self._cache: Dict[str, Optional[GeoResult]] = {}
+        self._cache: dict[str, GeoResult | None] = {}
         self._last_request = 0.0
 
     async def _pace(self) -> None:
@@ -123,7 +122,7 @@ class Geocoder:
         if wait > 0:
             await asyncio.sleep(wait)
 
-    async def geocode(self, name: str) -> Optional[GeoResult]:
+    async def geocode(self, name: str) -> GeoResult | None:
         """Best match for a place name, or None when the name does not resolve.
 
         Never raises: geocoding is enrichment, and an unreachable geocoder must

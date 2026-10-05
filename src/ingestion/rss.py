@@ -9,7 +9,7 @@ Production ingestion always uses source_registry.
 import feedparser
 import httpx
 import logging
-from typing import List, Optional, Callable, Awaitable
+from typing import Callable, Awaitable
 from datetime import datetime, timezone
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
 from src.utils.ner import extract_entities_top_n
@@ -23,7 +23,7 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
-async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30, source_key: str = "") -> Optional[feedparser.FeedParserDict]:
+async def fetch_feed(client: httpx.AsyncClient, feed_url: str, timeout: int = 30, source_key: str = "") -> feedparser.FeedParserDict | None:
     """Fetch and parse a single RSS feed with retry logic.
 
     Retries on 5xx, 429, timeouts, and network errors.
@@ -130,7 +130,7 @@ async def process_feed_entry(
     entry: feedparser.FeedParserDict,
     source_info: dict,
     source_key: str,
-) -> Optional[RawArticle]:
+) -> RawArticle | None:
     """Process a single feed entry into a RawArticle.
 
     Note: URL deduplication is handled by the caller (_bounded_process) which
@@ -200,8 +200,8 @@ async def ingest_rss_feeds(
     sources: dict,
     max_per_feed: int = 50,
     known_url_hashes: set[str] | None = None,
-    filter_known: Optional[Callable[[set[str]], Awaitable[set[str]]]] = None,
-) -> List[RawArticle]:
+    filter_known: Callable[[set[str]], Awaitable[set[str]]] | None = None,
+) -> list[RawArticle]:
     """Ingest all configured RSS feeds.
 
     Args:
@@ -262,7 +262,7 @@ async def ingest_rss_feeds(
         seen_lock = asyncio.Lock()
         extract_sem = asyncio.Semaphore(15)
 
-        async def _bounded_process(source_key: str, feed, source_info_dict: dict) -> List[RawArticle]:
+        async def _bounded_process(source_key: str, feed, source_info_dict: dict) -> list[RawArticle]:
             if not feed or not feed.entries:
                 return []
 

@@ -1,6 +1,6 @@
 """Embedding service for semantic enrichment using pgvector."""
 
-from typing import List, Dict, Any, Optional
+from typing import Any
 import hashlib
 import numpy as np
 import logging
@@ -15,7 +15,7 @@ class EmbeddingService:
         self,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         use_local: bool = True,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         """
         Initialize embedding service.
@@ -47,33 +47,33 @@ class EmbeddingService:
                 raise
         return self._local_model
 
-    async def generate_embedding(self, text: str) -> List[float]:
+    async def generate_embedding(self, text: str) -> list[float]:
         """Generate embedding for a single text."""
         if self.use_local:
             return await self._generate_local(text)
         else:
             return await self._generate_api(text)
 
-    async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    async def generate_embeddings(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts (batch)."""
         if self.use_local:
             return await self._generate_local_batch(texts)
         else:
             return await self._generate_api_batch(texts)
 
-    async def _generate_local(self, text: str) -> List[float]:
+    async def _generate_local(self, text: str) -> list[float]:
         """Generate embedding using local model."""
         model = self._get_local_model()
         embedding = model.encode(text, convert_to_numpy=True)
         return embedding.tolist()
 
-    async def _generate_local_batch(self, texts: List[str]) -> List[List[float]]:
+    async def _generate_local_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings using local model (batch)."""
         model = self._get_local_model()
         embeddings = model.encode(texts, convert_to_numpy=True, batch_size=32, show_progress_bar=False)
         return embeddings.tolist()
 
-    async def _generate_api(self, text: str) -> List[float]:
+    async def _generate_api(self, text: str) -> list[float]:
         """Generate embedding using remote API."""
         # Support for Cohere, OpenAI, etc.
         if "cohere" in self.model_name.lower():
@@ -83,7 +83,7 @@ class EmbeddingService:
         else:
             raise ValueError(f"Unsupported API model: {self.model_name}")
 
-    async def _generate_cohere(self, text: str) -> List[float]:
+    async def _generate_cohere(self, text: str) -> list[float]:
         """Generate embedding using Cohere API."""
         import httpx
 
@@ -108,7 +108,7 @@ class EmbeddingService:
             result = response.json()
             return result["embeddings"][0]
 
-    async def _generate_openai(self, text: str) -> List[float]:
+    async def _generate_openai(self, text: str) -> list[float]:
         """Generate embedding using OpenAI API."""
         import httpx
 
@@ -132,7 +132,7 @@ class EmbeddingService:
             result = response.json()
             return result["data"][0]["embedding"]
 
-    async def _generate_api_batch(self, texts: List[str]) -> List[List[float]]:
+    async def _generate_api_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings using remote API (batch)."""
         if "cohere" in self.model_name.lower():
             return await self._generate_cohere_batch(texts)
@@ -141,7 +141,7 @@ class EmbeddingService:
         else:
             raise ValueError(f"Unsupported API model: {self.model_name}")
 
-    async def _generate_cohere_batch(self, texts: List[str]) -> List[List[float]]:
+    async def _generate_cohere_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings using Cohere API (batch)."""
         import httpx
 
@@ -166,7 +166,7 @@ class EmbeddingService:
             result = response.json()
             return result["embeddings"]
 
-    async def _generate_openai_batch(self, texts: List[str]) -> List[List[float]]:
+    async def _generate_openai_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings using OpenAI API (batch)."""
         import httpx
 
@@ -192,13 +192,13 @@ class EmbeddingService:
 
 
 # Global embedding service instance
-_embedding_service: Optional[EmbeddingService] = None
+_embedding_service: EmbeddingService | None = None
 
 
 def get_embedding_service(
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
     use_local: bool = True,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
 ) -> EmbeddingService:
     """Get or create global embedding service."""
     global _embedding_service
@@ -207,7 +207,7 @@ def get_embedding_service(
     return _embedding_service
 
 
-async def embed_article(article_id: str, text: str) -> Dict[str, Any]:
+async def embed_article(article_id: str, text: str) -> dict[str, Any]:
     """
     Generate embedding for an article and return data for storage.
 
@@ -229,7 +229,7 @@ async def embed_article(article_id: str, text: str) -> Dict[str, Any]:
     }
 
 
-async def embed_story(story_id: str, texts: List[str]) -> Dict[str, Any]:
+async def embed_story(story_id: str, texts: list[str]) -> dict[str, Any]:
     """
     Generate embedding for a story (aggregated from articles).
 
@@ -261,10 +261,10 @@ async def embed_story(story_id: str, texts: List[str]) -> Dict[str, Any]:
 
 
 async def find_similar_articles(
-    query_embedding: List[float],
+    query_embedding: list[float],
     limit: int = 10,
     threshold: float = 0.7,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Find similar articles using pgvector similarity search.
 
@@ -282,10 +282,10 @@ async def find_similar_articles(
 
 
 async def find_similar_stories(
-    query_embedding: List[float],
+    query_embedding: list[float],
     limit: int = 10,
     threshold: float = 0.7,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Find similar stories using pgvector similarity search.
     """
@@ -293,14 +293,14 @@ async def find_similar_stories(
 
 
 # Utility functions for embedding management
-def cosine_similarity(a: List[float], b: List[float]) -> float:
+def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
     a_np = np.array(a)
     b_np = np.array(b)
     return float(np.dot(a_np, b_np) / (np.linalg.norm(a_np) * np.linalg.norm(b_np)))
 
 
-def normalize_embedding(embedding: List[float]) -> List[float]:
+def normalize_embedding(embedding: list[float]) -> list[float]:
     """Normalize embedding to unit length."""
     arr = np.array(embedding)
     norm = np.linalg.norm(arr)
@@ -309,7 +309,7 @@ def normalize_embedding(embedding: List[float]) -> List[float]:
     return (arr / norm).tolist()
 
 
-def average_embeddings(embeddings: List[List[float]]) -> List[float]:
+def average_embeddings(embeddings: list[list[float]]) -> list[float]:
     """Compute average of multiple embeddings."""
     if not embeddings:
         return []
@@ -320,9 +320,9 @@ def average_embeddings(embeddings: List[List[float]]) -> List[float]:
 
 # For clustering viewpoints
 async def cluster_embeddings(
-    embeddings: List[List[float]],
+    embeddings: list[list[float]],
     threshold: float = 0.7,
-) -> List[List[int]]:
+) -> list[list[int]]:
     """
     Cluster embeddings by similarity.
 

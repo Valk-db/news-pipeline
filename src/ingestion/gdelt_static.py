@@ -38,7 +38,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Iterable, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -135,28 +135,28 @@ def tier_for_domain(domain: str) -> SourceTier:
 class StaticResult:
     """Outcome of one static file pass. Mirrors gdelt.DomainResult shape."""
 
-    articles: List[RawArticle] = field(default_factory=list)
+    articles: list[RawArticle] = field(default_factory=list)
     ok: bool = True
-    error: Optional[str] = None
-    timestamps: List[str] = field(default_factory=list)
+    error: str | None = None
+    timestamps: list[str] = field(default_factory=list)
     events_rows: int = 0
     gkg_rows: int = 0
     skipped_no_geo: int = 0
     joined: int = 0
-    soft_skips: List[str] = field(default_factory=list)
+    soft_skips: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------- utilities
 
 
-def _to_float(value: str) -> Optional[float]:
+def _to_float(value: str) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
 
 
-def _valid_coords(lat: Optional[float], lon: Optional[float]) -> Optional[Tuple[float, float]]:
+def _valid_coords(lat: float | None, lon: float | None) -> tuple[float, float] | None:
     if lat is None or lon is None:
         return None
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
@@ -164,7 +164,7 @@ def _valid_coords(lat: Optional[float], lon: Optional[float]) -> Optional[Tuple[
     return lat, lon
 
 
-def parse_lastupdate(text: str) -> List[str]:
+def parse_lastupdate(text: str) -> list[str]:
     """Pull the newest first list of 15 minute timestamps out of lastupdate.txt.
 
     Each listing line is "size md5 url", where the url ends in the file name.
@@ -187,7 +187,7 @@ def parse_lastupdate(text: str) -> List[str]:
     return sorted(stamps, reverse=True)
 
 
-def _open_zip_member(path: str) -> Tuple[zipfile.ZipFile, io.TextIOWrapper]:
+def _open_zip_member(path: str) -> tuple[zipfile.ZipFile, io.TextIOWrapper]:
     """Open a downloaded zip and return (zipfile, decoded text member stream)."""
     zf = zipfile.ZipFile(path)
     names = [n for n in zf.namelist() if not n.endswith("/")]
@@ -199,7 +199,7 @@ def _open_zip_member(path: str) -> Tuple[zipfile.ZipFile, io.TextIOWrapper]:
     return zf, io.TextIOWrapper(zf.open(name), encoding="utf-8", errors="replace", newline="")
 
 
-def iter_tsv_rows(path: str) -> Iterable[List[str]]:
+def iter_tsv_rows(path: str) -> Iterable[list[str]]:
     """Yield tab separated rows from a zip member, skipping malformed lines."""
     zf, handle = _open_zip_member(path)
     try:
@@ -223,12 +223,12 @@ def clean_gkg_title(raw: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def parse_gkg_locations(raw: str) -> List[Dict]:
+def parse_gkg_locations(raw: str) -> list[dict]:
     """Parse V1LOCATIONS into dicts, keeping only entries with numeric lat/lon.
 
     Entry form: type#name#countrycode#adm1#lat#long#featureid
     """
-    out: List[Dict] = []
+    out: list[dict] = []
     for entry in (raw or "").split(";"):
         entry = entry.strip()
         if not entry:
@@ -250,7 +250,7 @@ def parse_gkg_locations(raw: str) -> List[Dict]:
     return out
 
 
-def parse_gkg_tone(raw: str) -> Optional[float]:
+def parse_gkg_tone(raw: str) -> float | None:
     """Average the comma separated tone floats, if any parse."""
     values = [v for v in (_to_float(p) for p in (raw or "").split(",")) if v is not None]
     if not values:
@@ -258,7 +258,7 @@ def parse_gkg_tone(raw: str) -> Optional[float]:
     return sum(values) / len(values)
 
 
-def event_geo(row: Sequence[str]) -> Tuple[Optional[Dict], str]:
+def event_geo(row: Sequence[str]) -> tuple[dict | None, str]:
     """Resolve event geography, preferring ActionGeo then Actor1Geo then Actor2Geo.
 
     Returns (geo_or_None, geo_source_label). geo is None when the row has no
@@ -282,7 +282,7 @@ def event_geo(row: Sequence[str]) -> Tuple[Optional[Dict], str]:
     return None, ""
 
 
-def _parse_gdelt_datetime(value: str, fmt: str = "%Y%m%d%H%M%S") -> Optional[datetime]:
+def _parse_gdelt_datetime(value: str, fmt: str = "%Y%m%d%H%M%S") -> datetime | None:
     value = (value or "").strip()
     if not value:
         return None
@@ -295,7 +295,7 @@ def _parse_gdelt_datetime(value: str, fmt: str = "%Y%m%d%H%M%S") -> Optional[dat
 # ------------------------------------------------------------------ network
 
 
-def _http_get(url: str) -> Tuple[int, bytes]:
+def _http_get(url: str) -> tuple[int, bytes]:
     """GET a URL through urllib so the egress proxy is honored.
 
     Returns (status, body). HTTPError is raised through so callers can treat a
@@ -326,7 +326,7 @@ def _download_to_disk(url: str, dest: str, max_bytes: int) -> int:
     return written
 
 
-def fetch_latest_timestamp() -> Optional[str]:
+def fetch_latest_timestamp() -> str | None:
     """Re-read lastupdate.txt and return the newest timestamp, or None."""
     _, body = _http_get(LASTUPDATE_URL)
     stamps = parse_lastupdate(body.decode("utf-8", errors="replace"))
@@ -338,7 +338,7 @@ def fetch_latest_timestamp() -> Optional[str]:
 
 def build_event_index(
     events_path: str,
-) -> Tuple[Dict[str, Dict], int, int]:
+) -> tuple[dict[str, dict], int, int]:
     """Parse the export zip into a url keyed enrichment index.
 
     Returns (index_by_source_url, rows_seen, rows_skipped_for_no_geo). Rows with
@@ -346,7 +346,7 @@ def build_event_index(
     tone and quad class are useful even without coordinates. The skipped count
     tracks rows the caller reports.
     """
-    index: Dict[str, Dict] = {}
+    index: dict[str, dict] = {}
     rows = 0
     no_geo = 0
     for row in iter_tsv_rows(events_path):
@@ -375,7 +375,7 @@ def build_event_index(
 # ----------------------------------------------------------------- gkg rows
 
 
-def _gkg_article_fields(row: Sequence[str]) -> Optional[Dict]:
+def _gkg_article_fields(row: Sequence[str]) -> dict | None:
     """Map one GKG row to article fields, or None when unusable."""
     url = row[GKG["document_identifier"]].strip()
     if not url.lower().startswith(("http://", "https://")):
@@ -397,7 +397,7 @@ def _gkg_article_fields(row: Sequence[str]) -> Optional[Dict]:
     }
 
 
-def _gkg_body_text(fields: Dict, event: Optional[Dict]) -> Optional[str]:
+def _gkg_body_text(fields: dict, event: dict | None) -> str | None:
     """Compose a body from GKG metadata, optionally enriched by the event join.
 
     These are metadata records, not article prose, so the composed body is a
@@ -424,7 +424,7 @@ def _gkg_body_text(fields: Dict, event: Optional[Dict]) -> Optional[str]:
     return " ".join(p for p in parts if p)
 
 
-def _geo_entity(fields: Dict, event: Optional[Dict], source_label: str) -> Optional[Dict]:
+def _geo_entity(fields: dict, event: dict | None, source_label: str) -> dict | None:
     """Pick the geo the pipeline stores in entities["GEO"].
 
     Event geography wins because it describes where the event happened, with
@@ -453,7 +453,7 @@ def _geo_entity(fields: Dict, event: Optional[Dict], source_label: str) -> Optio
     return None
 
 
-def build_article(fields: Dict, event: Optional[Dict], source_label: str) -> Optional[RawArticle]:
+def build_article(fields: dict, event: dict | None, source_label: str) -> RawArticle | None:
     """Build a RawArticle in the same shape the DOC API path produces."""
     body_text = _gkg_body_text(fields, event)
     if not body_text or len(body_text) < MIN_BODY_LENGTH:
@@ -463,7 +463,7 @@ def build_article(fields: Dict, event: Optional[Dict], source_label: str) -> Opt
     if geo is None:
         return None
 
-    entities: Dict = {
+    entities: dict = {
         "PERSON": fields["persons"][:5],
         "ORG": fields["organizations"][:5],
         "GPE": [loc["name"] for loc in fields["locations"][:5]],
@@ -498,11 +498,11 @@ def build_article(fields: Dict, event: Optional[Dict], source_label: str) -> Opt
 
 def parse_gkg_file(
     gkg_path: str,
-    event_index: Optional[Dict[str, Dict]] = None,
+    event_index: dict[str, dict] | None = None,
     source_label: str = "gdelt-static",
     max_articles: int = 500,
-    known_url_hashes: Optional[Set[str]] = None,
-) -> Tuple[List[RawArticle], int, int, int]:
+    known_url_hashes: set[str] | None = None,
+) -> tuple[list[RawArticle], int, int, int]:
     """Parse a GKG zip into RawArticles.
 
     Returns (articles, gkg_rows, joined, skipped_no_geo). The event join is by
@@ -510,8 +510,8 @@ def parse_gkg_file(
     required: rows without a match still produce an article if GKG itself
     carries coordinates.
     """
-    articles: List[RawArticle] = []
-    seen: Set[str] = set()
+    articles: list[RawArticle] = []
+    seen: set[str] = set()
     gkg_rows = 0
     joined = 0
     skipped_no_geo = 0
@@ -558,7 +558,7 @@ async def ingest_static_file_set(
     max_timestamps: int = 1,
     max_articles_per_file: int = 500,
     max_download_bytes: int = 64 * 1024 * 1024,
-    known_url_hashes: Optional[Set[str]] = None,
+    known_url_hashes: set[str] | None = None,
     with_events: bool = True,
     with_gkg: bool = True,
 ) -> StaticResult:
@@ -622,7 +622,7 @@ async def _ingest_one_window(
     result: StaticResult,
     max_articles: int,
     max_download_bytes: int,
-    known_url_hashes: Optional[Set[str]],
+    known_url_hashes: set[str] | None,
     with_events: bool,
     with_gkg: bool,
 ) -> None:
@@ -630,10 +630,10 @@ async def _ingest_one_window(
     source_key = f"gdelt_static.{stamp}"
     STATS.record(source_key, "entries_in_feed", 1)
 
-    event_index: Dict[str, Dict] = {}
-    events_path: Optional[str] = None
-    gkg_path: Optional[str] = None
-    paths: List[str] = []
+    event_index: dict[str, dict] = {}
+    events_path: str | None = None
+    gkg_path: str | None = None
+    paths: list[str] = []
     try:
         if with_events:
             events_path = os.path.join(tmp_dir, f"{stamp}{EVENTS_SUFFIX}")
@@ -717,7 +717,7 @@ async def _download(url: str, dest: str, max_bytes: int) -> bool:
         return False
 
 
-async def verify_static_endpoint() -> Dict[str, object]:
+async def verify_static_endpoint() -> dict[str, object]:
     """One off check that the static file manifest and a window are readable."""
     try:
         stamp = fetch_latest_timestamp()
