@@ -15,7 +15,6 @@ bug is in the SQL and a mocked database cannot see SQL.
 import re
 
 import pytest
-from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import asyncpg
 
 from src.shared.budget import GROQ_REQUESTS, _SPEND, today, spend, used
@@ -113,3 +112,31 @@ class TestTheStatementParsesOnTheDatabaseItActuallyRunsOn:
         # which parses on Postgres and is still wrong.
         assert compiled.count("$3::BIGINT") == 4, compiled
         assert compiled.count("$4::BIGINT") == 2, compiled
+
+
+class TestReportCapMatchesRuntimeCap:
+    """The usage report must not disagree with the runtime about the cap.
+
+    The CounterSpec cap_setting is what scripts/report_budget_usage.py shows.
+    The llm_roster rung is what actually refuses calls. If they point at
+    different settings, the report says 190% while the runtime says 95%.
+    """
+
+    def test_groq_token_cap_setting_matches_rung(self):
+        from src.shared.budget import COUNTERS_BY_NAME, GROQ_REQUEST_TOKENS
+        from src.shared.config import get_settings
+        from src.shared.llm_roster import ROSTER
+
+        spec = COUNTERS_BY_NAME[GROQ_REQUEST_TOKENS]
+        # The report's cap must come from the same setting the rung enforces.
+        assert spec.cap_setting == "groq_daily_token_cap", (
+            f"CounterSpec uses {spec.cap_setting}, but the rung enforces "
+            "groq_daily_token_cap"
+        )
+        # And the default must match, so a missing setting doesn't diverge.
+        settings = get_settings()
+        rung = next(r for r in ROSTER if r.name == "groq")
+        assert spec.default_cap == getattr(settings, rung.daily_token_cap_attr), (
+            f"CounterSpec default {spec.default_cap} != "
+            f"rung default {getattr(settings, rung.daily_token_cap_attr)}"
+        )

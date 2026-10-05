@@ -148,7 +148,6 @@ class Settings(BaseSettings):
     # 40,000 (20%) Phase 2 = 120,000, leaving 80,000 (40%) of headroom. At the measured
     # ~1,200 tokens per caption call, 60,000 is ~50 calls, which is why the 900-request cap
     # is unreachable on this tier rather than merely generous.
-    groq_daily_token_budget: int = 60_000
     groq_translation_daily_request_budget: int = 300
     groq_translation_daily_token_budget: int = 20_000
     mymemory_daily_char_budget: int = 45_000

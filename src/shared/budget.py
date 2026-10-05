@@ -211,8 +211,8 @@ COUNTERS: tuple[CounterSpec, ...] = (
     CounterSpec(
         name=GROQ_REQUEST_TOKENS,
         unit="tokens",
-        cap_setting="groq_daily_token_budget",
-        default_cap=60_000,
+        cap_setting="groq_daily_token_cap",
+        default_cap=120_000,
         spent_by="caption / classification (src/shared/llm_budget.py)",
         pairs_with=GROQ_REQUESTS,
     ),
