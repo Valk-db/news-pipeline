@@ -8,7 +8,7 @@ accumulate, and an error that got swallowed instead of raised.
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncGenerator, List
+from typing import Any, AsyncGenerator
 
 import pytest
 import pytest_asyncio
@@ -64,12 +64,12 @@ async def _make_article(session: AsyncSession, terminal_state: Any = None) -> Ra
     return article
 
 
-async def _runs_for(session: AsyncSession, run_id: uuid.UUID) -> List[PipelineRun]:
+async def _runs_for(session: AsyncSession, run_id: uuid.UUID) -> list[PipelineRun]:
     stmt = select(PipelineRun).where(PipelineRun.run_id == run_id).order_by(PipelineRun.stage)
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def _letters(session: AsyncSession) -> List[DeadLetter]:
+async def _letters(session: AsyncSession) -> list[DeadLetter]:
     return list((await session.execute(select(DeadLetter))).scalars().all())
 
 
