@@ -108,3 +108,57 @@ async def test_unreadable_refusal_message_says_unreadable_not_exhausted():
 # exhaustion) but the behavior has no test. test_token_refusal_walk.py provides
 # a real walk harness that could be adapted for this. Until then, this gap
 # is recorded here.
+
+
+async def test_status_unreadable_true_when_used_returns_none(monkeypatch):
+    """status().unreadable must be True when used() returns None.
+    
+    Distinct from exhausted=False: "cannot determine" vs "measured not exhausted".
+    A refusal with unreadable=True is fail-safe, not healthy.
+    """
+    import src.shared.llm_budget as module
+    
+    async def unreadable_used(name, *, day=None):
+        return None
+    
+    monkeypatch.setattr(module, "used", unreadable_used)
+    budget = RequestBudget(daily_limit=900)
+    
+    status = await budget.status()
+    assert status.unreadable is True
+    assert status.used_today == -1
+    # exhausted stays False; unreadable is the signal, not exhausted
+    assert status.exhausted is False
+
+
+async def test_status_unreadable_true_when_used_raises(monkeypatch):
+    """status().unreadable must be True when used() raises ProgrammingError."""
+    from sqlalchemy.exc import ProgrammingError
+    import src.shared.budget as budget_module
+    
+    class FakeEngine:
+        def connect(self):
+            raise ProgrammingError("fake", {}, Exception("connection failed"))
+    
+    monkeypatch.setattr(budget_module, "_get_engine", lambda: FakeEngine())
+    budget = RequestBudget(daily_limit=900)
+    
+    status = await budget.status()
+    assert status.unreadable is True
+    assert status.exhausted is False
+
+
+async def test_status_unreadable_false_on_normal_read(monkeypatch):
+    """status().unreadable must be False when the counter reads normally."""
+    import src.shared.llm_budget as module
+    
+    async def normal_used(name, *, day=None):
+        return 42
+    
+    monkeypatch.setattr(module, "used", normal_used)
+    budget = RequestBudget(daily_limit=900)
+    
+    status = await budget.status()
+    assert status.unreadable is False
+    assert status.used_today == 42
+    assert status.exhausted is False
