@@ -61,17 +61,17 @@ async def test_used_propagates_programming_error(monkeypatch):
         await budget_module.used("test_counter")
 
 
-async def test_status_swallows_programming_error_and_refusal_still_happens(monkeypatch):
-    """status() must swallow ProgrammingError from used() and still allow refusal.
+async def test_status_swallows_programming_error_reports_unreadable(monkeypatch):
+    """status() must swallow ProgrammingError from used() and report unreadable.
     
     The caller does `raise BudgetExhausted(await self.status())` after spend()
     returns None. If status() propagated ProgrammingError, the walk would get
     a database exception instead of BudgetExhausted. The defect is logged at
-    ERROR by used() before raising, so it is not silent.
+    ERROR by used() before raising, so it is not silent. The refusal itself
+    is tested separately in test_llm_budget.py.
     """
     from sqlalchemy.exc import ProgrammingError
     import src.shared.budget as budget_module
-    import src.shared.llm_budget as llm_budget_module
     
     class FakeEngine:
         def connect(self):
@@ -84,9 +84,6 @@ async def test_status_swallows_programming_error_and_refusal_still_happens(monke
     status = await budget.status()
     assert status.used_today == -1
     assert status.exhausted is False
-    
-    # And the refusal path still works via spend() returning None
-    # (spend uses a different statement, but the principle holds)
 
 
 async def test_unreadable_refusal_message_says_unreadable_not_exhausted():
@@ -101,4 +98,13 @@ async def test_unreadable_refusal_message_says_unreadable_not_exhausted():
     exc = BudgetExhausted(status, "groq_requests")
     msg = str(exc).lower()
     assert "unreadable" in msg, f"message should say unreadable, got: {exc}"
-    assert "exhausted" not in msg or "unreadable" in msg, f"message conflates: {exc}"
+    assert "exhausted" not in msg, f"message conflates unreadable with exhausted: {exc}"
+
+
+# NOTE: _walk ProgrammingError behavior is not yet pinned by a test.
+# When ensure_headroom raises ProgrammingError (broken _USED SQL), _walk catches
+# it in `except Exception`, demotes the rung, and moves on without recording
+# budget_skipped/token_budget_skipped stats. This is correct (defect, not
+# exhaustion) but the behavior has no test. test_token_refusal_walk.py provides
+# a real walk harness that could be adapted for this. Until then, this gap
+# is recorded here.
