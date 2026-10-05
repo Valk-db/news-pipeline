@@ -1,7 +1,7 @@
 """FastAPI + HTMX curation UI for story triage.
 
-This module is the app factory and nothing else: the middleware, the two
-availability checks, and the router registrations. The routes live next door,
+This module is the app factory and nothing else: the middleware, the database
+availability check, and the router registrations. The routes live next door,
 one module per surface, so curation_ui/health.py can gate a route without
 importing main and each surface can be read on its own:
 
@@ -75,26 +75,6 @@ def check_database_available() -> tuple[bool, str]:
     return True, ""
 
 
-def check_llm_available() -> tuple[bool, str]:
-    """Check if LLM is available, return (available, error_message).
-
-    Availability is either a configured provider API key, or an already
-    -initialized/injected client (e.g. the mock LLMClient tests set on
-    src.shared.llm._llm_client). Gating on settings.has_llm alone made this
-    return False even when a working client was already in place.
-
-    No route calls this any more. It was the gate the approve and edit routes
-    opened with, and both were removed on 2026-10-02, so the deterministic-
-    caption fallback this used to describe is gone with them
-    (tests/test_no_llm_fallback.py records that build_deterministic_caption is
-    no longer part of any flow). Kept because /healthz/details still reports
-    whether an LLM key is configured and the next surface that needs the check
-    should reach it the same way.
-    """
-    import src.shared.llm as llm_module
-    if not settings.has_llm and llm_module._llm_client is None:
-        return False, "No LLM configured. Set GROQ_API_KEY or CEREBRAS_API_KEY environment variable."
-    return True, ""
 # Router order matches the order the routes appeared when they all lived here, so
 # a path that used to be matched by an earlier literal still is. No two of these
 # patterns overlap, so the order is a readability property rather than a dispatch

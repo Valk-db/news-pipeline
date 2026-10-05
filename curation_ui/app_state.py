@@ -1,6 +1,5 @@
 """App-level state every router shares: the Jinja environment, the error page, and
 the database availability check.
-the database check.
 
 The check itself stays in curation_ui.main because it closes over the
 module-level `settings` object captured when the app factory ran (the test suite
@@ -64,10 +63,3 @@ def check_database_public(request: Request) -> tuple[bool, str]:
     if available:
         return True, ""
     return False, DATABASE_UNAVAILABLE_PUBLIC
-def check_llm(request: Request) -> tuple[bool, str]:
-    """(available, error_message) for the LLM, as the app factory sees it.
-
-    No route calls this: it was the approve/edit gate. Kept as the bridge so a
-    surface that needs it reaches app.state rather than importing main.
-    """
-    return request.app.state.check_llm_available()
