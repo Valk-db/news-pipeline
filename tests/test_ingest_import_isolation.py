@@ -158,11 +158,22 @@ def test_the_evidence_run_fails_loudly_rather_than_skipping(
     The permissive failure here is the expensive one: a swallowed import error
     here means articles are fetched, stamped with nothing, and reported as a
     healthy run, so the log stops growing and no /proof permalink ever resolves.
-    """
-    from src.ingestion.run import build_adapters
 
-    with pytest.raises(ImportError, match="DELIBERATE"):
-        build_adapters(_Settings(), [], sources=["rss_evidence"])
+    With the lazy transparency import (vm-main design), build_adapters succeeds
+    (the adapter module no longer pulls in the log at import time). The failure
+    surfaces when fetch() runs, as TransparencyUnavailableError.
+    """
+    import asyncio
+    from src.ingestion.run import build_adapters
+    from src.ingestion.rss_evidence import TransparencyUnavailableError, stamp_observations
+
+    adapters = build_adapters(_Settings(), [], sources=["rss_evidence"])
+    assert len(adapters) == 1
+    # Call stamp_observations directly with merkle_log=None to trigger the
+    # lazy transparency import. This avoids the database entirely; we're
+    # testing the import failure, not the fetch logic.
+    with pytest.raises(TransparencyUnavailableError):
+        asyncio.run(stamp_observations(None, [], merkle_log=None))
 
 
 def test_build_adapters_source_is_read_before_the_import():

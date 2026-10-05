@@ -25,11 +25,6 @@ from src.ingestion.adapters.rss_adapter import RssAdapter
 from src.ingestion.adapters.gdelt_adapter import GDELTAdapter
 from src.ingestion.adapters.reddit_adapter import RedditAdapter
 from src.ingestion.adapters.sensor_adapter import SensorAdapter
-from src.ingestion.adapters.rss_evidence_adapter import RssEvidenceAdapter
-# Safe to import at module level precisely because rss_evidence.py no longer
-# imports src.transparency.log at module scope; this symbol carries no
-# transparency dependency of its own.
-from src.ingestion.rss_evidence import TransparencyUnavailableError
 from src.verification.units import build_reporting_units
 from src.verification.stories import build_stories
 from src.verification.tiers import apply_dynamic_gate
@@ -378,6 +373,16 @@ async def run_ingestion(
     # Load the cross-run feed health so the empty-streak counters survive restarts,
     # and so a feed that died yesterday is still reported dead today.
     feed_health = load_active()
+    # Lazy import: rss_evidence pulls in the transparency chain.
+    # Importing at module level would make every ingest run hostage
+    # to the evidence locker. The adapter itself is imported lazily
+    # in build_adapters(); this is only for the except clause below.
+    try:
+        from src.ingestion.rss_evidence import TransparencyUnavailableError
+    except ImportError:
+        # If rss_evidence can't be imported, the adapter can't be built
+        # either, so this name will never be needed.
+        TransparencyUnavailableError = None
     results = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "phases": {},
@@ -413,22 +418,27 @@ async def run_ingestion(
             # adapter_health, and keep the articles already fetched.
             try:
                 articles = await adapter.fetch()
-            except TransparencyUnavailableError:
-                # The evidence locker's integrity dependency is unavailable.
-                # NOT contained, unlike every other failure below: this is not
-                # "the publisher was unreachable", it is "the subsystem that
-                # makes these observations trustworthy is missing". Containing
-                # it would exit 0 with an empty Merkle log that every reader
-                # would take as a full one -- the worst outcome available to a
-                # tamper-evident subsystem. The message names the module.
-                logger.exception("Adapter %s cannot run without transparency", adapter.name)
-                print(
-                    f"  {adapter.name}: FATAL -- the transparency subsystem is "
-                    f"unavailable, so nothing can be stamped. Refusing to report "
-                    f"a successful run with an empty transparency log."
-                )
-                raise
             except Exception as e:
+                # Check for the transparency error without a module-level import.
+                # If the lazy import above failed, this name is None and the
+                # adapter could not have been built, so this branch is dead.
+                if TransparencyUnavailableError is not None and isinstance(
+                    e, TransparencyUnavailableError
+                ):
+                    # The evidence locker's integrity dependency is unavailable.
+                    # NOT contained, unlike every other failure below: this is not
+                    # "the publisher was unreachable", it is "the subsystem that
+                    # makes these observations trustworthy is missing". Containing
+                    # it would exit 0 with an empty Merkle log that every reader
+                    # would take as a full one -- the worst outcome available to a
+                    # tamper-evident subsystem. The message names the module.
+                    logger.exception("Adapter %s cannot run without transparency", adapter.name)
+                    print(
+                        f"  {adapter.name}: FATAL -- the transparency subsystem is "
+                        f"unavailable, so nothing can be stamped. Refusing to report "
+                        f"a successful run with an empty transparency log."
+                    )
+                    raise
                 logger.exception(
                     "Adapter %s raised during fetch; continuing with remaining adapters",
                     adapter.name,
