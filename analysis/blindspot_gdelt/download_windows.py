@@ -11,11 +11,11 @@ responses with IncompleteRead, while curl completes them (AGENTS.md lesson).
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 BASE = "http://data.gdeltproject.org/gdeltv2/"
-START = datetime(2026, 10, 1, 18, 0, tzinfo=timezone.utc)
+START = datetime(2026, 10, 1, 18, 0, tzinfo=UTC)
 WINDOWS = 96  # quarter-hours
 
 
