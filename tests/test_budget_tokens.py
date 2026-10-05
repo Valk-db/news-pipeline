@@ -534,6 +534,12 @@ def test_the_three_groq_token_caps_fit_inside_the_published_allowance():
     Groq consumers. Three independently sized caps that each look generous is how three
     stages each come to believe they own the tier, so the sum is asserted against the real
     allowance with headroom left over.
+
+    Threshold is 90%, per Tyler's 2026-10-05 decision (Option B). The three caps are
+    120k (caption/classification), 40k (Phase 2), 20k (translation) = 180k total.
+    Lowering the roster cap to hit 75% would cut production's daily Groq capacity
+    (currently ~115k/day) too aggressively. The 10% margin (20k tokens) is tight
+    but acceptable; an unmeasured fourth consumer would need a cap review.
     """
     # Protects: the Groq stages cannot collectively exceed Groq's published allowance.
     groq_allowance = 200_000
@@ -544,4 +550,4 @@ def test_the_three_groq_token_caps_fit_inside_the_published_allowance():
     assert total <= groq_allowance, (
         f"the Groq token caps sum to {total}, over the published {groq_allowance}/day"
     )
-    assert total <= groq_allowance * 0.75, "no headroom left for an unmeasured consumer"
+    assert total <= groq_allowance * 0.90, "no headroom left for an unmeasured consumer"
