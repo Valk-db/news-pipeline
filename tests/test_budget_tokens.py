@@ -19,8 +19,6 @@ Two dialects, deliberately:
 No database required. The live dev-database proof is the coordinator's, not a unit test.
 """
 
-from datetime import date
-
 import pytest
 from sqlalchemy import BigInteger, Date
 from sqlalchemy.dialects import postgresql
@@ -39,11 +37,31 @@ from src.shared.budget import (
     _USED,
     counter_cap,
     spend,
+    today,
     used,
 )
 from src.shared.llm_budget import BudgetExhausted, RequestBudget, TokenBudget, TokenBudgetExhausted, estimate_tokens
 
-TODAY = date.today()  # Must be today: record() defaults to today, and a hardcoded date makes these tests fail on any other day.
+# The counter's day is defined exactly once, in src/shared/budget.py:376 as the UTC day.
+# These tests must read the counter back on the SAME day, and they must ask the product
+# for it rather than re-deriving it: `date.today()` is the *local* day, so on a runner
+# whose timezone is not UTC (GitHub Actions' own runners, and any developer machine not
+# set to UTC) the reads below asserted against a row that nothing had ever written to.
+#
+# Measured, not assumed (before this change, 32 tests in this file):
+#   TZ=UTC              -> 32 passed
+#   TZ=America/New_York -> 5 failed, 27 passed
+#   TZ=Asia/Kolkata, Pacific/Auckland -> 32 passed (their local day happens to match
+#                                         UTC's at the time of the run, which is exactly
+#                                         why this looks random when it is reported)
+#
+# The 5 failures were always these: the four TestRecordTokens cases (record() charges the
+# UTC day, used(day=local) read a different row and got 0) and
+# TestTokenCapRefusesWhileRequestsAreUnder::test_refuses_on_tokens_with_requests_far_under
+# (the pre-spent token row landed on the UTC day while the cap under test read the local
+# one, so nothing looked spent). The same defect was fixed in tests/test_llm_budget.py by
+# c58c6f6; this file was missed, because it re-derived the day independently.
+TODAY = today()
 
 
 @pytest.fixture
@@ -68,7 +86,6 @@ class TestTokenCapRefusesWhileRequestsAreUnder:
 
     async def test_refuses_on_tokens_with_requests_far_under(self, counter):
         # Protects: a spent token allowance refuses even when requests are far under.
-        from src.shared.llm_budget import TokenBudgetExhausted
         budget = TokenBudget(GROQ_REQUESTS, 60_000)
         await spend(GROQ_REQUEST_TOKENS, 60_000, 60_000, day=TODAY)
         await spend(GROQ_REQUESTS, 1, 900, day=TODAY)
@@ -92,7 +109,6 @@ class TestTokenCapRefusesWhileRequestsAreUnder:
         though no tokens have been spent yet. This is the estimate path, not the counter
         path, and it is the only thing standing between a huge call and a blown cap."""
         # Protects: an estimate larger than the remaining allowance is refused pre-call.
-        from src.shared.llm_budget import TokenBudgetExhausted
         budget = TokenBudget(GROQ_REQUESTS, 1_000)
 
         # ~4,000 characters of prompt is ~2,000 estimated tokens against 1,000 of cap.
@@ -243,7 +259,6 @@ class TestUnreadableCountersRefuse:
         comfortably unspent. Refusing only on the request counter would let a run spend
         a whole day of tokens against a cap it could not read."""
         # Protects: an unverifiable token budget is not an unlimited one.
-        from src.shared.llm_budget import TokenBudgetExhausted
         budget = TokenBudget(GROQ_REQUESTS, 60_000)
         await spend(GROQ_REQUESTS, 5, 900, day=TODAY)
 
