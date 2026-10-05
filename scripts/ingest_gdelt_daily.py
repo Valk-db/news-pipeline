@@ -26,7 +26,6 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from typing import Dict, List, Tuple
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,7 +52,7 @@ REQUIRED_STAGES = (
 JSON_START_RE = re.compile(r"^\{$", re.MULTILINE)
 
 
-def run_pipeline(env: str, sources: str = "", tiers: str = "", dry_run: bool = False) -> Tuple[int, str]:
+def run_pipeline(env: str, sources: str = "", tiers: str = "", dry_run: bool = False) -> tuple[int, str]:
     """Invoke run.py in a subprocess. Returns (returncode, combined output)."""
     cmd = [sys.executable, "-m", RUN_MODULE, "--env", env]
     if sources:
@@ -74,7 +73,7 @@ def run_pipeline(env: str, sources: str = "", tiers: str = "", dry_run: bool = F
     return proc.returncode, output
 
 
-def extract_results(output: str) -> Dict:
+def extract_results(output: str) -> dict:
     """Pull the pipeline results JSON out of the combined output.
 
     run.py prints a human log first and the JSON document last, so we take the
@@ -112,9 +111,9 @@ def extract_results(output: str) -> Dict:
     return {}
 
 
-def stage_counts(results: Dict) -> Dict[str, int]:
+def stage_counts(results: dict) -> dict[str, int]:
     """Flatten phase results into the per stage item counts we check."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     if not results:
         return counts
     for phase, payload in (results.get("phases") or {}).items():
@@ -127,7 +126,7 @@ def stage_counts(results: Dict) -> Dict[str, int]:
     return counts
 
 
-def check_stages(output: str, required: Tuple[str, ...] = REQUIRED_STAGES) -> List[str]:
+def check_stages(output: str, required: tuple[str, ...] = REQUIRED_STAGES) -> list[str]:
     """Return a list of stage names that produced zero items.
 
     An empty list means every required stage yielded something. When the
@@ -139,7 +138,7 @@ def check_stages(output: str, required: Tuple[str, ...] = REQUIRED_STAGES) -> Li
         return ["<missing results>"]
 
     counts = stage_counts(results)
-    empty: List[str] = []
+    empty: list[str] = []
     for stage in required:
         value = counts.get(stage)
         if value is None:

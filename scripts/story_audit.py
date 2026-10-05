@@ -13,7 +13,7 @@ import os
 import sys
 import math
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Set, Any
+from typing import Any
 from collections import defaultdict
 
 # Add project root to path for imports (repo root, not src/)
@@ -39,9 +39,9 @@ def bucket_for(jaccard: float) -> float:
 
 
 def build_unit_entity_sets(
-    units: List[Dict[str, Any]],
-    articles: Dict[str, Dict[str, Any]]
-) -> Dict[str, Set[str]]:
+    units: list[dict[str, Any]],
+    articles: dict[str, dict[str, Any]]
+) -> dict[str, set[str]]:
     """
     Build approximate canonical entity sets for units using _normalize_text.
     Only considers PERSON, ORG, GPE entities from article.entities JSON.
@@ -61,7 +61,7 @@ def build_unit_entity_sets(
     return unit_entities
 
 
-def jaccard_similarity(set_a: Set[str], set_b: Set[str]) -> float:
+def jaccard_similarity(set_a: set[str], set_b: set[str]) -> float:
     """Jaccard similarity between two sets."""
     if not set_a and not set_b:
         return 1.0
@@ -73,14 +73,14 @@ def jaccard_similarity(set_a: Set[str], set_b: Set[str]) -> float:
 
 
 def compute_jaccard_histogram(
-    units: List[Dict[str, Any]],
-    unit_entities: Dict[str, Set[str]],
-    unit_owner_groups: Dict[str, Dict[str, int]],
-    articles: Dict[str, Dict[str, Any]],
+    units: list[dict[str, Any]],
+    unit_entities: dict[str, set[str]],
+    unit_owner_groups: dict[str, dict[str, int]],
+    articles: dict[str, dict[str, Any]],
     days: int = 3,
     hours_window: int = 48,
     now: datetime | None = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     For units created in last N days: best Jaccard vs units with disjoint owner groups
     within hours_window. Returns dict with histogram, near_misses, and stats.
@@ -107,7 +107,7 @@ def compute_jaccard_histogram(
     }
 
     # Dedup set for near-misses: frozenset({a,b}) -> max jaccard entry
-    near_miss_map: Dict[frozenset, Dict[str, Any]] = {}
+    near_miss_map: dict[frozenset, dict[str, Any]] = {}
 
     for unit_a in recent_units:
         unit_a_id = str(unit_a["id"])
@@ -192,7 +192,7 @@ def compute_jaccard_histogram(
     }
 
 
-def find_duplicate_titles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def find_duplicate_titles(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Find (source_domain, title) pairs appearing more than once with fetched_at range."""
     title_groups = defaultdict(list)
     for article in articles:
@@ -213,7 +213,7 @@ def find_duplicate_titles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return duplicates
 
 
-def format_histogram(histogram: Dict[float, int]) -> str:
+def format_histogram(histogram: dict[float, int]) -> str:
     """Format histogram as markdown table."""
     lines = ["| Bucket | Count |", "|--------|-------|"]
     for bucket in sorted(histogram.keys()):
@@ -221,7 +221,7 @@ def format_histogram(histogram: Dict[float, int]) -> str:
     return "\n".join(lines)
 
 
-def format_near_misses(near_misses: List[Dict[str, Any]]) -> str:
+def format_near_misses(near_misses: list[dict[str, Any]]) -> str:
     """Format near-misses as markdown table."""
     if not near_misses:
         return "None found."
@@ -245,10 +245,10 @@ def format_near_misses(near_misses: List[Dict[str, Any]]) -> str:
 # =============================================================================
 
 def compute_story_metrics(
-    stories: List[Dict[str, Any]],
-    story_units: Dict[str, List[str]],
-    unit_info: Dict[str, Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+    stories: list[dict[str, Any]],
+    story_units: dict[str, list[str]],
+    unit_info: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
     """
     Compute per-story metrics comparing stored vs computed values.
 
@@ -293,9 +293,9 @@ def compute_story_metrics(
 
 
 def summarize_story_metrics(
-    metrics: List[Dict[str, Any]],
+    metrics: list[dict[str, Any]],
     max_examples: int = 10
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Summarize story metrics into crosstab, statuses, mismatch count, and examples.
 
@@ -341,7 +341,7 @@ def summarize_story_metrics(
 # Step D: Report assembly (pure functions)
 # =============================================================================
 
-def format_crosstab(summary: Dict[str, Any]) -> str:
+def format_crosstab(summary: dict[str, Any]) -> str:
     """Format the crosstab as a markdown table."""
     crosstab = summary.get("crosstab", {})
     statuses = summary.get("statuses", [])
@@ -377,7 +377,7 @@ def format_crosstab(summary: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_per_day(rows: List[Dict[str, Any]], title: str) -> str:
+def format_per_day(rows: list[dict[str, Any]], title: str) -> str:
     """Format per-day counts as a markdown table."""
     if not rows:
         return f"### {title}\n\nNo data."
@@ -425,7 +425,7 @@ def format_per_day(rows: List[Dict[str, Any]], title: str) -> str:
     return "\n".join(lines)
 
 
-def build_report(data: Dict[str, Any], days: int, host: str, now: datetime | None = None) -> str:
+def build_report(data: dict[str, Any], days: int, host: str, now: datetime | None = None) -> str:
     """
     Build the complete markdown report.
 
@@ -565,7 +565,7 @@ def build_report(data: Dict[str, Any], days: int, host: str, now: datetime | Non
 # Database access layer (thin)
 # =============================================================================
 
-async def fetch_audit_data(session: AsyncSession, days: int, now: datetime | None = None) -> Dict[str, Any]:
+async def fetch_audit_data(session: AsyncSession, days: int, now: datetime | None = None) -> dict[str, Any]:
     """
     Fetch all data needed for the audit using SELECT-only statements.
 
