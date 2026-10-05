@@ -20,7 +20,6 @@ are "space made available", not "disk returned to the OS".
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple
 
 from sqlalchemy import Text, and_, cast, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,7 +49,7 @@ class RetentionResult:
     story_embeddings_deleted: int = 0
     raw_articles_body_text_cleared: int = 0
     estimated_bytes_reclaimed: int = 0
-    details: List[str] = None
+    details: list[str] = None
 
     def __post_init__(self):
         if self.details is None:
@@ -72,7 +71,7 @@ class RetentionResult:
         )
 
 
-def _resolve_days(retention_days: int, override: Optional[int], name: str) -> int:
+def _resolve_days(retention_days: int, override: int | None, name: str) -> int:
     """Resolve a per-target retention window, defaulting to retention_days."""
     days = retention_days if override is None else override
     if days <= 0:
@@ -88,7 +87,7 @@ async def _measure(
     model,
     payload_column,
     where=None,
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     """Return (row_count, total_text_bytes) for the rows matching `where`."""
     stmt = select(
         func.count(model.id),
@@ -100,7 +99,7 @@ async def _measure(
     return int(row[0] or 0), int(row[1] or 0)
 
 
-async def _sample_ids(session: AsyncSession, column, where=None, limit: int = 5) -> List[str]:
+async def _sample_ids(session: AsyncSession, column, where=None, limit: int = 5) -> list[str]:
     """Grab a few ids from a matching set so log lines name actual rows."""
     if limit <= 0:
         return []
@@ -116,7 +115,7 @@ async def delete_stale_article_embeddings(
     cutoff: datetime,
     dry_run: bool = False,
     sample_limit: int = 5,
-) -> Tuple[int, int, List[str]]:
+) -> tuple[int, int, list[str]]:
     """Delete article_embeddings rows created before `cutoff`."""
     where = ArticleEmbedding.created_at < cutoff
     count, nbytes = await _measure(session, ArticleEmbedding, ArticleEmbedding.embedding, where)
@@ -134,7 +133,7 @@ async def delete_stale_story_embeddings(
     cutoff: datetime,
     dry_run: bool = False,
     sample_limit: int = 5,
-) -> Tuple[int, int, List[str]]:
+) -> tuple[int, int, list[str]]:
     """Delete story_embeddings rows created before `cutoff`."""
     where = StoryEmbedding.created_at < cutoff
     count, nbytes = await _measure(session, StoryEmbedding, StoryEmbedding.embedding, where)
@@ -151,7 +150,7 @@ async def delete_expired_story_embeddings(
     session: AsyncSession,
     dry_run: bool = False,
     sample_limit: int = 5,
-) -> Tuple[int, int, int, List[str], List[str]]:
+) -> tuple[int, int, int, list[str], list[str]]:
     """
     Delete embeddings owned by EXPIRED stories regardless of age.
 
@@ -196,7 +195,7 @@ async def clear_stale_body_text(
     cutoff: datetime,
     dry_run: bool = False,
     sample_limit: int = 5,
-) -> Tuple[int, int, List[str]]:
+) -> tuple[int, int, list[str]]:
     """
     NULL out body_text on articles fetched before `cutoff`.
 
@@ -221,8 +220,8 @@ async def clear_stale_body_text(
 async def run_retention(
     session: AsyncSession,
     retention_days: int = DEFAULT_RETENTION_DAYS,
-    embedding_retention_days: Optional[int] = None,
-    body_text_retention_days: Optional[int] = None,
+    embedding_retention_days: int | None = None,
+    body_text_retention_days: int | None = None,
     drop_expired_story_embeddings: bool = True,
     trim_body_text: bool = True,
     sample_limit: int = 5,
@@ -349,6 +348,6 @@ async def run_retention(
     return result
 
 
-def _id_suffix(ids: List[str]) -> str:
+def _id_suffix(ids: list[str]) -> str:
     """Render sampled ids for a log line, e.g. ' [id1, id2]'."""
     return f" [{', '.join(ids)}]" if ids else ""

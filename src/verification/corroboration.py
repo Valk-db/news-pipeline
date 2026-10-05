@@ -98,7 +98,7 @@ class UnitRef:
     tier1_owner_groups: Mapping[str, int] = field(default_factory=dict)
 
     @classmethod
-    def of(cls, unit) -> "UnitRef":
+    def of(cls, unit) -> UnitRef:
         """Build a ref from a ReportingUnit row."""
         return cls(
             unit_id=unit.id,
@@ -161,7 +161,7 @@ class Corroboration:
     refs: tuple[UnitRef, ...] = ()
 
     @classmethod
-    def empty(cls, refs: Sequence[UnitRef] = ()) -> "Corroboration":
+    def empty(cls, refs: Sequence[UnitRef] = ()) -> Corroboration:
         return cls(by_unit={}, refs=tuple(refs))
 
     # -- accessors -------------------------------------------------------------------

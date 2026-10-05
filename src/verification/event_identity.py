@@ -60,7 +60,7 @@ row, and this pass created nothing. Its own record of what it did is the pointer
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Iterable, Mapping, Sequence
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.sql.elements import ColumnElement
@@ -165,18 +165,18 @@ def _event_start(event: Event) -> datetime:
     return _utc(event.start_time)
 
 
-def event_time_window(event: Event, hours: int = EVENT_TIME_WINDOW_HOURS) -> Tuple[datetime, datetime]:
+def event_time_window(event: Event, hours: int = EVENT_TIME_WINDOW_HOURS) -> tuple[datetime, datetime]:
     """The half-open window an event is considered to occupy: [start, start + hours)."""
     start = _event_start(event)
     return start, start + timedelta(hours=hours)
 
 
-def windows_overlap(first: Tuple[datetime, datetime], second: Tuple[datetime, datetime]) -> bool:
+def windows_overlap(first: tuple[datetime, datetime], second: tuple[datetime, datetime]) -> bool:
     """Whether two half-open windows share any instant. Touching windows do not overlap."""
     return first[0] < second[1] and second[0] < first[1]
 
 
-def event_entity_keys(event: Event, story_entities=None) -> FrozenSet[str]:
+def event_entity_keys(event: Event, story_entities=None) -> frozenset[str]:
     """The keys an event is anchored to, in a namespace nothing else writes into.
 
     A story's `primary_entities` is a list of canonical entity ids for the pipeline's stories
@@ -202,7 +202,7 @@ def event_entity_keys(event: Event, story_entities=None) -> FrozenSet[str]:
 def same_event(
     first: Event,
     second: Event,
-    keys: Optional[Mapping] = None,
+    keys: Mapping | None = None,
 ) -> bool:
     """Whether two events are the same occurrence. All four conditions, or nothing.
 
@@ -242,7 +242,7 @@ class _UnionFind:
             self._parent[second_root] = first_root
 
 
-def _block(event: Event) -> Tuple:
+def _block(event: Event) -> tuple:
     """The candidate-generation cell: type, 24 h bucket, and 1 degree of latitude."""
     return (
         event.event_type,
@@ -251,7 +251,7 @@ def _block(event: Event) -> Tuple:
     )
 
 
-def _neighbour_blocks(event: Event) -> Iterable[Tuple]:
+def _neighbour_blocks(event: Event) -> Iterable[tuple]:
     """The nine cells whose members could match `event`: itself plus one either way."""
     event_type, bucket, band = _block(event)
     for bucket_shift in (-1, 0, 1):
@@ -264,7 +264,7 @@ class EventCluster:
     """One occurrence, and every event row that reports it."""
 
     canonical: Event
-    members: Tuple[Event, ...]
+    members: tuple[Event, ...]
 
     def __len__(self) -> int:
         return len(self.members)
@@ -291,15 +291,15 @@ def _representative(cluster: Sequence[Event]) -> Event:
 
 def cluster_events(
     events: Sequence[Event],
-    keys: Optional[Mapping] = None,
-) -> List[EventCluster]:
+    keys: Mapping | None = None,
+) -> list[EventCluster]:
     """Group events into occurrences, one cluster per occurrence.
 
     Pairs are proposed by the 3x3 block neighbourhood and decided by `same_event`, so the
     blocks change the cost and not the answer: an exhaustive pairwise pass over the same rows
     produces the same clusters.
     """
-    blocks: Dict[Tuple, List[Event]] = {}
+    blocks: dict[tuple, list[Event]] = {}
     for event in events:
         blocks.setdefault(_block(event), []).append(event)
 
@@ -315,7 +315,7 @@ def cluster_events(
                 if same_event(event, other, keys):
                     union.union(event.id, other.id)
 
-    members: Dict[object, List[Event]] = {}
+    members: dict[object, list[Event]] = {}
     for event in events:
         members.setdefault(union.find(event.id), []).append(event)
     return [
@@ -324,7 +324,7 @@ def cluster_events(
     ]
 
 
-async def cluster_corroboration(session, events: Sequence[Event]) -> Dict:
+async def cluster_corroboration(session, events: Sequence[Event]) -> dict:
     """Corroboration summed over each event's cluster: {event id: (sources, tier 1)}.
 
     One grouped query for the whole page. This is where the collapse turns into evidence --
@@ -358,7 +358,7 @@ class DedupReport:
 
 async def assign_canonical_events(
     session,
-    events: Optional[Sequence[Event]] = None,
+    events: Sequence[Event] | None = None,
 ) -> DedupReport:
     """Point every event row at the event that represents it. Returns what it changed.
 
@@ -374,7 +374,7 @@ async def assign_canonical_events(
         return DedupReport(inspected=0, clusters=0, collapsed=0)
 
     story_ids = {event.story_id for event in events if event.story_id}
-    story_entities: Dict = {}
+    story_entities: dict = {}
     if story_ids:
         rows = await session.execute(
             select(Story.id, Story.primary_entities).where(Story.id.in_(story_ids))

@@ -45,7 +45,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Awaitable, Callable, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy import select
@@ -80,7 +80,7 @@ DIFF_CONTEXT_LINES = 1
 # heading shorter than this keeps the following paragraph in the stored snippet.
 BLOCK_HEADING_MAX_CHARS = 80
 
-FetchText = Callable[[str], Awaitable[Optional[str]]]
+FetchText = Callable[[str], Awaitable[str | None]]
 
 CORRECTION_SIGNAL_TOP = "top"
 CORRECTION_SIGNAL_BODY = "body"
@@ -110,7 +110,7 @@ class CorrectionPattern:
 # Signals that mean a correction on their own, wherever they appear. "Corrected" or
 # "clarification" mid-article is still a correction; "updated" alone is not, because
 # ordinary reporting says "the figures were updated" all the time.
-DEFAULT_CORRECTION_PATTERNS: Tuple[CorrectionPattern, ...] = (
+DEFAULT_CORRECTION_PATTERNS: tuple[CorrectionPattern, ...] = (
     CorrectionPattern.compile("correction", r"\bcorrections?\b"),
     CorrectionPattern.compile("clarification", r"\bclarifications?\b"),
     CorrectionPattern.compile("erratum", r"\berrat(?:um|a)\b"),
@@ -128,14 +128,14 @@ DEFAULT_CORRECTION_PATTERNS: Tuple[CorrectionPattern, ...] = (
 
 # Weaker signals, counted only near the top of the article or inside a corrections
 # block, where a notice is the natural reading and the false-positive cost is low.
-DEFAULT_TOP_CORRECTION_PATTERNS: Tuple[CorrectionPattern, ...] = (
+DEFAULT_TOP_CORRECTION_PATTERNS: tuple[CorrectionPattern, ...] = (
     CorrectionPattern.compile("updated", r"\bupdated\b"),
     CorrectionPattern.compile("update", r"\bupdate\s+to\s+this\s+(?:story|article|report)\b"),
 )
 
 # A paragraph that introduces a corrections block. "Corrections", "Editor's note",
 # "Updated 4:12pm" -- the heading is part of the notice, and so is what follows it.
-DEFAULT_CORRECTIONS_BLOCK_PATTERNS: Tuple[CorrectionPattern, ...] = (
+DEFAULT_CORRECTIONS_BLOCK_PATTERNS: tuple[CorrectionPattern, ...] = (
     CorrectionPattern.compile(
         "corrections-block",
         r"^\s*(?:corrections?|clarifications?|errata|editor'?s?\s+notes?|updates?|"
@@ -147,7 +147,7 @@ DEFAULT_CORRECTIONS_BLOCK_PATTERNS: Tuple[CorrectionPattern, ...] = (
 # last match wins, because pages that show both "Published" and "Updated" put the newer
 # one last. Per-source formats are a long tail, which is why the pattern list is a
 # parameter rather than a constant.
-DEFAULT_DISPLAYED_TIMESTAMP_PATTERNS: Tuple["re.Pattern", ...] = (
+DEFAULT_DISPLAYED_TIMESTAMP_PATTERNS: tuple["re.Pattern", ...] = (
     re.compile(
         r"(?i)\b(?:last\s+)?updated(?:\s+at)?\s*[:\-]?\s*"
         r"(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\s?(?:Z|[+-]\d{2}:?\d{2}))?)"
@@ -224,15 +224,15 @@ class RevisionOutcome:
     content_hash: str
     changed: bool
     reason: str
-    revision_id: Optional[UUID] = None
-    revision_number: Optional[int] = None
-    change_kind: Optional[ArticleRevision.ChangeKind] = None
-    displayed_at: Optional[datetime] = None
-    diff: Optional[DiffSummary] = None
-    corrections: Optional[List[CorrectionSignal]] = None
+    revision_id: UUID | None = None
+    revision_number: int | None = None
+    change_kind: ArticleRevision.ChangeKind | None = None
+    displayed_at: datetime | None = None
+    diff: DiffSummary | None = None
+    corrections: list[CorrectionSignal] | None = None
     corrections_truncated: bool = False
-    log_index: Optional[int] = None
-    details: Optional[List[str]] = None
+    log_index: int | None = None
+    details: list[str] | None = None
 
     def __post_init__(self):
         if self.corrections is None:
@@ -278,7 +278,7 @@ class RevisionScanResult:
     corrections_truncated: int = 0
     fetch_failures: int = 0
     skipped_recent: int = 0
-    details: Optional[List[str]] = None
+    details: list[str] | None = None
 
     def __post_init__(self):
         if self.details is None:
@@ -303,7 +303,7 @@ class RevisionScanResult:
         )
 
 
-def split_paragraphs(text: str) -> List[str]:
+def split_paragraphs(text: str) -> list[str]:
     """Split into paragraphs with internal whitespace collapsed.
 
     Blank lines separate paragraphs. Text with no blank lines but several lines is
@@ -324,7 +324,7 @@ def split_paragraphs(text: str) -> List[str]:
     return paragraphs
 
 
-def _cap(text: str, limit: int, marker: str) -> Tuple[str, bool]:
+def _cap(text: str, limit: int, marker: str) -> tuple[str, bool]:
     """Trim `text` to `limit` characters, marker included. Reports whether it trimmed."""
     if len(text) <= limit:
         return text, False
@@ -372,7 +372,7 @@ def summarize_diff(
     )
 
 
-def _first_match(paragraph: str, patterns: Sequence[CorrectionPattern]) -> Optional[CorrectionPattern]:
+def _first_match(paragraph: str, patterns: Sequence[CorrectionPattern]) -> CorrectionPattern | None:
     for candidate in patterns:
         if candidate.pattern.search(paragraph):
             return candidate
@@ -389,13 +389,13 @@ def _snippet(paragraph: str, following: str, max_chars: int, in_block: bool) -> 
 
 def _scan_corrections(
     content: str,
-    patterns: Optional[Sequence[CorrectionPattern]],
-    top_patterns: Optional[Sequence[CorrectionPattern]],
-    block_patterns: Optional[Sequence[CorrectionPattern]],
+    patterns: Sequence[CorrectionPattern] | None,
+    top_patterns: Sequence[CorrectionPattern] | None,
+    block_patterns: Sequence[CorrectionPattern] | None,
     top_paragraphs: int,
     max_snippet_chars: int,
     max_signals: int,
-) -> Tuple[List[CorrectionSignal], bool]:
+) -> tuple[list[CorrectionSignal], bool]:
     """Return (signals, truncated) for `content`."""
     strong = DEFAULT_CORRECTION_PATTERNS if patterns is None else patterns
     weak = DEFAULT_TOP_CORRECTION_PATTERNS if top_patterns is None else top_patterns
@@ -405,7 +405,7 @@ def _scan_corrections(
     if not paragraphs:
         return [], False
 
-    found: List[CorrectionSignal] = []
+    found: list[CorrectionSignal] = []
     seen = set()
     truncated = False
 
@@ -467,13 +467,13 @@ def _scan_corrections(
 
 def detect_corrections(
     content: str,
-    patterns: Optional[Sequence[CorrectionPattern]] = None,
-    top_patterns: Optional[Sequence[CorrectionPattern]] = None,
-    block_patterns: Optional[Sequence[CorrectionPattern]] = None,
+    patterns: Sequence[CorrectionPattern] | None = None,
+    top_patterns: Sequence[CorrectionPattern] | None = None,
+    block_patterns: Sequence[CorrectionPattern] | None = None,
     top_paragraphs: int = DEFAULT_TOP_PARAGRAPHS,
     max_snippet_chars: int = DEFAULT_MAX_SNIPPET_CHARS,
     max_signals: int = DEFAULT_MAX_CORRECTION_SIGNALS,
-) -> List[CorrectionSignal]:
+) -> list[CorrectionSignal]:
     """Find correction and update notices in fetched article text.
 
     Signals land in one of three places, and the place is stored with the match because
@@ -495,7 +495,7 @@ def detect_corrections(
     )
     return found
 
-def _parse_displayed_timestamp(raw: str) -> Optional[datetime]:
+def _parse_displayed_timestamp(raw: str) -> datetime | None:
     """Parse a displayed timestamp. No offset in the string means UTC."""
     text = re.sub(r"\s+", " ", (raw or "").strip()).strip()
     if not text:
@@ -523,9 +523,9 @@ def _parse_displayed_timestamp(raw: str) -> Optional[datetime]:
 
 def extract_displayed_timestamp(
     content: str,
-    patterns: Optional[Sequence["re.Pattern"]] = None,
+    patterns: Sequence["re.Pattern"] | None = None,
     top_paragraphs: int = DEFAULT_TOP_PARAGRAPHS,
-) -> Optional[datetime]:
+) -> datetime | None:
     """Read the update timestamp the page itself displays, if it shows one.
 
     Only the top region is searched and the last match wins. Returns None when the page
@@ -544,9 +544,9 @@ def extract_displayed_timestamp(
 
 async def get_article(
     session: AsyncSession,
-    article_id: Optional[Union[UUID, str]] = None,
-    url: Optional[str] = None,
-) -> Optional[RawArticle]:
+    article_id: UUID | str | None = None,
+    url: str | None = None,
+) -> RawArticle | None:
     """Look an article up by id or by url, whichever is given."""
     if article_id is not None:
         stmt = select(RawArticle).where(RawArticle.id == article_id)
@@ -560,7 +560,7 @@ async def get_article(
 
 async def _resolve_article(
     session: AsyncSession,
-    article: Union[RawArticle, UUID, str],
+    article: RawArticle | UUID | str,
 ) -> RawArticle:
     """Accept a loaded article, an article id, or a url."""
     if isinstance(article, RawArticle):
@@ -577,7 +577,7 @@ async def _resolve_article(
     return found
 
 
-async def latest_revision(session: AsyncSession, article_id: UUID) -> Optional[ArticleRevision]:
+async def latest_revision(session: AsyncSession, article_id: UUID) -> ArticleRevision | None:
     """The newest revision row for an article, or None if it has never changed."""
     stmt = (
         select(ArticleRevision)
@@ -591,15 +591,15 @@ async def latest_revision(session: AsyncSession, article_id: UUID) -> Optional[A
 
 async def record_revision(
     session: AsyncSession,
-    article: Union[RawArticle, UUID, str],
+    article: RawArticle | UUID | str,
     content: str,
-    previous_content: Optional[str] = None,
-    fetched_at: Optional[datetime] = None,
-    displayed_at: Optional[datetime] = None,
-    patterns: Optional[Sequence[CorrectionPattern]] = None,
-    top_patterns: Optional[Sequence[CorrectionPattern]] = None,
-    block_patterns: Optional[Sequence[CorrectionPattern]] = None,
-    timestamp_patterns: Optional[Sequence["re.Pattern"]] = None,
+    previous_content: str | None = None,
+    fetched_at: datetime | None = None,
+    displayed_at: datetime | None = None,
+    patterns: Sequence[CorrectionPattern] | None = None,
+    top_patterns: Sequence[CorrectionPattern] | None = None,
+    block_patterns: Sequence[CorrectionPattern] | None = None,
+    timestamp_patterns: Sequence["re.Pattern"] | None = None,
     top_paragraphs: int = DEFAULT_TOP_PARAGRAPHS,
     max_excerpt_chars: int = DEFAULT_MAX_EXCERPT_CHARS,
     max_snippet_chars: int = DEFAULT_MAX_SNIPPET_CHARS,
@@ -772,7 +772,7 @@ async def record_revision(
     return outcome
 
 
-async def default_fetch_text(url: str) -> Optional[str]:
+async def default_fetch_text(url: str) -> str | None:
     """Re-fetch a URL and extract its body with the extractor ingestion uses.
 
     Imported lazily so that a dry run, a test with an injected fetcher, or a caller
@@ -789,11 +789,11 @@ async def scan_revisions(
     window_hours: int = DEFAULT_SCAN_WINDOW_HOURS,
     rescan_after_hours: int = DEFAULT_RESCAN_AFTER_HOURS,
     limit: int = DEFAULT_SCAN_LIMIT,
-    fetch_text: Optional[FetchText] = None,
-    patterns: Optional[Sequence[CorrectionPattern]] = None,
-    top_patterns: Optional[Sequence[CorrectionPattern]] = None,
-    block_patterns: Optional[Sequence[CorrectionPattern]] = None,
-    timestamp_patterns: Optional[Sequence["re.Pattern"]] = None,
+    fetch_text: FetchText | None = None,
+    patterns: Sequence[CorrectionPattern] | None = None,
+    top_patterns: Sequence[CorrectionPattern] | None = None,
+    block_patterns: Sequence[CorrectionPattern] | None = None,
+    timestamp_patterns: Sequence["re.Pattern"] | None = None,
     top_paragraphs: int = DEFAULT_TOP_PARAGRAPHS,
     max_excerpt_chars: int = DEFAULT_MAX_EXCERPT_CHARS,
     max_snippet_chars: int = DEFAULT_MAX_SNIPPET_CHARS,

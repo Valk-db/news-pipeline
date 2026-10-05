@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import List
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import Story, ReportingUnit, StoryUnitLink, StatusLog
@@ -15,7 +14,7 @@ class CleanupResult:
     stories_expired: int = 0
     orphaned_units_removed: int = 0
     stale_links_removed: int = 0
-    details: List[str] = None
+    details: list[str] = None
 
     def __post_init__(self):
         if self.details is None:
