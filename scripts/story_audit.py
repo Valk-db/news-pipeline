@@ -12,7 +12,7 @@ import argparse
 import os
 import sys
 import math
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import List, Dict, Set, Any
 from collections import defaultdict
 
@@ -86,7 +86,7 @@ def compute_jaccard_histogram(
     within hours_window. Returns dict with histogram, near_misses, and stats.
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
     # Filter units by creation date (last days days)
     cutoff = now - timedelta(days=days)
@@ -442,7 +442,7 @@ def build_report(data: Dict[str, Any], days: int, host: str, now: datetime | Non
     - duplicates: list of duplicate title dicts
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
     lines = []
 
@@ -578,7 +578,7 @@ async def fetch_audit_data(session: AsyncSession, days: int, now: datetime | Non
     - duplicates
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
     # ---- Counts ----
     raw_count = await session.scalar(select(func.count(RawArticle.id)))
@@ -812,7 +812,7 @@ async def run_audit(db_url: str, days: int = 3) -> str:
         host_info = f"{url.host}:{url.port}" if url.port else url.host
 
         # Fetch all data
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         data = await fetch_audit_data(session, days, now=now)
 
         # Rollback (read-only transaction, but good practice)

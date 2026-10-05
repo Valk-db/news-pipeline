@@ -3,7 +3,7 @@
 
 import asyncio
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 from collections import defaultdict
 
 from dotenv import load_dotenv
@@ -27,7 +27,7 @@ async def what_if_simulation():
     async_session = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=168)
+        cutoff = datetime.now(UTC) - timedelta(hours=168)
 
         # 1. Fetch all tier-1 units in one query
         stmt = select(ReportingUnit).where(ReportingUnit.created_at >= cutoff)

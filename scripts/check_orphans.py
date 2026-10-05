@@ -24,7 +24,7 @@ import argparse
 import asyncio
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import Any, Callable, List, Tuple
 
 # Add project root to path so `src` imports work both as `python scripts/check_orphans.py`
@@ -106,7 +106,7 @@ async def gather(session: AsyncSession, hours: int = WINDOW_HOURS) -> Tuple[List
     missing table cannot hide the rest of the report. The count is what the caller
     turns into an exit code.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
     lines: List[str] = []
     failed = 0
     for label, build in BUCKETS:

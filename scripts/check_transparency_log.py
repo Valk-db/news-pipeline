@@ -18,7 +18,7 @@ import argparse
 import asyncio
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -46,7 +46,7 @@ def _as_utc(value: datetime | None) -> datetime | None:
     """
     if value is None or value.tzinfo is not None:
         return value
-    return value.replace(tzinfo=timezone.utc)
+    return value.replace(tzinfo=UTC)
 
 
 def render_report(
@@ -108,7 +108,7 @@ def staleness_warning(last_entry_at, now=None, stale_hours=STALE_HOURS) -> str |
     """
     if last_entry_at is None:
         return None
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     age_hours = (now - last_entry_at).total_seconds() / 3600
     if age_hours < stale_hours:
         return None

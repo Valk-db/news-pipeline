@@ -36,7 +36,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -252,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         # The same UTC-day rule src/shared/budget.py:today() applies to the counters, so
         # the report cannot disagree with the rows about which day they belong to.
-        day = datetime.now(timezone.utc).date()
+        day = datetime.now(UTC).date()
 
     try:
         db_url = _resolve_db_url(args.db_url)
