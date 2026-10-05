@@ -28,11 +28,7 @@ import random
 import time
 
 from src.shared.budget import (
-    COUNTERS_BY_NAME,
-    GROQ_REQUEST_TOKENS,
     GROQ_REQUESTS,
-    counter_cap,
-    record,
     spend,
     token_counter_name,
     unpriced_calls_counter_name,
@@ -87,6 +83,10 @@ class BudgetStatus:
     tokens_exhausted: bool = False
     # Which unit is the reason for a refusal, for the message the operator reads.
     exhausted_unit: str = "requests"
+    # True when the counter could not be read. Distinct from exhausted=False:
+    # "measured not exhausted" vs "cannot determine". A refusal with
+    # unreadable=True is a fail-safe refusal, not a healthy status.
+    unreadable: bool = False
 
 
 class BudgetExhausted(Exception):
@@ -474,7 +474,7 @@ class RequestBudget:
             # spend. The refusal was already decided by spend(); this status is
             # informational only.
             return BudgetStatus(used_today=-1, limit=self.daily_limit,
-                                remaining=0, exhausted=False)
+                                remaining=0, exhausted=False, unreadable=True)
         return BudgetStatus(
             used_today=spent,
             limit=self.daily_limit,
