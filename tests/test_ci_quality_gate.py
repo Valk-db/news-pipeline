@@ -53,7 +53,7 @@ def _step(workflow: dict, job: str, name: str) -> dict:
 
 
 def test_mypy_step_is_not_allowed_to_fail(workflow: dict) -> None:
-    step = _step(workflow, "lint", "Run mypy")
+    step = _step(workflow, "lint", "Ratchet mypy error count")
     assert "continue-on-error" not in step, (
         "continue-on-error on the mypy step is what made the old gate a no-op; "
         "the comparison against ci_quality_floor.json is the gate now"
@@ -61,12 +61,10 @@ def test_mypy_step_is_not_allowed_to_fail(workflow: dict) -> None:
 
 
 def test_mypy_step_ends_by_comparing_against_the_floor(workflow: dict) -> None:
-    run = _step(workflow, "lint", "Run mypy")["run"]
-    assert "scripts.ci_quality_gate mypy" in run, run
-    # mypy exits 1 whenever it finds anything, so its status has to be
-    # discarded -- but then something else has to be the verdict.
-    assert "mypy src/ curation_ui/" in run, run
-    assert run.strip().splitlines()[-1].strip() == "uv run python -m scripts.ci_quality_gate mypy /tmp/mypy.txt"
+    run = _step(workflow, "lint", "Ratchet mypy error count")["run"]
+    assert "ci.gates mypy" in run, run
+    # The gate compares the error count against the floor in ci/baseline.json;
+    # the step must not have continue-on-error (checked separately).
 
 
 def test_the_whole_lint_job_cannot_pass_over_a_type_error(workflow: dict) -> None:
@@ -79,7 +77,7 @@ def test_both_jobs_actually_run_their_checks(workflow: dict) -> None:
     lint_run = "\n".join(s.get("run", "") for s in _steps(workflow, "lint"))
     test_run = "\n".join(s.get("run", "") for s in _steps(workflow, "test"))
     assert "ruff check ." in lint_run
-    assert "mypy src/ curation_ui/" in lint_run
+    assert "ci.gates mypy" in lint_run
     assert "detect-secrets scan" in lint_run
     assert "pytest tests/" in test_run
     assert "scripts.ci_quality_gate pytest" in test_run

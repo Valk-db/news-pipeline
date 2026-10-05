@@ -84,14 +84,13 @@ class TestTheStatementParsesOnTheDatabaseItActuallyRunsOn:
     an explicit type at every use site, on the dialect production runs.
     """
 
-    def test_the_numeric_parameters_are_typed_for_postgres(self):
-        compiled = str(_SPEND.compile(dialect=postgresql.dialect()))
-        for param in ("amount", "cap"):
-            untyped = re.findall(rf"%\({param}\)s(?!::)", compiled)
-            assert untyped == [], (
-                f"{param} is used {len(untyped)} time(s) without a type in:\n{compiled}"
-            )
-
+    # NOTE: A generic-dialect test (postgresql.dialect()) was removed 2026-10-04.
+    # It rendered psycopg2-style %(name)s placeholders, but production uses
+    # asyncpg, which renders $N. The generic test passed on SQLAlchemy 2.1.1
+    # and failed on the pinned 2.0.54, proving it was testing the wrong
+    # dialect's rendering, not the production contract. The asyncpg test
+    # below is the correct one: it asserts the same property (numeric params
+    # carry explicit casts) against the driver production actually uses.
     def test_the_numeric_parameters_are_typed_for_the_driver_production_uses(self):
         """asyncpg renders bind parameters as $N, so the cast is the only thing carrying
         a type, and this is the driver the app and dev both connect with. Compiling with

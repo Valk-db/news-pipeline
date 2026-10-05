@@ -111,7 +111,7 @@ class TestEveryAbsoluteTemplateLinkResolvesToARoute:
             body = handle.read()
         found = URL_ATTR.findall(body)
         assert "/" in found
-        assert "/healthz" in found
+        assert "/map" in found
         assert not any("/posts" in target for target in found)
 
     def test_every_absolute_link_in_the_app_is_covered_by_a_route_or_a_mount(self):

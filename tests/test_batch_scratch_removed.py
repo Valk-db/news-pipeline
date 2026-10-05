@@ -109,7 +109,7 @@ class TestIgnorePatternsAreNotOverBroad:
 class TestNoDanglingReferences:
     """A removed path may only be mentioned as history, never as a live file."""
 
-    HISTORY_MARKERS = ("git show", "removed from the tree", "was removed", "has since been deleted")
+    HISTORY_MARKERS = ("git show", "removed from the tree", "was removed")
 
     def _tracked_text_files(self) -> list[Path]:
         proc = _git("ls-files", "-z")

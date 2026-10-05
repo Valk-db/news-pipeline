@@ -15,7 +15,7 @@ code path wrote the row:
      `src.ingestion.run` as a subprocess and propagates its exit code
      (`scripts/ingest_gdelt_daily.py`, module docstring), so it has no URL code
 at all. Its last version was kept for a while as a batch scratch copy at
-     `.batch-refs/worker-ingest_gdelt_daily.REF.py` and has since been deleted;
+     `.batch-refs/worker-ingest_gdelt_daily.REF.py` and was removed;
      the comparison table below was measured against that copy, and the copy is
      still retrievable at commit `0d3b882` if the table ever needs re-measuring.
 at all. Its last version is batch scratch and was removed from the tree on
