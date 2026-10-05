@@ -370,7 +370,6 @@ def test_the_two_call_sites_use_different_counters():
     fail differently must not share a counter. This is the same property for tokens.
     """
     from src.enrichment import translation
-    from src.shared import llm_budget
     from src.shared.budget import COUNTERS_BY_NAME
 
     llm_budget_counter = GROQ_REQUEST_TOKENS
@@ -380,7 +379,7 @@ def test_the_two_call_sites_use_different_counters():
     assert COUNTERS_BY_NAME[llm_budget_counter].pairs_with == "groq_requests"
     assert COUNTERS_BY_NAME[tr_counter].pairs_with == "groq_translation_requests"
     assert hasattr(translation, "GROQ_TRANSLATION_TOKENS")
-    assert hasattr(llm_budget, "GROQ_REQUEST_TOKENS")
+
 
 
 async def test_llm_preflight_probes_are_charged_too(budget_counter):

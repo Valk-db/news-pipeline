@@ -12,7 +12,6 @@ This test scans budget-touching test files for `date.today()` outside of
 comments and fails if found. Use `today()` from src.shared.budget instead.
 """
 from pathlib import Path
-import re
 
 REPO = Path(__file__).resolve().parents[1]
 BUDGET_TEST_FILES = [
@@ -37,5 +36,5 @@ def test_no_date_today_in_budget_tests():
                 violations.append(f"{rel}:{i}: {line.strip()}")
     assert not violations, (
         "Found date.today() in budget-touching tests (use today() from "
-        f"src.shared.budget instead):\n" + "\n".join(violations)
+        "src.shared.budget instead):\n" + "\n".join(violations)
     )
