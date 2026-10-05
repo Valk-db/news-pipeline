@@ -1,7 +1,7 @@
 """Media extraction from article HTML using trafilatura and custom selectors."""
 
 import re
-from typing import Optional, List, Dict, Any
+from typing import Any
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from src.utils.trafilatura_extract import extract_article
@@ -56,7 +56,7 @@ SOCIAL_PATTERNS = {
 }
 
 
-async def extract_media_from_html(html: str, base_url: str) -> Dict[str, List[Dict[str, Any]]]:
+async def extract_media_from_html(html: str, base_url: str) -> dict[str, list[dict[str, Any]]]:
     """
     Extract all media assets from article HTML.
 
@@ -162,7 +162,7 @@ async def extract_media_from_html(html: str, base_url: str) -> Dict[str, List[Di
     return media
 
 
-def classify_embed(url: str) -> Optional[str]:
+def classify_embed(url: str) -> str | None:
     """Classify an iframe embed URL by platform."""
     domain = urlparse(url).netloc.lower()
 
@@ -194,7 +194,7 @@ def classify_embed(url: str) -> Optional[str]:
     return 'embed'
 
 
-def extract_video_embeds(text: str, base_url: str) -> List[Dict[str, Any]]:
+def extract_video_embeds(text: str, base_url: str) -> list[dict[str, Any]]:
     """Extract video IDs from text content and build embed URLs."""
     videos = []
 
@@ -214,7 +214,7 @@ def extract_video_embeds(text: str, base_url: str) -> List[Dict[str, Any]]:
     return videos
 
 
-def extract_social_embeds(text: str, base_url: str) -> List[Dict[str, Any]]:
+def extract_social_embeds(text: str, base_url: str) -> list[dict[str, Any]]:
     """Extract social media post IDs from text content."""
     embeds = []
 
@@ -234,7 +234,7 @@ def extract_social_embeds(text: str, base_url: str) -> List[Dict[str, Any]]:
     return embeds
 
 
-def build_video_embed_url(platform: str, video_id: str) -> Optional[str]:
+def build_video_embed_url(platform: str, video_id: str) -> str | None:
     """Build embed URL for a video platform."""
     embed_urls = {
         "youtube": f"https://www.youtube.com/embed/{video_id}",
@@ -245,7 +245,7 @@ def build_video_embed_url(platform: str, video_id: str) -> Optional[str]:
     return embed_urls.get(platform)
 
 
-def build_social_embed_url(platform: str, post_id: str) -> Optional[str]:
+def build_social_embed_url(platform: str, post_id: str) -> str | None:
     """Build embed URL for a social media post."""
     embed_urls = {
         "twitter": f"https://publish.twitter.com/oembed?url=https://twitter.com/user/status/{post_id}",
@@ -258,7 +258,7 @@ def build_social_embed_url(platform: str, post_id: str) -> Optional[str]:
     return embed_urls.get(platform)
 
 
-async def extract_media_from_article(article_id: str, url: str) -> Dict[str, List[Dict[str, Any]]]:
+async def extract_media_from_article(article_id: str, url: str) -> dict[str, list[dict[str, Any]]]:
     """
     Extract media from a live article URL.
 
@@ -286,7 +286,7 @@ async def extract_media_from_article(article_id: str, url: str) -> Dict[str, Lis
         return {"images": [], "videos": [], "embeds": [], "audio": []}
 
 
-def deduplicate_media(media_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def deduplicate_media(media_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Remove duplicate media by URL."""
     seen = set()
     unique = []

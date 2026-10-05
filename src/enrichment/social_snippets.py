@@ -1,7 +1,7 @@
 """Social media snippet extraction from various platforms."""
 
 import os
-from typing import List, Dict, Any, Optional
+from typing import Any
 from datetime import datetime, timezone
 import logging
 
@@ -23,7 +23,7 @@ class SocialSnippetFinder:
         self,
         query: str,
         max_results: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Find relevant tweets using Twitter API v2."""
         if not self.twitter_bearer:
             logger.warning("Twitter bearer token not configured")
@@ -89,7 +89,7 @@ class SocialSnippetFinder:
 class BlueskyFinder:
     """Find relevant Bluesky posts using AT Protocol."""
 
-    def __init__(self, handle: Optional[str] = None, password: Optional[str] = None):
+    def __init__(self, handle: str | None = None, password: str | None = None):
         self.handle = handle or os.getenv("BLUESKY_HANDLE")
         self.password = password or os.getenv("BLUESKY_PASSWORD")
         self.access_token = None
@@ -121,7 +121,7 @@ class BlueskyFinder:
         self,
         query: str,
         max_results: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search Bluesky posts."""
         if not self.access_token and not await self.authenticate():
             return []
@@ -217,9 +217,9 @@ class RedditFinder:
     async def search_posts(
         self,
         query: str,
-        subreddits: Optional[List[str]] = None,
+        subreddits: list[str] | None = None,
         max_results: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search Reddit posts."""
         if not await self._get_access_token():
             logger.warning("Reddit credentials not configured")
@@ -283,10 +283,10 @@ class RedditFinder:
 
 async def find_social_snippets(
     query: str,
-    key_entities: List[str],
+    key_entities: list[str],
     max_results: int = 10,
-    platforms: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+    platforms: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """
     Find relevant social media posts across platforms.
 
@@ -351,9 +351,9 @@ async def find_social_snippets(
 
 async def find_snippets_for_story(
     story_title: str,
-    key_entities: List[str],
+    key_entities: list[str],
     max_results: int = 10,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Find social snippets relevant to a story."""
     return await find_social_snippets(
         query=story_title,

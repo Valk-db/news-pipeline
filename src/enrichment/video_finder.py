@@ -2,7 +2,7 @@
 
 import os
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import Any
 from datetime import datetime
 from src.utils.ingest_stats import STATS
 import logging
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class YouTubeFinder:
     """Find related YouTube videos using YouTube Data API v3."""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("YOUTUBE_API_KEY")
         self.base_url = "https://www.googleapis.com/youtube/v3"
 
@@ -21,9 +21,9 @@ class YouTubeFinder:
         self,
         query: str,
         max_results: int = 10,
-        published_after: Optional[datetime] = None,
+        published_after: datetime | None = None,
         order: str = "relevance",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Search for YouTube videos.
 
@@ -89,7 +89,7 @@ class YouTubeFinder:
                 STATS.record("youtube", f"search_failed:error_{type(e).__name__}")
                 return []
 
-    async def get_video_details(self, video_ids: List[str]) -> List[Dict[str, Any]]:
+    async def get_video_details(self, video_ids: list[str]) -> list[dict[str, Any]]:
         """Get detailed info for specific video IDs."""
         if not self.api_key or not video_ids:
             return []
@@ -156,7 +156,7 @@ class YouTubeFinder:
 class VimeoFinder:
     """Find related Vimeo videos using Vimeo API."""
 
-    def __init__(self, access_token: Optional[str] = None):
+    def __init__(self, access_token: str | None = None):
         self.access_token = access_token or os.getenv("VIMEO_ACCESS_TOKEN")
         self.base_url = "https://api.vimeo.com"
 
@@ -164,7 +164,7 @@ class VimeoFinder:
         self,
         query: str,
         max_results: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search for Vimeo videos."""
         if not self.access_token:
             logger.warning("Vimeo access token not configured")
@@ -230,9 +230,9 @@ class VimeoFinder:
 async def find_related_videos(
     query: str,
     max_results: int = 10,
-    youtube_key: Optional[str] = None,
-    vimeo_token: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    youtube_key: str | None = None,
+    vimeo_token: str | None = None,
+) -> list[dict[str, Any]]:
     """
     Find related videos from multiple sources.
 
@@ -273,9 +273,9 @@ async def find_related_videos(
 
 async def find_videos_for_story(
     story_title: str,
-    key_entities: List[str],
+    key_entities: list[str],
     max_results: int = 10,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Find videos relevant to a story.
 

@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import uuid
-from typing import List, Dict, Any, Awaitable, Tuple
+from typing import Any, Awaitable
 from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Type alias for enrichment tasks
 # For media tasks, include article_id: (kind, article_id, coroutine)
 # For other tasks: (kind, None, coroutine)
-EnrichmentTask = Tuple[str, Any, Awaitable[Any]]
+EnrichmentTask = tuple[str, Any, Awaitable[Any]]
 
 
 async def enrich_story(
@@ -33,7 +33,7 @@ async def enrich_story(
     max_videos: int = 5,
     max_snippets: int = 10,
     enable_embeddings: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Enrich a single story with all available enrichment.
 
@@ -50,7 +50,7 @@ async def enrich_story(
     # Convert story_id string to UUID for database queries
     story_uuid = uuid.UUID(story_id)
 
-    results: Dict[str, Any] = {
+    results: dict[str, Any] = {
         "story_id": story_id,
         "media_assets": 0,
         "videos_found": 0,
@@ -76,14 +76,14 @@ async def enrich_story(
         .where(StoryUnitLink.story_id == story_uuid)
     )
     result = await session.execute(stmt)
-    articles: List[RawArticle] = list(result.scalars().all())
+    articles: list[RawArticle] = list(result.scalars().all())
 
     if not articles:
         results["errors"].append("No articles in story")
         return results
 
     # Prepare article data for enrichment
-    article_data: List[Dict[str, Any]] = []
+    article_data: list[dict[str, Any]] = []
     for article in articles:
         article_data.append({
             "article_id": article.id,
@@ -98,7 +98,7 @@ async def enrich_story(
     key_entities = extract_key_entities(articles)
 
     # Run enrichment tasks in parallel
-    tasks: List[EnrichmentTask] = []
+    tasks: list[EnrichmentTask] = []
 
     # 1. Media extraction from articles - include article_id for each
     for article_dict in article_data:
@@ -177,7 +177,7 @@ async def _persist_media_assets(
     session: AsyncSession,
     story_id: uuid.UUID,
     article_id: str,
-    media_result: Dict[str, List[Dict[str, Any]]]
+    media_result: dict[str, list[dict[str, Any]]]
 ) -> int:
     """Persist media assets from article extraction to MediaAsset table."""
     count = 0
@@ -229,7 +229,7 @@ async def _persist_media_assets(
 async def _persist_video_assets(
     session: AsyncSession,
     story_id: uuid.UUID,
-    videos: List[Dict[str, Any]]
+    videos: list[dict[str, Any]]
 ) -> int:
     """Persist video search results to MediaAsset table."""
     count = 0
@@ -264,7 +264,7 @@ async def _persist_video_assets(
 async def _persist_social_snippets(
     session: AsyncSession,
     story_id: uuid.UUID,
-    snippets: List[Dict[str, Any]]
+    snippets: list[dict[str, Any]]
 ) -> int:
     """Persist social media snippets to MediaAsset table."""
     count = 0
@@ -299,7 +299,7 @@ async def _persist_social_snippets(
 async def _persist_story_embedding(
     session: AsyncSession,
     story_id: uuid.UUID,
-    embedding_result: Dict[str, Any]
+    embedding_result: dict[str, Any]
 ) -> None:
     """Persist story embedding to StoryEmbedding table."""
     model = embedding_result.get("model", "unknown")
@@ -329,7 +329,7 @@ async def _persist_story_embedding(
     session.add(embedding)
 
 
-def extract_key_entities(articles: List[RawArticle]) -> List[str]:
+def extract_key_entities(articles: list[RawArticle]) -> list[str]:
     """Extract key entities from articles for search queries."""
     entity_counts = {}
 
@@ -348,12 +348,12 @@ def extract_key_entities(articles: List[RawArticle]) -> List[str]:
 
 async def enrich_stories_batch(
     session_factory,
-    story_ids: List[str],
+    story_ids: list[str],
     max_videos: int = 5,
     max_snippets: int = 10,
     enable_embeddings: bool = True,
     concurrency: int = 3,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Enrich multiple stories with concurrency control.
 
@@ -406,7 +406,7 @@ async def enrich_recent_stories(
     hours_back: int = 24,
     max_stories: int = 50,
     **kwargs,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Enrich recent stories that don't have enrichment yet.
 

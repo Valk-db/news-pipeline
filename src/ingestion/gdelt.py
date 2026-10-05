@@ -16,7 +16,6 @@ import asyncio
 import json
 import logging
 import time
-from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -81,9 +80,9 @@ DOC_CACHE_TTL_SECONDS = 15 * 60
 @dataclass
 class DomainResult:
     domain: str
-    articles: List[RawArticle] = field(default_factory=list)
+    articles: list[RawArticle] = field(default_factory=list)
     ok: bool = True
-    error: Optional[str] = None
+    error: str | None = None
 
 
 def is_throttle_response(response: httpx.Response) -> bool:
@@ -117,7 +116,7 @@ class ThrottleCircuitBreaker:
         self.threshold = threshold
         self.cooldown_seconds = cooldown_seconds
         self.consecutive_throttles = 0
-        self.opened_at: Optional[float] = None
+        self.opened_at: float | None = None
 
     def record_throttle(self) -> None:
         self.consecutive_throttles += 1
@@ -163,13 +162,13 @@ class DocResponseCache:
 
     def __init__(self, ttl_seconds: float = DOC_CACHE_TTL_SECONDS) -> None:
         self.ttl_seconds = ttl_seconds
-        self._entries: Dict[tuple, tuple] = {}
+        self._entries: dict[tuple, tuple] = {}
 
     @staticmethod
     def make_key(domain: str, hours_back: int, max_records: int) -> tuple:
         return (domain.strip().lower().removeprefix("www."), int(hours_back), int(max_records))
 
-    def get(self, key: tuple) -> Optional[List[RawArticle]]:
+    def get(self, key: tuple) -> list[RawArticle] | None:
         entry = self._entries.get(key)
         if entry is None:
             return None
@@ -179,7 +178,7 @@ class DocResponseCache:
             return None
         return articles
 
-    def put(self, key: tuple, articles: List[RawArticle]) -> None:
+    def put(self, key: tuple, articles: list[RawArticle]) -> None:
         self._entries[key] = (time.monotonic(), list(articles))
 
     def clear(self) -> None:
@@ -197,9 +196,9 @@ class GlobalRateLimiter:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._last_request: Optional[float] = None
+        self._last_request: float | None = None
 
-    async def acquire(self, override: Optional[float] = None) -> None:
+    async def acquire(self, override: float | None = None) -> None:
         interval = get_settings().gdelt_throttle_seconds if override is None else override
         if interval <= 0:
             return
@@ -223,7 +222,7 @@ async def fetch_with_retry(
     params: dict,
     max_retries: int = 7,
     base_delay: float = 10.0,
-    throttle_seconds: Optional[float] = None,
+    throttle_seconds: float | None = None,
 ) -> httpx.Response:
     """Fetch with exponential backoff retry for rate limits.
 
@@ -297,7 +296,7 @@ async def _articles_from_doc_response(
     if not data.get("articles"):
         return DomainResult(domain=domain, articles=[], ok=True)
 
-    articles: List[RawArticle] = []
+    articles: list[RawArticle] = []
     for article in data.get("articles", []):
         url = article.get("url", "")
         if not url:
@@ -353,7 +352,7 @@ async def fetch_gdelt_articles(
     domain: str,
     hours_back: int = 24,
     max_records: int = 100,
-    throttle_seconds: Optional[float] = None,
+    throttle_seconds: float | None = None,
 ) -> DomainResult:
     """
     Fetch articles from GDELT DOC API for a specific domain.
@@ -412,7 +411,7 @@ async def fetch_gdelt_articles(
 
 
 async def fetch_gkg_geojson_articles(
-    queries: Optional[List[tuple]] = None,
+    queries: list[tuple] | None = None,
     hours_back: int = 24,
     max_per_query: int = 40,
     throttle_seconds: float = 2.0,
@@ -428,7 +427,7 @@ async def fetch_gkg_geojson_articles(
     """
     settings = get_settings()
     queries = queries or GKG_FALLBACK_QUERIES
-    articles: List[RawArticle] = []
+    articles: list[RawArticle] = []
     seen_hashes = set()
 
     async with httpx.AsyncClient(timeout=60) as client:
@@ -542,7 +541,7 @@ async def fetch_gkg_geojson_articles(
 
 async def fetch_static_articles(
     max_articles_per_file: int = 500,
-    known_url_hashes: Optional[set] = None,
+    known_url_hashes: set | None = None,
 ) -> DomainResult:
     """
     Primary GDELT path: read the latest 2.0 static file set.
@@ -587,16 +586,16 @@ async def fetch_static_articles(
     )
 
 
-async def ingest_gdelt(hours_back: int = 24, max_per_domain: int = 50) -> tuple[List[RawArticle], dict]:
+async def ingest_gdelt(hours_back: int = 24, max_per_domain: int = 50) -> tuple[list[RawArticle], dict]:
     """DOC API ingestion per domain, with the v1 GKG GeoJSON path as its fallback.
 
     This is the degraded path. ingest_gdelt_with_static() calls it only when
     the static files produce nothing.
     """
     settings = get_settings()
-    all_articles: List[RawArticle] = []
+    all_articles: list[RawArticle] = []
     seen_hashes = set()
-    results: List[DomainResult] = []
+    results: list[DomainResult] = []
     failures = 0
 
     for domain in DOMAIN_FILTERS:
@@ -644,8 +643,8 @@ async def ingest_gdelt_with_static(
     hours_back: int = 24,
     max_per_domain: int = 50,
     max_static_articles: int = 500,
-    known_url_hashes: Optional[set] = None,
-) -> tuple[List[RawArticle], dict]:
+    known_url_hashes: set | None = None,
+) -> tuple[list[RawArticle], dict]:
     """Ingest GDELT static files, falling back to the DOC API when empty.
 
     Static files are the main feed. They are not subject to the DOC API rate
@@ -678,7 +677,7 @@ async def ingest_gdelt_with_static(
     return articles, health
 
 
-async def verify_sources() -> Dict[str, int]:
+async def verify_sources() -> dict[str, int]:
     """
     One-off verification: check that AP and Reuters actually return articles.
     Run once before seeding tier-1 sources.

@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Callable, Awaitable, Optional
+from typing import Callable, Awaitable
 
 import httpx
 from bs4 import BeautifulSoup
@@ -115,7 +115,7 @@ async def ingest_reddit(
     limit_per_sub: int = 25,
     time_filter: str = "day",
     known_url_hashes: set[str] | None = None,
-    filter_known: Optional[Callable[[set[str]], Awaitable[set[str]]]] = None,
+    filter_known: Callable[[set[str]], Awaitable[set[str]]] | None = None,
 ) -> list[RawArticle]:
     """Ingest top submissions from target subreddits via public RSS (no auth).
 
