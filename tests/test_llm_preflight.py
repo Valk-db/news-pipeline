@@ -378,8 +378,11 @@ async def test_probe_awaits_transport_exactly_once():
     """The preflight probe must await the transport exactly once.
 
     Protects: a double-await would bill the provider twice for one probe and
-    record double the tokens. The _probe_call lambda must not be invoked twice,
-    and _dispatch_and_record must not retry internally.
+    record double the tokens. Verifies _probe invokes the probe function
+    exactly once. Note: the fake _dispatch_and_record here calls the transport
+    once by construction, so this does not verify the real _dispatch_and_record
+    has no internal retry; that would need an integration test against the
+    real method.
     """
     from src.shared.llm_preflight import _probe, _probe_call
     from src.shared.llm_roster import ROSTER
