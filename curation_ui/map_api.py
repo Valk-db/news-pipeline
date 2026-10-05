@@ -8,7 +8,7 @@ public map page also needs, which is why the page imports them from here rather
 than re-deriving them.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import and_, desc, func, select
@@ -73,7 +73,7 @@ def _as_utc(value: datetime) -> datetime:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        return value.replace(tzinfo=UTC)
     return value
 
 
@@ -201,7 +201,7 @@ async def get_map_freshness(request: Request):
     if not db_ok:
         return {"error": db_msg}
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with get_session() as session:
         return await _collect_map_freshness(session, now)
 
@@ -276,7 +276,7 @@ async def _collect_top_stories(
     Stories a curator has not approved are not listed at all (see
     PUBLIC_STORY_STATUSES): the queue is not the public map.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if start is not None or end is not None:
         window_start, window_end = start, now if end is None else end
     else:

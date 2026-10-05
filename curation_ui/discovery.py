@@ -8,7 +8,7 @@ renders anything, so the rules are testable on their own.
 """
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import Tuple
 
 from fastapi import HTTPException, status
@@ -356,5 +356,5 @@ def _parse_iso_timestamp(value: str, param: str) -> datetime | None:
             ),
         )
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
