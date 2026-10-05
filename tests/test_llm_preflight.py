@@ -392,7 +392,6 @@ async def test_probe_awaits_transport_exactly_once():
 
     class CountingTransport:
         def __init__(self):
-            outer = self
             class _Completions:
                 async def create(self, **kwargs):
                     nonlocal call_count

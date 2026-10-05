@@ -1,6 +1,6 @@
 """Test that RequestBudget.status() does not raise when used() raises."""
 import pytest
-from src.shared.llm_budget import RequestBudget, BudgetExhausted
+from src.shared.llm_budget import RequestBudget
 
 async def test_status_does_not_raise_when_used_raises(monkeypatch):
     """If used() raises, status() must not propagate the exception.

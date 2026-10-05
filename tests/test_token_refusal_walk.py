@@ -13,12 +13,9 @@ rung is tried.
 
 import pytest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 from src.shared.budget import GROQ_REQUEST_TOKENS, spend, used
 from src.shared.llm import LLMClient
-from src.shared.llm_budget import RequestBudget
-from src.shared.llm_roster import ROSTER
 from src.utils.ingest_stats import STATS
 
 
@@ -118,7 +115,7 @@ async def test_token_cap_refusal_through_real_walk(budget_counter):
         )
         # If we get here, cerebras was tried (or another rung succeeded)
         # The key assertion is that groq's transport was never called
-    except Exception as e:
+    except Exception:
         # If all rungs fail, that's also fine - groq was still refused first
         pass
 

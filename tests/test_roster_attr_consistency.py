@@ -8,7 +8,6 @@ _cap() only accepts int or float values, so the field must also be numeric. A ca
 attribute pointing to a str field (e.g. "groq_api_key") would also fall through to 0.
 """
 
-import pytest
 
 from src.shared.config import Settings
 from src.shared.llm_roster import ROSTER

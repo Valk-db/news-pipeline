@@ -1,7 +1,6 @@
 """Test that _token_budget_for wires each rung to its own Settings cap."""
 from types import SimpleNamespace
 
-import pytest
 from src.shared.llm import LLMClient
 from src.shared.llm_roster import ROSTER
 

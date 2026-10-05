@@ -12,7 +12,6 @@ cost tokens.
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -544,7 +543,7 @@ class TestDispatchAndRecordSeam:
         # Ensure cerebras has an API key so the rung is not skipped
         client.settings.cerebras_api_key = "test-key"
 
-        result = await client.chat_completion(MESSAGES, max_tokens=100)
+        await client.chat_completion(MESSAGES, max_tokens=100)
 
         # Rung B succeeded
         assert cerebras_transport.calls != []
@@ -559,7 +558,6 @@ class TestDispatchAndRecordSeam:
         """
         from unittest.mock import patch, MagicMock
         from src.shared import llm_preflight
-        from src.shared.llm_roster import ROSTER
 
         # Transport that fails with 401
         async def fail_401(**kwargs):
@@ -590,7 +588,7 @@ class TestDispatchAndRecordSeam:
         """_dispatch_and_record must not record anything when _dispatch raises
         BudgetExhausted, since no provider call happened and no tokens were billed.
         """
-        from src.shared.llm_budget import BudgetExhausted, BudgetStatus
+        from src.shared.llm_budget import BudgetStatus
         from src.shared.llm_roster import ROSTER
 
         client = make_client(ReplayedTransport([]))
