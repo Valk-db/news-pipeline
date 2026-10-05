@@ -59,7 +59,7 @@ opening the context manager, and a stage that does not is unaffected.
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, Optional, cast
+from typing import Any, AsyncGenerator, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
@@ -122,8 +122,8 @@ class StageRecorder:
         self._row: Any = row
         self.items_in = 0
         self.items_out = 0
-        self.dropped: Dict[str, int] = {}
-        self.error: Optional[str] = None
+        self.dropped: dict[str, int] = {}
+        self.error: str | None = None
         self.run_id = row.run_id
         self.stage_name = row.stage
 
@@ -157,7 +157,7 @@ class StageRecorder:
         self._row.error = self.error
         await self._session.flush()
 
-    async def _close(self, error_text: Optional[str] = None) -> None:
+    async def _close(self, error_text: str | None = None) -> None:
         """Stamp finished_at and the reported counters onto the row, then flush."""
         self._row.finished_at = _utcnow()
         self._row.items_in = self.items_in
@@ -187,7 +187,7 @@ def _clip_error(error_text: str) -> str:
 @asynccontextmanager
 async def stage_run(
     session: AsyncSession,
-    run_id: Optional[UUID] = None,
+    run_id: UUID | None = None,
     stage_name: str = "unknown",
 ) -> AsyncGenerator[StageRecorder, None]:
     """Time one pipeline stage and record what it did, in pipeline_runs.
@@ -239,9 +239,9 @@ async def record_dead_letter(
     session: AsyncSession,
     stage: str,
     reason: str,
-    article_id: Optional[UUID] = None,
-    payload: Optional[Dict[str, Any]] = None,
-    run_id: Optional[UUID] = None,
+    article_id: UUID | None = None,
+    payload: dict[str, Any] | None = None,
+    run_id: UUID | None = None,
 ) -> DeadLetter:
     """Record one item the pipeline could not process, in dead_letters.
 

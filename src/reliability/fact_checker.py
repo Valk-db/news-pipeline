@@ -3,7 +3,7 @@
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import Any
 from dataclasses import dataclass
 import logging
 
@@ -19,7 +19,7 @@ class Claim:
     """Extracted claim from an article."""
     text: str
     claim_hash: str
-    entities: List[str]
+    entities: list[str]
     position: int  # Character position in article
     context: str  # Surrounding text
     claim_type: str  # "statistic", "quote", "prediction", "causal", "definition"
@@ -40,7 +40,7 @@ class FactChecker:
         self.claimbuster_api_key = None  # Optional
         self.cache = {}  # Simple in-memory cache
 
-    async def check_claim(self, claim: Claim, source_domain: str) -> Dict[str, Any]:
+    async def check_claim(self, claim: Claim, source_domain: str) -> dict[str, Any]:
         """
         Check a single claim against multiple fact-check sources.
 
@@ -85,7 +85,7 @@ class FactChecker:
         STATS.record("fact_check", "checked")
         return final_result
 
-    async def _check_claimbuster(self, claim: Claim) -> Optional[Dict[str, Any]]:
+    async def _check_claimbuster(self, claim: Claim) -> dict[str, Any] | None:
         """Check claim using ClaimBuster API."""
         import httpx
 
@@ -118,7 +118,7 @@ class FactChecker:
 
         return None
 
-    async def _check_llm_verification(self, claim: Claim) -> Optional[Dict[str, Any]]:
+    async def _check_llm_verification(self, claim: Claim) -> dict[str, Any] | None:
         """Verify claim using LLM against tier-1 consensus."""
         llm = await get_llm_client()
 
@@ -166,13 +166,13 @@ Only return the JSON object."""
             logger.warning(f"LLM verification failed: {e}")
             return None
 
-    async def _check_knowledge_base(self, claim_hash: str) -> Optional[Dict[str, Any]]:
+    async def _check_knowledge_base(self, claim_hash: str) -> dict[str, Any] | None:
         """Check internal knowledge base of previously verified claims."""
         # This would query a database of previous fact-checks
         # For now, return None
         return None
 
-    def _aggregate_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _aggregate_results(self, results: list[dict[str, Any]]) -> dict[str, Any]:
         """Aggregate multiple fact-check results into final verdict."""
         if not results:
             return {
@@ -245,8 +245,8 @@ Only return the JSON object."""
 async def extract_claims_from_article(
     article_text: str,
     title: str,
-    entities: Dict[str, List[str]],
-) -> List[Claim]:
+    entities: dict[str, list[str]],
+) -> list[Claim]:
     """
     Extract verifiable claims from an article using LLM.
 
@@ -371,8 +371,8 @@ async def fact_check_article(
     article_text: str,
     title: str,
     source_domain: str,
-    entities: Dict[str, List[str]],
-) -> List[FactCheckRecord]:
+    entities: dict[str, list[str]],
+) -> list[FactCheckRecord]:
     """
     Fact-check all claims in an article and store results.
 

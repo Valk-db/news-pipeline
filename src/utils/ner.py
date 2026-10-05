@@ -3,7 +3,6 @@
 import spacy
 import re
 import unicodedata
-from typing import List, Dict, Set, Optional, Tuple
 from functools import lru_cache
 from dataclasses import dataclass, replace
 
@@ -35,7 +34,7 @@ class CanonicalMention:
     confidence: float = 1.0     # Resolution confidence (0-1)
 
 
-def extract_entities(text: str, top_n: Optional[int] = 3) -> Dict[str, List[str]]:
+def extract_entities(text: str, top_n: int | None = 3) -> dict[str, list[str]]:
     """
     Extract named entities from text.
     Returns dict of label -> list of entity texts (top N by frequency).
@@ -43,7 +42,7 @@ def extract_entities(text: str, top_n: Optional[int] = 3) -> Dict[str, List[str]
     return extract_entities_top_n(text, top_n=top_n)
 
 
-def extract_entities_top_n(text: str, top_n: Optional[int] = 3) -> Dict[str, List[str]]:
+def extract_entities_top_n(text: str, top_n: int | None = 3) -> dict[str, list[str]]:
     """
     Extract named entities from text, honoring an explicit top-N cap.
 
@@ -57,7 +56,7 @@ def extract_entities_top_n(text: str, top_n: Optional[int] = 3) -> Dict[str, Lis
     nlp = get_nlp()
     doc = nlp(text)
 
-    entities_by_label: Dict[str, Dict[str, int]] = {label: {} for label in ENTITY_LABELS}
+    entities_by_label: dict[str, dict[str, int]] = {label: {} for label in ENTITY_LABELS}
 
     for ent in doc.ents:
         if ent.label_ in ENTITY_LABELS:
@@ -74,7 +73,7 @@ def extract_entities_top_n(text: str, top_n: Optional[int] = 3) -> Dict[str, Lis
     return result
 
 
-def get_primary_entity_set(entities: Dict[str, List[str]]) -> Set[str]:
+def get_primary_entity_set(entities: dict[str, list[str]]) -> set[str]:
     """
     Get a flat set of top entities across PERSON, ORG, GPE for story grouping.
     """
@@ -85,7 +84,7 @@ def get_primary_entity_set(entities: Dict[str, List[str]]) -> Set[str]:
     return entity_set
 
 
-def entity_set_jaccard(set_a: Set[str], set_b: Set[str]) -> float:
+def entity_set_jaccard(set_a: set[str], set_b: set[str]) -> float:
     """Jaccard similarity between two entity sets."""
     if not set_a and not set_b:
         return 1.0
@@ -102,7 +101,7 @@ def entity_set_jaccard(set_a: Set[str], set_b: Set[str]) -> float:
 # already in the seed table or attested in front of a name in the corpus
 # ("POTUS Donald Trump", "justice samuel alito", "prince harry", "mahatma
 # gandhi"); this list is not a place to guess.
-HONORIFICS: Tuple[str, ...] = (
+HONORIFICS: tuple[str, ...] = (
     "mr",
     "mrs",
     "ms",
@@ -200,7 +199,7 @@ def _normalize_text(text: str, entity_type: str = "") -> str:
 # written the way a newsroom writes them ("U.S.", "the US", "UAE"). The canonical
 # surface is the display name the merged entity keeps. Non-English tables belong
 # in their own module alongside this one when the cross-lingual phase lands.
-ALIAS_SEED: Tuple[Tuple[str, str, str], ...] = (
+ALIAS_SEED: tuple[tuple[str, str, str], ...] = (
     # --- countries
     ("GPE", "US", "United States"),
     ("GPE", "U.S.", "United States"),
@@ -253,9 +252,9 @@ ALIAS_SEED: Tuple[Tuple[str, str, str], ...] = (
 )
 
 
-def _build_alias_index(rows: Tuple[Tuple[str, str, str], ...]) -> Dict[str, str]:
+def _build_alias_index(rows: tuple[tuple[str, str, str], ...]) -> dict[str, str]:
     """Build the forward index: "TYPE:alias" -> canonical display name."""
-    forward: Dict[str, str] = {}
+    forward: dict[str, str] = {}
     for entity_type, alias, canonical in rows:
         forward[_normalize_text(alias, entity_type)] = canonical
     return forward
@@ -293,7 +292,7 @@ def canonical_surface(surface_form: str, entity_type: str) -> str:
     return text
 
 
-def _person_surnames(mentions: Dict[str, CanonicalMention]) -> Dict[str, CanonicalMention]:
+def _person_surnames(mentions: dict[str, CanonicalMention]) -> dict[str, CanonicalMention]:
     """Surname -> the one canonical name that ends with it, for unambiguous surnames only.
 
     Wire copy says "Burnham said" as often as it says "Andy Burnham", so a bare
@@ -307,12 +306,12 @@ def _person_surnames(mentions: Dict[str, CanonicalMention]) -> Dict[str, Canonic
     ("Burnham - Published Andy Burnham") or a role phrase ("Flydubai attacker")
     never ends in a bare surname token.
     """
-    owners: Dict[str, CanonicalMention] = {}
+    owners: dict[str, CanonicalMention] = {}
     for name, mention in mentions.items():
         tokens = name.split()
         if len(tokens) >= 2 and all(token.isalpha() for token in tokens):
             owners.setdefault(name, mention)
-    claims: Dict[str, List[CanonicalMention]] = {}
+    claims: dict[str, list[CanonicalMention]] = {}
     for name, mention in owners.items():
         claims.setdefault(name.split()[-1], []).append(mention)
     return {surname: found[0] for surname, found in claims.items() if len(found) == 1}
@@ -328,8 +327,8 @@ class EntityCanonicalizer:
 
     def __init__(self, session=None):
         self.session = session
-        self._cache: Dict[str, CanonicalMention] = {}  # normalized surface -> CanonicalMention
-        self._surnames: Dict[str, CanonicalMention] = {}  # normalized surname -> CanonicalMention
+        self._cache: dict[str, CanonicalMention] = {}  # normalized surface -> CanonicalMention
+        self._surnames: dict[str, CanonicalMention] = {}  # normalized surname -> CanonicalMention
         self._initialized = False
 
     async def initialize(self):
@@ -402,7 +401,7 @@ class EntityCanonicalizer:
 
         self._initialized = True
 
-    def resolve(self, surface_form: str, entity_type: str) -> Optional[CanonicalMention]:
+    def resolve(self, surface_form: str, entity_type: str) -> CanonicalMention | None:
         """
         Resolve a surface form to a canonical entity.
         Returns None if no match found (caller should create new canonical entity).
@@ -539,9 +538,9 @@ class EntityCanonicalizer:
 
 
 async def resolve_entities_to_canonical(
-    entities: Dict[str, List[str]],
+    entities: dict[str, list[str]],
     canonicalizer: EntityCanonicalizer
-) -> Tuple[Set[str], List[CanonicalMention]]:
+) -> tuple[set[str], list[CanonicalMention]]:
     """
     Resolve extracted entities to canonical IDs.
     Returns (canonical_id_set, canonical_mentions) for story grouping.
@@ -558,7 +557,7 @@ async def resolve_entities_to_canonical(
     return canonical_ids, mentions
 
 
-def canonical_jaccard(set_a: Set[str], set_b: Set[str]) -> float:
+def canonical_jaccard(set_a: set[str], set_b: set[str]) -> float:
     """Jaccard similarity on canonical entity ID sets."""
     if not set_a and not set_b:
         return 1.0

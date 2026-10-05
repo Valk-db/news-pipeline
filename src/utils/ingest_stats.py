@@ -3,7 +3,6 @@
 import threading
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Dict
 
 
 @dataclass
@@ -23,7 +22,7 @@ class IngestStats:
         with self._lock:
             self._counts[key] += n
 
-    def snapshot(self) -> Dict[str, int]:
+    def snapshot(self) -> dict[str, int]:
         """Return JSON-serializable snapshot of counts."""
         with self._lock:
             return {f"{source}.{event}": count for (source, event), count in self._counts.items()}

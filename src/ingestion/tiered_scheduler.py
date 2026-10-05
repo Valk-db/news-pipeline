@@ -1,7 +1,6 @@
 """Tiered ingestion scheduler for multi-source pipeline."""
 
 from datetime import datetime, timezone, timedelta
-from typing import Optional
 from src.shared.config import get_settings
 from src.ingestion.source_registry import (
     get_enabled_sources_by_tier,
@@ -23,7 +22,7 @@ class TieredScheduler:
     def __init__(self):
         self.settings = get_settings()
 
-    def should_run_tier(self, tier: SourceTier, last_run: Optional[datetime] = None) -> bool:
+    def should_run_tier(self, tier: SourceTier, last_run: datetime | None = None) -> bool:
         """
         Determine if a tier should run based on its schedule.
 
@@ -55,7 +54,7 @@ class TieredScheduler:
         """Get enabled sources for a specific tier."""
         return get_enabled_sources_by_tier(tier)
 
-    def get_next_run_time(self, tier: SourceTier, last_run: Optional[datetime] = None) -> datetime:
+    def get_next_run_time(self, tier: SourceTier, last_run: datetime | None = None) -> datetime:
         """Get the next scheduled run time for a tier."""
         now = datetime.now(timezone.utc)
 

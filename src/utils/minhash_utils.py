@@ -2,7 +2,6 @@
 
 import math
 from datasketch import MinHash
-from typing import List, Set, Tuple
 import json
 
 
@@ -24,7 +23,7 @@ REVERSE_CONTAINMENT_FLOOR = 0.5
 MIN_ABSOLUTE_OVERLAP = 5  # shingles
 
 
-def tokens_to_minhash(tokens: Set[str], num_perm: int = 128) -> MinHash:
+def tokens_to_minhash(tokens: set[str], num_perm: int = 128) -> MinHash:
     """Create a MinHash from a set of tokens."""
     m = MinHash(num_perm=num_perm)
     # update_batch hashes all tokens in one vectorised pass (~8x faster than a per-token
@@ -117,7 +116,7 @@ def containment_from_jaccard(
     return min(1.0, max(0.0, intersection / small))
 
 
-def shingle_text(text: str, k: int = 5) -> Set[str]:
+def shingle_text(text: str, k: int = 5) -> set[str]:
     """Generate k-shingles from text for MinHash."""
     words = text.lower().split()
     if len(words) < k:
@@ -125,7 +124,7 @@ def shingle_text(text: str, k: int = 5) -> Set[str]:
     return {" ".join(words[i:i+k]) for i in range(len(words) - k + 1)}
 
 
-def _exact_containment(tokens_a: Set[str], tokens_b: Set[str]) -> float:
+def _exact_containment(tokens_a: set[str], tokens_b: set[str]) -> float:
     """Exact containment for small token sets: no estimator, no inversion noise."""
     if not tokens_a or not tokens_b:
         return 0.0
@@ -134,8 +133,8 @@ def _exact_containment(tokens_a: Set[str], tokens_b: Set[str]) -> float:
 
 
 def compute_containment(
-    tokens_a: Set[str],
-    tokens_b: Set[str],
+    tokens_a: set[str],
+    tokens_b: set[str],
     num_perm: int = 128
 ) -> float:
     """Direct containment computation, exact for small token sets.
@@ -207,12 +206,12 @@ def _merge_predicate(
 
 
 def cluster_articles_by_containment(
-    articles: List[Tuple[str, Set[str]]],  # [(article_id, tokens)]
+    articles: list[tuple[str, set[str]]],  # [(article_id, tokens)]
     threshold: float = 0.9,
     num_perm: int = 128,
     reverse_threshold: float = REVERSE_CONTAINMENT_FLOOR,
     min_absolute_overlap: int = MIN_ABSOLUTE_OVERLAP,
-) -> List[List[str]]:
+) -> list[list[str]]:
     """
     Cluster articles by pairwise containment.
     Returns list of clusters (each cluster is a list of article_ids).
