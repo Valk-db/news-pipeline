@@ -9,7 +9,7 @@ from src.utils.minhash_utils import (
 )
 from src.shared.config import get_settings
 from src.shared.analyzer_versions import DEDUPE_VERSION, compute_input_hash
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 from collections import defaultdict
 
 
@@ -183,7 +183,7 @@ async def build_reporting_units(session: AsyncSession) -> int:
     threshold = settings.containment_threshold
 
     # Get articles from last 24h that aren't yet clustered
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
     stmt = select(RawArticle).where(
         RawArticle.fetched_at >= cutoff,
         RawArticle.reporting_unit_id.is_(None),  # Not yet assigned
@@ -198,7 +198,7 @@ async def build_reporting_units(session: AsyncSession) -> int:
     day_buckets = defaultdict(list)
     for art in articles:
         day = art.published_at or art.fetched_at
-        day = day.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+        day = day.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=UTC)
         day_buckets[day].append(art)
 
     total_units = 0
