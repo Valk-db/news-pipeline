@@ -22,7 +22,7 @@ requests, so the day a mutating route comes back it must require this token too.
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 from fastapi import Depends, FastAPI, Request
@@ -66,7 +66,7 @@ def app_with_db(test_settings, db_engine):
 @pytest.fixture
 async def pending_story(db_session):
     """One PENDING story with a linked unit and article."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     story = Story(
         id=uuid.uuid4(),
         day=now,

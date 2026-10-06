@@ -26,7 +26,7 @@ are for the home machine; see the batch report.
 
 import ast
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 import pytest
@@ -81,7 +81,7 @@ def _story_with_event(db_session, *, status, location):
     corroboration filter and the time window both pass: the only thing separating this
     event from the response is the status rule under test.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     story = Story(
         id=uuid.uuid4(),
         day=now - timedelta(hours=2),
@@ -168,8 +168,8 @@ class TestCompiledWhereClause:
             event_type=Event.EventType.CONFLICT,
             min_confidence=0.5,
             bbox="-10,-10,10,10",
-            start=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            end=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            start=datetime(2026, 1, 1, tzinfo=UTC),
+            end=datetime(2026, 1, 2, tzinfo=UTC),
             min_tier1_sources=2,
         )
         where = self._where(select(Event).where(and_(*conditions)))

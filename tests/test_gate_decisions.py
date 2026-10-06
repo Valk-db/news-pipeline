@@ -36,7 +36,7 @@ convention in prose; this is the part a comment cannot hold.
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 from sqlalchemy import event, select
@@ -79,7 +79,7 @@ async def _make_article(
         body_text=f"Body text for the {slug} report filed by {domain}.",
         source_domain=domain,
         source_tier=tier,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
         entities=ENTITIES,
         content_hash=content_hash,
     )
@@ -109,7 +109,7 @@ async def _make_unit(session, articles: list[RawArticle]) -> ReportingUnit:
 
     unit = ReportingUnit(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+        day=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
         representative_article_id=articles[0].id,
         article_count=len(articles),
         source_tiers=source_tiers,
@@ -126,7 +126,7 @@ async def _make_unit(session, articles: list[RawArticle]) -> ReportingUnit:
 async def _make_story(session, units: list[ReportingUnit]) -> Story:
     story = Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+        day=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
         primary_entities=[],
         status=Story.Status.PENDING,
     )

@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 import uuid
 
 from src.verification.cleanup import (
@@ -45,7 +45,7 @@ class TestCleanupStaleStories:
     async def test_expires_pending_stories(self):
         """PENDING stories older than threshold become EXPIRED."""
         mock_session = AsyncMock()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Create mock stories
         old_pending = MagicMock(spec=Story)
@@ -98,7 +98,7 @@ class TestCleanupStaleStories:
     async def test_respects_different_thresholds(self):
         """PENDING and BLOCKED have different thresholds."""
         mock_session = AsyncMock()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         pending_at_50h = MagicMock(spec=Story)
         pending_at_50h.id = uuid.uuid4()
@@ -143,7 +143,7 @@ class TestCleanupOrphanedReportingUnits:
     async def test_removes_old_unlinked_units(self):
         """Old unlinked units with no articles are removed."""
         mock_session = AsyncMock()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         old_unlinked = MagicMock(spec=ReportingUnit)
         old_unlinked.id = uuid.uuid4()
@@ -263,7 +263,7 @@ class TestIntegration:
     async def test_queued_expires_posted_rejected_never(self):
         """QUEUED stories expire after threshold; POSTED/REJECTED never expire."""
         mock_session = AsyncMock()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # QUEUED story older than 168h - SHOULD be expired
         queued_old = MagicMock(spec=Story)
@@ -340,7 +340,7 @@ class TestStaleLinkRecomputeRespectsViewpointExclusions:
             body_text="Body.",
             source_domain=domain,
             source_tier=SourceTier.TIER1,
-            published_at=datetime.now(timezone.utc),
+            published_at=datetime.now(UTC),
         )
         session.add(article)
         await session.flush()
@@ -357,7 +357,7 @@ class TestStaleLinkRecomputeRespectsViewpointExclusions:
             tier1_owner_groups[owner] = tier1_owner_groups.get(owner, 0) + 1
         unit = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+            day=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
             representative_article_id=articles[0].id,
             article_count=len(articles),
             source_tiers=source_tiers,
@@ -379,13 +379,13 @@ class TestStaleLinkRecomputeRespectsViewpointExclusions:
 
         parent = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             primary_entities=[],
             status=Story.Status.PENDING,
         )
         child = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             primary_entities=[],
             status=Story.Status.PENDING,
             viewpoint_cluster_id=parent.id,

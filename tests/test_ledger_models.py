@@ -8,7 +8,7 @@ still come back wrong.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 import pytest_asyncio
@@ -41,7 +41,7 @@ def _type_name(column) -> str:
 
 def _as_utc(value: datetime) -> datetime:
     """SQLite hands datetimes back without a tzinfo, so compare in UTC either way."""
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 class TestTablesExist:
@@ -126,11 +126,11 @@ class TestPipelineRunColumns:
         assert stored.started_at is not None
 
     async def test_stored_started_at_is_within_the_call(self, db_session):
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         row = PipelineRun(id=uuid.uuid4(), run_id=uuid.uuid4(), stage="dedupe")
         db_session.add(row)
         await db_session.flush()
-        after = datetime.now(timezone.utc)
+        after = datetime.now(UTC)
         assert before <= _as_utc(row.started_at) <= after
 
 
@@ -231,7 +231,7 @@ class TestRawArticleTerminalState:
             body_text="Body",
             source_domain="reuters.com",
             source_tier=SourceTier.TIER1,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
         )
         db_session.add(article)
         await db_session.flush()
@@ -255,7 +255,7 @@ class TestRawArticleTerminalState:
             body_text="Body",
             source_domain="bbc.com",
             source_tier=SourceTier.TIER1,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             terminal_state=state,
         )
         db_session.add(article)

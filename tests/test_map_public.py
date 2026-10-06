@@ -6,7 +6,7 @@ the queue and anything that reveals it, is not.
 
 import pytest
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from fastapi.testclient import TestClient
 
 from src.shared.config import get_settings
@@ -141,7 +141,7 @@ class TestPublicRouteMatrix:
     @pytest.mark.asyncio
     async def test_anonymous_get_is_200(self, app_with_db, db_session, path):
         """Every public route answers an anonymous GET with 200."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_story(db_session, day=now - timedelta(hours=2), events=1)
         await db_session.commit()
 
@@ -153,7 +153,7 @@ class TestPublicRouteMatrix:
     @pytest.mark.asyncio
     async def test_public_html_routes_render(self, app_with_db, db_session):
         """/map renders its template for an anonymous reader."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_story(db_session, day=now - timedelta(hours=2), events=1)
         await db_session.commit()
 
@@ -169,7 +169,7 @@ class TestPublicRouteMatrix:
     @pytest.mark.asyncio
     async def test_public_story_page_renders_for_anonymous_reader(self, app_with_db, db_session):
         """GET /stories/{id} is public and shows sources, not curation state."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         story = _make_story(db_session, day=now - timedelta(hours=2), events=1)
         await db_session.commit()
 
@@ -196,7 +196,7 @@ class TestAuthedRouteMatrix:
     @pytest.mark.asyncio
     async def test_anonymous_get_is_401(self, app_with_db, db_session, path):
         """Every curation page refuses an anonymous GET with 401."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_story(db_session, day=now - timedelta(hours=2), events=1)
         await db_session.commit()
 
@@ -208,7 +208,7 @@ class TestAuthedRouteMatrix:
     @pytest.mark.asyncio
     async def test_story_detail_requires_auth(self, app_with_db, db_session):
         """GET /story/{id} is the curator's detail view, so it stays protected."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         story = _make_story(db_session, day=now - timedelta(hours=2),
                             status=Story.Status.PENDING)
         await db_session.commit()
@@ -227,7 +227,7 @@ class TestAuthedRouteMatrix:
     @pytest.mark.asyncio
     async def test_story_api_detail_endpoints_require_auth(self, app_with_db, db_session):
         """The viewpoints and sources APIs stay behind auth (see main.py for why)."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         story = _make_story(db_session, day=now - timedelta(hours=2),
                             status=Story.Status.PENDING)
         await db_session.commit()
@@ -245,7 +245,7 @@ class TestAuthedRouteMatrix:
         everybody, authenticated or not, which is the stronger guarantee: there is no
         guessable URL left that can mutate a story.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         story = _make_story(db_session, day=now - timedelta(hours=2),
                             status=Story.Status.PENDING)
         await db_session.commit()
@@ -276,7 +276,7 @@ class TestDefaultViewFilters:
     @pytest.mark.asyncio
     async def test_events_endpoint_defaults_to_recent_corroborated(self, app_with_db, db_session):
         """With no filter params, only the last 48h corroborated events come back."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # Inside the window and corroborated: returned.
         _make_story(
             db_session, day=now - timedelta(hours=5), events=1,
@@ -306,7 +306,7 @@ class TestDefaultViewFilters:
     @pytest.mark.asyncio
     async def test_events_endpoint_full_history_is_explicit(self, app_with_db, db_session):
         """hours=0 and min_tier1_sources=0 reach the whole, unfiltered history."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_story(
             db_session, day=now - timedelta(hours=200), events=1,
             tier1_sources=1, location="Ancient",
@@ -325,7 +325,7 @@ class TestDefaultViewFilters:
     @pytest.mark.asyncio
     async def test_replay_endpoint_applies_corroboration_default(self, app_with_db, db_session):
         """/api/map/replay filters by the same threshold as the live view."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_story(
             db_session, day=now - timedelta(hours=5), events=1,
             tier1_sources=2, location="Recent",
@@ -365,7 +365,7 @@ class TestTopStoriesList:
     @pytest.mark.asyncio
     async def test_list_ranks_by_distinct_owners(self, app_with_db, db_session):
         """More independent owners ranks higher, and links to the public story."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_story(db_session, day=now - timedelta(hours=3), owners=5, tier1_units=6, events=3,
                    headline="Ceasefire talks advance in Geneva")
         _make_story(db_session, day=now - timedelta(hours=3), owners=3, tier1_units=3, events=1,
@@ -388,7 +388,7 @@ class TestTopStoriesList:
     @pytest.mark.asyncio
     async def test_list_excludes_stories_below_the_gate(self, app_with_db, db_session):
         """A story with one owner fails the 2 owner gate and is not listed."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_story(db_session, day=now - timedelta(hours=3), owners=1, tier1_units=1, events=2)
         await db_session.commit()
 
@@ -403,7 +403,7 @@ class TestTopStoriesList:
     @pytest.mark.asyncio
     async def test_list_respects_the_window(self, app_with_db, db_session):
         """Stories older than the default window drop out until asked for."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_story(db_session, day=now - timedelta(hours=200), owners=4, tier1_units=4, events=1)
         await db_session.commit()
 
@@ -414,7 +414,7 @@ class TestTopStoriesList:
     @pytest.mark.asyncio
     async def test_list_omits_curation_internals(self, app_with_db, db_session):
         """No status, no gate reason and no queue language in the payload."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         story = _make_story(db_session, day=now - timedelta(hours=3), owners=4, events=1)
         story.gate_reason = "Blocked: single tier-1 owner group"
         await db_session.commit()
@@ -453,7 +453,7 @@ class TestQueueIsNotPublic:
         self, app_with_db, db_session, status
     ):
         """The story page treats an unapproved story like an id that does not exist."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         story = _make_story(
             db_session, day=now - timedelta(hours=2), events=1, owners=4,
             status=status, headline=f"Only in the {status.value} queue",
@@ -471,7 +471,7 @@ class TestQueueIsNotPublic:
         self, app_with_db, db_session, status
     ):
         """An approved story still renders for an anonymous reader."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         story = _make_story(
             db_session, day=now - timedelta(hours=2), events=1, owners=4,
             status=status, headline=f"Approved: {status.value}",
@@ -486,7 +486,7 @@ class TestQueueIsNotPublic:
     @pytest.mark.asyncio
     async def test_top_stories_lists_only_approved_stories(self, app_with_db, db_session):
         """A well corroborated queue story never reaches /api/map/stories or /map."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         approved = _make_story(
             db_session, day=now - timedelta(hours=3), owners=5, tier1_units=6, events=3,
             headline="Ceasefire talks advance in Geneva",
@@ -519,7 +519,7 @@ class TestEventLimitClamp:
         """limit=100000000 with hours=0 is clamped, and the cap is reported back."""
         from curation_ui.main import MAP_EVENTS_MAX_LIMIT
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for index in range(3):
             _make_story(
                 db_session, day=now - timedelta(hours=2), events=1, tier1_sources=2,
@@ -597,7 +597,7 @@ class TestFreshnessStamp:
         """A fresh, corroborated stamp reads as one line of plain facts."""
         from curation_ui.main import format_freshness_stamp
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         stamp = format_freshness_stamp(
             latest_at=now - timedelta(minutes=14),
             outlet_count=212,
@@ -610,7 +610,7 @@ class TestFreshnessStamp:
         """No events at all says so instead of printing zero as a measurement."""
         from curation_ui.main import format_freshness_stamp
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         stamp = format_freshness_stamp(
             latest_at=None,
             outlet_count=0,
@@ -623,7 +623,7 @@ class TestFreshnessStamp:
         """Data that exists but is not corroborated in the window says both."""
         from curation_ui.main import format_freshness_stamp
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         stamp = format_freshness_stamp(
             latest_at=now - timedelta(days=3),
             outlet_count=40,
@@ -638,7 +638,7 @@ class TestFreshnessStamp:
         """A clock skew that puts an event in the future clamps to just now."""
         from curation_ui.main import format_freshness_stamp
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         stamp = format_freshness_stamp(
             latest_at=now + timedelta(hours=5),
             outlet_count=1,
@@ -652,7 +652,7 @@ class TestFreshnessStamp:
         """None counters degrade to zero rather than crashing the page."""
         from curation_ui.main import format_freshness_stamp
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         stamp = format_freshness_stamp(
             latest_at=now - timedelta(minutes=5),
             outlet_count=None,
@@ -665,7 +665,7 @@ class TestFreshnessStamp:
         """A naive start_time from SQLite is read as UTC, not as an error."""
         from curation_ui.main import format_freshness_stamp
 
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(UTC).replace(tzinfo=None)
         stamp = format_freshness_stamp(
             latest_at=now - timedelta(minutes=7),
             outlet_count=3,
@@ -692,7 +692,7 @@ class TestFreshnessStamp:
     @pytest.mark.asyncio
     async def test_freshness_endpoint_counts_outlets_and_events(self, app_with_db, db_session):
         """Outlet and corroborated event counts come from real rows."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_story(db_session, day=now - timedelta(hours=4), events=3, tier1_sources=2)
         _make_story(db_session, day=now - timedelta(hours=4), events=1, tier1_sources=1)
         await db_session.commit()
@@ -708,7 +708,7 @@ class TestFreshnessStamp:
     @pytest.mark.asyncio
     async def test_freshness_endpoint_with_stale_data(self, app_with_db, db_session):
         """Stale rows report their age honestly and count zero corroborated."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_story(db_session, day=now - timedelta(days=6), events=2, tier1_sources=4)
         await db_session.commit()
 

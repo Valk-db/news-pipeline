@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import httpx
 
 from src.ingestion.gdelt import (
@@ -46,7 +46,7 @@ def sample_article():
         summary="Test summary",
         source_domain="apnews.com",
         source_tier=SourceTier.TIER1,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
         entities={"PERSON": ["Test"], "ORG": ["AP"], "GPE": ["Washington"]},
         content_hash="hash123",
     )

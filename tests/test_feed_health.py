@@ -7,7 +7,7 @@ registry so nothing here depends on wall time or on the process-wide state.
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -27,7 +27,7 @@ from src.ingestion.feed_health import (
     state_path,
 )
 
-T0 = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
+T0 = datetime(2026, 10, 2, 12, 0, tzinfo=UTC)
 
 
 def _at(minutes: int) -> datetime:
@@ -129,7 +129,7 @@ class TestRecordPoll:
 
     def test_no_clock_argument_defaults_to_now(self):
         reg = HealthRegistry()
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         feed = record_poll(reg, "https://x.test/feed", 1)
         assert datetime.fromisoformat(feed.last_poll_at) >= before
 

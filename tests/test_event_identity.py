@@ -19,7 +19,7 @@ because the pointer, the predicate and the aggregate are all ordinary SQL.
 
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 import asyncpg
@@ -55,7 +55,7 @@ SCHEMA = "w3eventid_scratch"
 
 # Where three outlets reporting one protest actually sit: Tel Aviv, minutes apart.
 TEL_AVIV = (32.0853, 34.7818)
-WHEN = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+WHEN = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 
 
 def _event(
@@ -250,7 +250,7 @@ def test_blocks_change_the_cost_and_not_the_answer():
     24 h bucket boundary, a duplicate pair at 69 degrees north where a longitude cell is
     only 39 km wide, and a same-place pair two days apart.
     """
-    base = datetime(2026, 10, 1, 23, 30, tzinfo=timezone.utc)
+    base = datetime(2026, 10, 1, 23, 30, tzinfo=UTC)
     events = []
     for index in range(24):
         start = base + timedelta(hours=3 * index)
@@ -313,7 +313,7 @@ def test_a_tie_breaks_on_the_earliest_event_then_the_lowest_id():
 # --------------------------------------------------------------------------
 
 
-def _story(db_session, primary_entities, day=datetime(2026, 10, 1, tzinfo=timezone.utc)):
+def _story(db_session, primary_entities, day=datetime(2026, 10, 1, tzinfo=UTC)):
     story = Story(
         id=uuid.uuid4(),
         day=day,

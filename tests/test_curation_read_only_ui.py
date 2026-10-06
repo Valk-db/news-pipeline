@@ -26,7 +26,7 @@ a future contributor adding a button back, which is the point.
 
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 from fastapi.testclient import TestClient
@@ -133,7 +133,7 @@ def _make_story(
     article exists but carries no title, which is what the "No headline captured"
     fallback exists for.
     """
-    created_at = created_at or datetime.now(timezone.utc)
+    created_at = created_at or datetime.now(UTC)
     t1, t2, t3, t4 = tier_counts
     story = Story(
         id=uuid.uuid4(),
@@ -255,7 +255,7 @@ class TestTheTriageFlowsAreGone:
 class TestEveryCardIsIdentifiable:
     @pytest.mark.asyncio
     async def test_every_card_leads_with_a_non_empty_headline(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         first, _ = _make_story(db_session, title="Flooding closes the river crossing",
                                domain="bbc.com", created_at=now)
         second, _ = _make_story(db_session, title="Rail strike halts the morning services",
@@ -358,8 +358,8 @@ class TestEveryCardIsIdentifiable:
         """The honest "nothing here" wording is kept for a story with no sources."""
         story = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
-            created_at=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
+            created_at=datetime.now(UTC),
             status=Story.Status.PENDING,
             primary_entities=[],
             tier1_unit_count=0,
@@ -431,7 +431,7 @@ class TestEveryCardIsIdentifiable:
     ):
         """A unit whose representative article never landed: the card must say so,
         not render an empty source list under a claim of corroboration."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         story = Story(
             id=uuid.uuid4(),
             day=now,
@@ -523,7 +523,7 @@ class TestTheDetailViewHoldsEverything:
     ):
         """The claim matrix and narrative links stay, but nobody has to scroll to
         them and they do not crowd the story."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         story, article = _make_story(db_session, created_at=now)
         claim = Claim(
             id=uuid.uuid4(),
@@ -676,7 +676,7 @@ class TestTheSentencesReadAsEnglish:
 
         story = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             status=Story.Status.PENDING,
             primary_entities=[],
             tier1_unit_count=2,
@@ -693,7 +693,7 @@ class TestTheSentencesReadAsEnglish:
 
         thin = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             status=Story.Status.PENDING,
             primary_entities=[],
             tier1_unit_count=0,
@@ -710,7 +710,7 @@ class TestTheSentencesReadAsEnglish:
     def test_status_sentence_quotes_the_gate_reason(self):
         story = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             status=Story.Status.PENDING,
             primary_entities=[],
             gate_reason="Failed gate: single source",
@@ -722,7 +722,7 @@ class TestTheSentencesReadAsEnglish:
     def test_status_sentence_says_so_when_there_is_no_gate_reason(self):
         story = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             status=Story.Status.PENDING,
             primary_entities=[],
             gate_reason=None,
@@ -730,14 +730,14 @@ class TestTheSentencesReadAsEnglish:
         assert "No gate explanation was recorded." in curation._status_sentence(story)
 
     def test_freshness_reads_in_words(self):
-        now = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 10, 2, 12, 0, tzinfo=UTC)
         assert curation._freshness(now, now) == "just now"
         assert curation._freshness(now - timedelta(minutes=5), now) == "5 minutes ago"
         assert curation._freshness(now - timedelta(hours=3), now) == "3 hours ago"
         assert curation._freshness(now - timedelta(days=2), now) == "2 days ago"
 
     def test_freshness_survives_a_missing_timestamp(self):
-        assert curation._freshness(None, datetime(2026, 10, 2, tzinfo=timezone.utc)) == (
+        assert curation._freshness(None, datetime(2026, 10, 2, tzinfo=UTC)) == (
             "timestamp not recorded"
         )
 

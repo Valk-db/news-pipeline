@@ -13,7 +13,7 @@ import re
 
 import pytest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from fastapi.testclient import TestClient
 
 from src.schema.models import (
@@ -57,7 +57,7 @@ def app_with_db(test_settings, db_engine):
 
 
 def _today() -> datetime:
-    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    return datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 async def _link_story_to_article(db_session, *, title, domain, url, url_hash, body="Content here."):
@@ -87,7 +87,7 @@ async def _link_story_to_article(db_session, *, title, domain, url, url_hash, bo
         body_text=body,
         source_domain=domain,
         source_tier=SourceTier.TIER1,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
     )
     unit.representative_article_id = article.id
     db_session.add_all([story, unit, article, StoryUnitLink(story_id=story.id, unit_id=unit.id)])

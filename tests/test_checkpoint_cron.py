@@ -23,6 +23,7 @@ import curation_ui.cron as cron_module
 from curation_ui.cron import CRON_TOKEN_ENV_VAR, cron_limiter, router
 from src.shared.config import get_settings
 from src.transparency import signing
+from datetime import UTC
 
 
 def _seed(label: str) -> bytes:
@@ -394,14 +395,14 @@ class TestCronSigningOverHttp:
             generate_ed25519_signer,
             sign_checkpoint,
         )
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         signer = generate_ed25519_signer(seed=_seed("http-test"))
         checkpoint = Checkpoint(
             tree_size=3,
             merkle_root=bytes(range(32)),
             chain_hash=bytes(range(32, 64)),
-            timestamp=datetime(2026, 10, 2, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 10, 2, tzinfo=UTC),
             format=FORMAT_C2SP_V2,
         )
         signed = sign_checkpoint(checkpoint, signer)

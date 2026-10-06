@@ -1,7 +1,7 @@
 """Test for the stored vs computed tier1/owner counter mismatch bug."""
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import uuid
 from typing import AsyncGenerator
 from sqlalchemy import select
@@ -16,7 +16,7 @@ from src.schema.models import (
 
 async def _make_unit(session, *, domain, owner, entities, tier=SourceTier.TIER1):
     """Create a RawArticle plus the ReportingUnit that represents it."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     article = RawArticle(
         id=uuid.uuid4(),
         url=f"https://{domain}/article/{uuid.uuid4().hex[:8]}",

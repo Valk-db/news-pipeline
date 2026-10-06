@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from src.ingestion.run import main
 import sys
+from datetime import UTC
 
 
 class TestExitGuard:
@@ -76,10 +77,10 @@ class TestCleanupQueuedDisabled:
         """With queued_hours=0, old QUEUED stories are not expired."""
         from src.verification.cleanup import cleanup_stale_stories
         from src.schema.models import Story
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta
 
         mock_session = AsyncMock()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Create a QUEUED story older than 168 hours (not used, just for documentation)
         Story(
