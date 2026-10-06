@@ -17,7 +17,7 @@ session's own event loop and the db_session fixture shares it.
 
 import inspect
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -127,7 +127,7 @@ XXE_EXTERNAL = b"""<?xml version="1.0"?>
 """
 
 LONG_BODY = "A full article body. " * 40  # comfortably over MIN_BODY_CHARS
-FIXED_NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 
 FEED_A = {
     "key": "bbc_world",
@@ -184,7 +184,7 @@ def _rss_with_links(*links, prefix="https://www.bbc.co.uk/news/world-"):
     return (
         '<?xml version="1.0"?><rss version="2.0"><channel>'
         f"<title>Feed</title>{items}</channel></rss>"
-    ).encode("utf-8")
+    ).encode()
 
 
 def _persisted_article(idx=0, domain="bbc.co.uk", url=None):
@@ -396,20 +396,20 @@ def test_parse_feed_xml_accepts_str_and_skips_linkless_items():
 def test_parse_published_formats():
     """RFC 822, ISO with offset, ISO Z, naive ISO, and garbage."""
     assert rss_evidence.parse_published("Tue, 30 Sep 2026 14:05:00 GMT") == datetime(
-        2026, 9, 30, 14, 5, tzinfo=timezone.utc
+        2026, 9, 30, 14, 5, tzinfo=UTC
     )
     assert rss_evidence.parse_published("2026-09-29T08:30:00+00:00") == datetime(
-        2026, 9, 29, 8, 30, tzinfo=timezone.utc
+        2026, 9, 29, 8, 30, tzinfo=UTC
     )
     assert rss_evidence.parse_published("2026-09-29T08:30:00Z") == datetime(
-        2026, 9, 29, 8, 30, tzinfo=timezone.utc
+        2026, 9, 29, 8, 30, tzinfo=UTC
     )
     assert rss_evidence.parse_published("2026-09-29T08:30:00") == datetime(
-        2026, 9, 29, 8, 30, tzinfo=timezone.utc
+        2026, 9, 29, 8, 30, tzinfo=UTC
     )
     # A non-UTC offset is normalized rather than dropped.
     assert rss_evidence.parse_published("2026-09-29T10:30:00+02:00") == datetime(
-        2026, 9, 29, 8, 30, tzinfo=timezone.utc
+        2026, 9, 29, 8, 30, tzinfo=UTC
     )
     assert rss_evidence.parse_published("not a date") is None
     assert rss_evidence.parse_published("") is None
@@ -658,7 +658,7 @@ async def test_refresh_200_stores_validators_and_resets_304_run():
     assert report.items[0]["source_name"] == "BBC"
     assert report.items[0]["source_key"] == "bbc_world"
     assert report.items[0]["source_tier"] is SourceTier.TIER1
-    assert report.items[0]["published_at"] == datetime(2026, 9, 30, 14, 5, tzinfo=timezone.utc)
+    assert report.items[0]["published_at"] == datetime(2026, 9, 30, 14, 5, tzinfo=UTC)
     assert report.items[0]["body_sha256"]
     # The extracted title wins when it is available.
     assert report.items[0]["title"] == "Extracted title for https://www.bbc.co.uk/news/world-12345678"
@@ -926,7 +926,7 @@ def _item(url="https://www.bbc.co.uk/news/world-1", domain="bbc.co.uk"):
         "source_name": domain,
         "source_key": "bbc_world",
         "source_tier": SourceTier.TIER1,
-        "published_at": datetime(2026, 9, 30, 14, 5, tzinfo=timezone.utc),
+        "published_at": datetime(2026, 9, 30, 14, 5, tzinfo=UTC),
         "body_sha256": "hash-of-body",
     }
 
@@ -945,7 +945,7 @@ async def test_build_articles_maps_every_field():
     assert article.summary == "A summary"
     assert article.source_domain == "bbc.co.uk"
     assert article.source_tier == SourceTier.TIER1
-    assert article.published_at == datetime(2026, 9, 30, 14, 5, tzinfo=timezone.utc)
+    assert article.published_at == datetime(2026, 9, 30, 14, 5, tzinfo=UTC)
     assert article.entities == {"ORG": ["BBC"]}
     assert article.content_hash == "hash-of-body"
     # Batch C columns are not in the dev DB yet; the backfill script owns them.

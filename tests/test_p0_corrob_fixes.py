@@ -12,7 +12,7 @@ pair-shape test additionally pins the contract at the Corroboration level with n
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from types import SimpleNamespace
 
 import pytest
@@ -33,7 +33,7 @@ from src.verification.units import get_owner_group
 
 
 def _utcnow():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 async def _make_article(session, *, domain, tier=SourceTier.TIER1):

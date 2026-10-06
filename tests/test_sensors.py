@@ -4,7 +4,7 @@ Fixtures are hand written to match the verified live shapes. No network calls.
 """
 
 import json
-from datetime import timezone
+from datetime import UTC
 
 import pytest
 
@@ -103,7 +103,7 @@ class TestUsgsParsing:
 
     def test_epoch_ms_becomes_utc_datetime(self):
         articles, _ = sensors.parse_usgs_geojson(json.dumps(USGS_FIXTURE))
-        assert articles[0]["published_at"].tzinfo == timezone.utc
+        assert articles[0]["published_at"].tzinfo == UTC
         assert articles[0]["published_at"].year == 2025
 
     def test_body_mentions_magnitude_and_place(self):
@@ -257,7 +257,7 @@ class TestGdacsParsing:
 
     def test_pubdate_becomes_utc_datetime(self):
         articles, _ = sensors.parse_gdacs_rss(GDACS_FIXTURE)
-        assert articles[0]["published_at"].tzinfo == timezone.utc
+        assert articles[0]["published_at"].tzinfo == UTC
         assert articles[0]["published_at"].year == 2026
 
     def test_html_in_description_is_stripped(self):

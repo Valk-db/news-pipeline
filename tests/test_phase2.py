@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -58,7 +58,7 @@ from src.verification.phase2 import (
 
 
 def _story(status: Story.Status, *, units: int = 3, viewpoint_cluster_id=None) -> Story:
-    day = datetime.now(timezone.utc)
+    day = datetime.now(UTC)
     return Story(
         id=uuid.uuid4(),
         day=day,
@@ -76,7 +76,7 @@ def _story(status: Story.Status, *, units: int = 3, viewpoint_cluster_id=None) -
 
 def _units_for(session, story, count: int = 3) -> list[uuid.UUID]:
     """Real units with real article bodies, so the prompt is real too."""
-    day = datetime.now(timezone.utc)
+    day = datetime.now(UTC)
     ids = []
     for index in range(count):
         article_id = uuid.uuid4()
@@ -247,7 +247,7 @@ class TestSelection:
     @pytest.mark.asyncio
     async def test_newest_first(self, db_session, story_factory):
         """Newest first, so a harm flag today is not stuck behind last week's queue."""
-        day = datetime.now(timezone.utc)
+        day = datetime.now(UTC)
         older = story_factory(status=Story.Status.PENDING)
         newer = story_factory(status=Story.Status.PENDING)
         older.created_at = day - timedelta(hours=30)
@@ -260,7 +260,7 @@ class TestSelection:
     @pytest.mark.asyncio
     async def test_older_than_the_window_is_not_selected(self, db_session, story_factory):
         story = story_factory(status=Story.Status.PENDING)
-        story.created_at = datetime.now(timezone.utc) - timedelta(hours=96)
+        story.created_at = datetime.now(UTC) - timedelta(hours=96)
         await db_session.commit()
         assert await select_phase2_stories(db_session, hours_back=48, max_stories=10) == []
 
@@ -869,7 +869,7 @@ async def _unit_ids(session, story) -> list[uuid.UUID]:
 
 
 async def _add_unit(session, story) -> uuid.UUID:
-    day = datetime.now(timezone.utc)
+    day = datetime.now(UTC)
     article_id = uuid.uuid4()
     unit = ReportingUnit(
         id=uuid.uuid4(),

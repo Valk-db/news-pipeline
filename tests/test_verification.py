@@ -2,7 +2,7 @@
 
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import json
 import os
 import subprocess
@@ -167,7 +167,7 @@ async def _make_unit(session, *, domain, owner, entities, tier=SourceTier.TIER1)
     build_stories() reads entities from the unit's representative RawArticle, so the
     article has to exist (representative_article_id is a real FK).
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     article = RawArticle(
         id=uuid.uuid4(),
         url=f"https://{domain}/article/{uuid.uuid4().hex[:8]}",
@@ -206,7 +206,7 @@ ENT_ECONOMY = {"PERSON": ["Jane Doe"], "GPE": ["London"], "ORG": ["Bank of Engla
 @pytest.mark.asyncio
 async def test_build_reporting_units_integration(db_session):
     """Integration test: build_reporting_units creates units from raw articles."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ap_body = (
         "A major event happened today in the capital city. "
         "Officials confirmed the details of the event to reporters."

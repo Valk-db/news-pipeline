@@ -12,7 +12,7 @@ import asyncio
 import hashlib
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 import pytest
@@ -27,7 +27,7 @@ from scripts.check_transparency_log import (
 from src.schema.models import Base, SourceTier
 from src.transparency.log import TransparencyBase, canonical_json
 
-NOW = datetime(2026, 10, 2, 6, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 2, 6, 0, tzinfo=UTC)
 WORKFLOW = (
     Path(__file__).resolve().parents[1]
     / ".github"

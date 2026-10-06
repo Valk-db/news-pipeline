@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import ast
 import importlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 from fastapi.testclient import TestClient
@@ -188,7 +188,7 @@ class TestPendingStoriesStayInvisible:
         Parametrised by the route table so a public route added later inherits
         the assertion instead of needing to be remembered here.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         pending = _make_story(
             db_session, day=now - timedelta(hours=2), events=1,
             status=Story.Status.PENDING,
@@ -217,7 +217,7 @@ class TestPendingStoriesStayInvisible:
         is one year and the limit is 1,000, so nothing here can be excused as
         falling outside the query's range.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         pending = _make_story(
             db_session, day=now - timedelta(hours=2), events=1,
             status=Story.Status.PENDING,
@@ -244,7 +244,7 @@ class TestPendingStoriesStayInvisible:
         missing template, a filter that matches nothing -- would pass the tests
         above just as happily as a correct one.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         approved = _make_story(
             db_session, day=now - timedelta(hours=2), events=1,
             status=Story.Status.QUEUED,
@@ -265,7 +265,7 @@ class TestPendingStoriesStayInvisible:
         each, exactly as a completed Phase 2 run would, and asserts the public
         surface is unchanged.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         pending = _make_story(
             db_session, day=now - timedelta(hours=2), events=1,
             status=Story.Status.PENDING,

@@ -14,7 +14,7 @@ import html
 import re
 import subprocess
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 from fastapi.testclient import TestClient
@@ -109,8 +109,8 @@ def _make_article(db_session, **overrides):
         body_text=overrides.get("body_text", "Body text."),
         source_domain="example.test",
         source_tier=SourceTier.TIER1,
-        published_at=datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc),
-        fetched_at=datetime(2026, 10, 1, 12, 5, tzinfo=timezone.utc),
+        published_at=datetime(2026, 10, 1, 12, 0, tzinfo=UTC),
+        fetched_at=datetime(2026, 10, 1, 12, 5, tzinfo=UTC),
         content_hash="ab" * 32,
         log_index=overrides.get("log_index"),
     )
@@ -343,7 +343,7 @@ class TestProofPage:
         article = _make_article(db_session, log_index=3)
         unit = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            day=datetime(2026, 10, 1, tzinfo=UTC),
             representative_article_id=article.id,
             article_count=1,
             source_tiers={"tier1": 1},
@@ -352,7 +352,7 @@ class TestProofPage:
         )
         story = Story(
             id=uuid.uuid4(),
-            day=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            day=datetime(2026, 10, 1, tzinfo=UTC),
             primary_entities=["test-entity"],
             status=Story.Status.QUEUED,
             tier1_unit_count=1,
@@ -379,7 +379,7 @@ class TestProofPage:
         article = _make_article(db_session, log_index=None)
         unit = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            day=datetime(2026, 10, 1, tzinfo=UTC),
             representative_article_id=article.id,
             article_count=1,
             source_tiers={"tier1": 1},
@@ -388,7 +388,7 @@ class TestProofPage:
         )
         story = Story(
             id=uuid.uuid4(),
-            day=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            day=datetime(2026, 10, 1, tzinfo=UTC),
             primary_entities=["test-entity"],
             status=Story.Status.QUEUED,
             tier1_unit_count=1,
@@ -748,7 +748,7 @@ class TestUnstampedHonesty:
         # Backdate the only log entry well past the daily run's cadence. Done in
         # SQL because the log is append-only through its API on purpose.
         await db_session.execute(
-            update(MerkleLogEntry).values(timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc))
+            update(MerkleLogEntry).values(timestamp=datetime(2026, 9, 1, tzinfo=UTC))
         )
         article = _make_article(db_session, url="https://example.test/plain-3", log_index=None)
         await db_session.commit()
@@ -862,7 +862,7 @@ class TestTreeScheme:
             tree_size=len(entries),
             merkle_root=rfc6962_root(leaves),
             chain_hash=await log.head(),
-            timestamp=datetime(2026, 10, 3, 6, 0, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 10, 3, 6, 0, tzinfo=UTC),
             format=FORMAT_C2SP_V3,
             key_id=signer.key_id,
             entry_timestamps=entry_timestamps_root(entries),

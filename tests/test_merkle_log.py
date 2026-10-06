@@ -7,7 +7,7 @@ check out for the right key, and an anchor stub that records what it was handed.
 """
 import dataclasses
 import hashlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 
@@ -96,7 +96,7 @@ class TestChain:
         assert canonical_json(payload) == expected_canonical
         expected_leaf = leaf_hash(payload)
 
-        entry = build_entry(0, payload, timestamp=datetime(2026, 10, 1, tzinfo=timezone.utc))
+        entry = build_entry(0, payload, timestamp=datetime(2026, 10, 1, tzinfo=UTC))
         assert entry.leaf_hash == expected_leaf
         assert entry.canonical_payload == expected_canonical
 
@@ -367,7 +367,7 @@ class TestInterface:
     def test_signers_expose_algorithm_and_key_id(self):
         signer = HmacDevSigner(SECRET, key_id="k1")
         assert (signer.algorithm, signer.key_id) == ("hmac-sha256-dev", "k1")
-        base = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        base = datetime(2026, 10, 1, tzinfo=UTC)
         checkpoint = Checkpoint(
             tree_size=1,
             merkle_root=bytes(32),

@@ -34,7 +34,7 @@ Two things about the environment, both load-bearing:
 """
 
 import dataclasses
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 from sqlalchemy import select, text
@@ -160,7 +160,7 @@ async def _plant_authentic_row(session, signer, tree_size: int) -> TransparencyC
         tree_size=tree_size,
         merkle_root=merkle_root([b"\x00" * 32] * 1),
         chain_hash=b"\xcd" * 32,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         origin=ORIGIN,
         format=FORMAT_C2SP_V2,
     )
@@ -208,7 +208,7 @@ async def _publish(session, log, signer, tree_size: int | None = None) -> Signed
         tree_size=size,
         merkle_root=merkle_root([e.leaf_hash for e in await log.entries()][:size]),
         chain_hash=(await log.entries())[size - 1].chain_hash,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         origin=ORIGIN,
         format=FORMAT_C2SP_V2,
     )
@@ -250,7 +250,7 @@ class TestForgedPreviousCheckpoint:
             tree_size=3,
             merkle_root=forged_root,
             chain_hash=entries[-1].chain_hash,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             origin=ORIGIN,
             format=FORMAT_C2SP_V2,
         )
@@ -302,7 +302,7 @@ class TestForgedPreviousCheckpoint:
             tree_size=3,
             merkle_root=good_root,  # correct on purpose
             chain_hash=entries[-1].chain_hash,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             origin=ORIGIN,
             format=FORMAT_C2SP_V2,
         )
@@ -374,7 +374,7 @@ class TestForgedPreviousCheckpoint:
             tree_size=2,
             merkle_root=merkle_root([e.leaf_hash for e in entries]),
             chain_hash=entries[-1].chain_hash,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             format=FORMAT_JSON_V1,
         )
         db_session.add(
@@ -552,7 +552,7 @@ class TestRollbackAndGenesis:
             merkle_root=merkle_root([e.leaf_hash for e in entries]),
             chain_hash=entries[-1].chain_hash,
             # A different timestamp => a different digest at the same root.
-            timestamp=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 10, 1, tzinfo=UTC),
             origin=ORIGIN,
             format=FORMAT_C2SP_V2,
         )
@@ -662,7 +662,7 @@ class TestSignerKeyTrust:
         means "the bounds are enforced at signing" would be an unbacked claim.
         """
         signer = generate_ed25519_signer(seed=_seed("f7-window"))
-        window_start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        window_start = datetime(2026, 10, 1, tzinfo=UTC)
         trusted = {
             signer.key_id: TrustedKey(
                 key_id=signer.key_id,
@@ -964,7 +964,7 @@ class TestQuarantine:
             tree_size=2,
             merkle_root=merkle_root([e.leaf_hash for e in entries]),
             chain_hash=entries[-1].chain_hash,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             format=FORMAT_JSON_V1,
         )
         row = TransparencyCheckpoint(

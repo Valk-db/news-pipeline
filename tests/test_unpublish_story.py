@@ -17,7 +17,7 @@ no route and no filter.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 from fastapi.testclient import TestClient
@@ -101,7 +101,7 @@ def _make_public_story(db_session, *, status=Story.Status.QUEUED):
     Get any of these wrong and the "after" assertion silently degrades to "absent
     because it was never present".
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     story = Story(
         id=uuid.uuid4(),
         day=now - timedelta(hours=2),

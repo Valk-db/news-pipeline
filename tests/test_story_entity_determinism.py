@@ -7,7 +7,7 @@ sorted, so the same input yields the same output in any process.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 
@@ -24,7 +24,7 @@ def _canonical_ids(n: int, offset: int = 0) -> set[str]:
 
 
 async def _unit(db_session) -> ReportingUnit:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     article = RawArticle(
         id=uuid.uuid4(),
         url=f"https://example.test/{uuid.uuid4().hex[:8]}",
