@@ -2,7 +2,7 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.verification.claims import extract_claims_for_story
@@ -22,7 +22,7 @@ def sample_story():
     """Create a sample story."""
     return Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["entity1", "entity2"],
         tier1_unit_count=2,
         tier2_unit_count=1,
@@ -40,7 +40,7 @@ def sample_units():
     for i in range(4):
         unit = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             representative_article_id=uuid.uuid4(),
             article_count=1,
             source_tiers={"tier1": 1, "tier2": 0, "tier3": 0} if i < 2 else {"tier2": 1},
@@ -71,7 +71,7 @@ def sample_articles():
             body_text=text,
             source_domain="bbc.com" if i < 2 else ("nytimes.com" if i == 2 else "localnews.com"),
             source_tier=SourceTier.TIER1 if i < 2 else SourceTier.TIER2,
-            published_at=datetime.now(timezone.utc),
+            published_at=datetime.now(UTC),
             entities={"PERSON": ["Official", "Leader"], "ORG": ["Government", "IMF"], "GPE": ["Country"]},
             content_hash=f"content{i}",
         )
@@ -206,7 +206,7 @@ async def test_extract_claims_for_story_insufficient_units(mock_session, sample_
     # Create 1 unit with body_text
     unit = ReportingUnit(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         representative_article_id=uuid.uuid4(),
         article_count=1,
         source_tiers={"tier1": 1},
@@ -226,7 +226,7 @@ async def test_extract_claims_for_story_insufficient_units(mock_session, sample_
         body_text="Some text.",
         source_domain="bbc.com",
         source_tier=SourceTier.TIER1,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
         content_hash="content",
     )
     article_result.scalar_one_or_none.return_value = article

@@ -2,7 +2,7 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from unittest.mock import AsyncMock, MagicMock
 
 from src.verification.tiers import (
@@ -53,7 +53,7 @@ def sample_story():
     """Create a sample story."""
     return Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[str(uuid.uuid4()), str(uuid.uuid4())],
         tier1_unit_count=2,
         tier2_unit_count=1,
@@ -69,7 +69,7 @@ def sample_story_no_person():
     """Create a sample story with non-PERSON entities."""
     return Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[str(uuid.uuid4()), str(uuid.uuid4())],
         tier1_unit_count=2,
         tier2_unit_count=1,
@@ -85,7 +85,7 @@ def sample_story_high_harm():
     """Create a sample story with PERSON entities (for harm_level test)."""
     return Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[str(uuid.uuid4()), str(uuid.uuid4())],  # UUID strings
         tier1_unit_count=2,
         tier2_unit_count=1,
@@ -101,7 +101,7 @@ def sample_story_viral():
     """Create a sample story with tier3/4 units for virality."""
     return Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[str(uuid.uuid4())],
         tier1_unit_count=2,
         tier2_unit_count=1,

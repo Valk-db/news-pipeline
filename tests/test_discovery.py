@@ -6,7 +6,7 @@ and exercised live against dev Postgres during verification.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 from fastapi.testclient import TestClient
@@ -135,7 +135,7 @@ def _make_rich_story(
 class TestTierFilter:
     @pytest.mark.asyncio
     async def test_hide_tier3_drops_tier3_only_stories(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(hours=2),
                          headline="Tier one breakthrough in Geneva talks",
                          tier_counts=(2, 0, 0, 0), owners=2)
@@ -156,7 +156,7 @@ class TestTierFilter:
     @pytest.mark.asyncio
     async def test_tier_filter_keeps_mixed_stories(self, app_with_db, db_session):
         """A tier-1 story that also has tier-3 units survives tiers=1,2."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(hours=2),
                          headline="Mixed coverage of the summit",
                          tier_counts=(2, 0, 5, 0), owners=4)
@@ -176,7 +176,7 @@ class TestTierFilter:
 class TestSortAndWindow:
     @pytest.mark.asyncio
     async def test_newest_oldest_sort_orders_by_latest(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(hours=10),
                          headline="Older story about the harbor bridge",
                          tier_counts=(2, 0, 0, 0), owners=2)
@@ -198,7 +198,7 @@ class TestSortAndWindow:
 
     @pytest.mark.asyncio
     async def test_explicit_date_window(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(days=5),
                          headline="Ancient history piece",
                          tier_counts=(2, 0, 0, 0), owners=2)
@@ -218,7 +218,7 @@ class TestSortAndWindow:
 class TestTopicSearch:
     @pytest.mark.asyncio
     async def test_search_matches_headline(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(hours=2),
                          headline="Earthquake relief efforts in the valley",
                          tier_counts=(2, 0, 0, 0), owners=2)
@@ -235,7 +235,7 @@ class TestTopicSearch:
     @pytest.mark.asyncio
     async def test_search_uses_english_translation(self, app_with_db, db_session):
         """An English query finds a French-headline story via its translation."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(
             db_session, day=now - timedelta(hours=2),
             headline="Le président annonce des mesures économiques",
@@ -255,7 +255,7 @@ class TestTopicSearch:
 
     @pytest.mark.asyncio
     async def test_search_no_match_returns_empty(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(hours=2),
                          headline="Parliament debates the new budget",
                          tier_counts=(2, 0, 0, 0), owners=2)
@@ -276,7 +276,7 @@ class TestTopicSearch:
         fix, 28 of the 30 most common tokens in the pending queue matched zero
         stories.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(hours=2),
                          headline="UK tries to stop Trump's diesel export ban",
                          tier_counts=(2, 0, 0, 0), owners=2)
@@ -360,7 +360,7 @@ class TestEnglishHeadlineCoalescing:
 
     @pytest.mark.asyncio
     async def test_story_list_falls_back_to_the_original_headline(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(hours=2),
                          headline="Parliament debates the new budget",
                          lang="en", headline_en=None,
@@ -376,7 +376,7 @@ class TestEnglishHeadlineCoalescing:
 
     @pytest.mark.asyncio
     async def test_story_page_falls_back_to_the_original_headline(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(hours=2),
                          headline="Parliament debates the new budget",
                          lang="en", headline_en=None,
@@ -397,7 +397,7 @@ class TestMapPageDiscovery:
     async def test_map_page_renders_discovery_controls(self, app_with_db, db_session):
         """The /map page ships the search bar, tier chips, window and sort,
         with initial state taken from the query string."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(hours=2),
                          headline="Earthquake relief efforts in the valley",
                          tier_counts=(2, 0, 0, 0), owners=2)
@@ -423,7 +423,7 @@ class TestMapPageDiscovery:
 class TestNearDupeCollapsing:
     @pytest.mark.asyncio
     async def test_same_headline_collapses_to_one(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for i in range(3):
             _make_rich_story(db_session, day=now - timedelta(hours=2),
                              headline="Macron et Milei veulent renforcer les liens économiques",
@@ -461,7 +461,7 @@ class TestVerificationBadge:
 
     @pytest.mark.asyncio
     async def test_summary_carries_verification(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_rich_story(db_session, day=now - timedelta(hours=2),
                          headline="Badge check story",
                          tier_counts=(2, 1, 0, 0), owners=3)

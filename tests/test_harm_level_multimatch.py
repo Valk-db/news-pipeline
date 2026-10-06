@@ -14,7 +14,7 @@ unfixed code and pass once the queries take the first row (LIMIT 1) instead.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 import pytest_asyncio
@@ -47,7 +47,7 @@ async def _story_with(db_session, n_allegations, n_persons):
     persons = [_person(f"Person {i}") for i in range(n_persons)]
     story = Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[str(p.id) for p in persons],
         status=Story.Status.PENDING,
     )

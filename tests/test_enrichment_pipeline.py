@@ -2,7 +2,7 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from unittest.mock import AsyncMock, patch
 
 from src.enrichment.pipeline import enrich_story
@@ -18,7 +18,7 @@ async def story_with_articles(db_session):
     # Create a story
     story = Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+        day=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
         primary_entities={"PERSON": ["John Doe"], "ORG": ["Acme Corp"]},
         tier1_unit_count=1,
         status=Story.Status.PENDING,
@@ -28,7 +28,7 @@ async def story_with_articles(db_session):
     # Create a reporting unit
     unit = ReportingUnit(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+        day=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
         representative_article_id=uuid.uuid4(),  # Will update after article created
         article_count=1,
         source_tiers={"tier1": 1},
@@ -47,7 +47,7 @@ async def story_with_articles(db_session):
         summary="Test summary",
         source_domain="apnews.com",
         source_tier=SourceTier.TIER1,
-        published_at=datetime.now(timezone.utc),
+        published_at=datetime.now(UTC),
         entities={"PERSON": ["John Doe"], "ORG": ["Acme Corp"], "GPE": ["United States"]},
     )
     db_session.add(article)

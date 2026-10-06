@@ -16,7 +16,7 @@ cosmetic:
 import asyncio
 import time
 from email.utils import format_datetime
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 from httpx import HTTPStatusError, Request, Response
@@ -48,13 +48,13 @@ class TestRetryAfter:
         assert retry_after_seconds(_http_error(429, {"Retry-After": "12"})) == 12.0
 
     def test_http_date(self):
-        when = datetime.now(timezone.utc) + timedelta(seconds=45)
+        when = datetime.now(UTC) + timedelta(seconds=45)
         assert 40 <= retry_after_seconds(_http_error(429, {"retry-after": format_datetime(when)})) <= 45
 
     def test_a_date_in_the_past_means_now_not_negative(self):
         """A negative sleep is an error, and a clock-skewed provider must not be able to
         produce one."""
-        when = datetime.now(timezone.utc) - timedelta(hours=1)
+        when = datetime.now(UTC) - timedelta(hours=1)
         assert retry_after_seconds(_http_error(429, {"retry-after": format_datetime(when)})) == 0.0
 
     def test_absurd_value_is_capped_rather_than_obeyed(self):
@@ -64,7 +64,7 @@ class TestRetryAfter:
         assert retry_after_seconds(_http_error(429, {"retry-after": "soon-ish"})) is None
 
     def test_nanosecond_date_without_tzinfo_is_still_parsed(self):
-        when = datetime.now(timezone.utc) + timedelta(seconds=20)
+        when = datetime.now(UTC) + timedelta(seconds=20)
         value = retry_after_seconds(_http_error(429, {"retry-after": format_datetime(when)}))
         assert value is not None and 15 <= value <= 20
 

@@ -7,7 +7,7 @@ accumulate, and an error that got swallowed instead of raised.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import Any, AsyncGenerator, List
 
 import pytest
@@ -42,7 +42,7 @@ async def db_session(db_engine) -> AsyncGenerator[AsyncSession, None]:
 
 def _as_utc(value: datetime) -> datetime:
     """SQLite hands datetimes back without a tzinfo, so compare in UTC either way."""
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 async def _make_article(session: AsyncSession, terminal_state: Any = None) -> RawArticle:
@@ -55,7 +55,7 @@ async def _make_article(session: AsyncSession, terminal_state: Any = None) -> Ra
         body_text="Body text long enough to be plausible. " * 8,
         source_domain="apnews.com",
         source_tier=SourceTier.TIER1,
-        fetched_at=datetime.now(timezone.utc),
+        fetched_at=datetime.now(UTC),
     )
     if terminal_state is not None:
         article.terminal_state = terminal_state
@@ -265,11 +265,11 @@ class TestRecordDeadLetter:
         assert stored.reason == "rate_limited"
 
     async def test_created_at_is_utc(self, db_session):
-        before = datetime.now(timezone.utc) - timedelta(seconds=1)
+        before = datetime.now(UTC) - timedelta(seconds=1)
         await record_dead_letter(db_session, "ingest_rss", "parse_failed")
         stored = (await _letters(db_session))[0]
-        after = datetime.now(timezone.utc) + timedelta(seconds=1)
-        naive = stored.created_at.replace(tzinfo=timezone.utc)
+        after = datetime.now(UTC) + timedelta(seconds=1)
+        naive = stored.created_at.replace(tzinfo=UTC)
         assert before <= naive <= after
 
     async def test_many_letters_keep_their_own_ids(self, db_session):

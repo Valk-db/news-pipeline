@@ -27,7 +27,7 @@ which is enough because the constraint is part of the model metadata.
 
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 import asyncpg
@@ -318,10 +318,10 @@ async def test_migration_skips_a_table_that_does_not_exist(scratch):
 async def _story(day_offset: int, entities: list[str]):
     return Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=entities,
         status=Story.Status.QUEUED,
-        created_at=datetime.now(timezone.utc) + timedelta(days=day_offset),
+        created_at=datetime.now(UTC) + timedelta(days=day_offset),
     )
 
 

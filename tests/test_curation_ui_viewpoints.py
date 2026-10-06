@@ -2,7 +2,7 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from fastapi.testclient import TestClient
 from src.shared.config import get_settings
 from src.shared import database as database_module
@@ -47,7 +47,7 @@ class TestStoryViewpointsEndpoint:
         # Create a parent story
         parent_story = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             primary_entities=["test-entity"],
             status=Story.Status.PENDING,
             tier1_unit_count=2,
@@ -68,7 +68,7 @@ class TestStoryViewpointsEndpoint:
             body_text="Test body text about politics",
             source_domain="apnews.com",
             source_tier=SourceTier.TIER1,
-            published_at=datetime.now(timezone.utc),
+            published_at=datetime.now(UTC),
             entities={"PERSON": ["John Doe"], "ORG": ["AP"], "GPE": ["United States"]},
         )
         db_session.add(article)
@@ -76,7 +76,7 @@ class TestStoryViewpointsEndpoint:
 
         unit = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             representative_article_id=article.id,
             article_count=1,
             source_tiers={"tier1": 1},
@@ -122,7 +122,7 @@ class TestStoryViewpointsEndpoint:
         # Create a parent story
         parent_story = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             primary_entities=["test-entity"],
             status=Story.Status.PENDING,
             tier1_unit_count=2,
@@ -143,7 +143,7 @@ class TestStoryViewpointsEndpoint:
             body_text="Test body text about politics",
             source_domain="apnews.com",
             source_tier=SourceTier.TIER1,
-            published_at=datetime.now(timezone.utc),
+            published_at=datetime.now(UTC),
             entities={"PERSON": ["John Doe"], "ORG": ["AP"], "GPE": ["United States"]},
         )
         db_session.add(article1)
@@ -156,7 +156,7 @@ class TestStoryViewpointsEndpoint:
             body_text="Test body text about politics",
             source_domain="reuters.com",
             source_tier=SourceTier.TIER1,
-            published_at=datetime.now(timezone.utc),
+            published_at=datetime.now(UTC),
             entities={"PERSON": ["Jane Smith"], "ORG": ["Reuters"], "GPE": ["United States"]},
         )
         db_session.add(article2)
@@ -164,7 +164,7 @@ class TestStoryViewpointsEndpoint:
 
         unit1 = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             representative_article_id=article1.id,
             article_count=1,
             source_tiers={"tier1": 1},
@@ -175,7 +175,7 @@ class TestStoryViewpointsEndpoint:
 
         unit2 = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             representative_article_id=article2.id,
             article_count=1,
             source_tiers={"tier1": 1},
@@ -194,7 +194,7 @@ class TestStoryViewpointsEndpoint:
         # Create a viewpoint sub-cluster story
         viewpoint_story = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             primary_entities=["test-entity"],
             status=Story.Status.PENDING,
             viewpoint_cluster_id=parent_story.id,
@@ -216,7 +216,7 @@ class TestStoryViewpointsEndpoint:
             body_text="Test body text with different view",
             source_domain="bbc.com",
             source_tier=SourceTier.TIER1,
-            published_at=datetime.now(timezone.utc),
+            published_at=datetime.now(UTC),
             entities={"PERSON": ["Bob Wilson"], "ORG": ["BBC"], "GPE": ["United Kingdom"]},
         )
         db_session.add(article3)
@@ -224,7 +224,7 @@ class TestStoryViewpointsEndpoint:
 
         viewpoint_unit = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             representative_article_id=article3.id,
             article_count=1,
             source_tiers={"tier1": 1},

@@ -11,7 +11,7 @@ would make every assertion here silently degrade to "no results".
 
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 from fastapi.testclient import TestClient
@@ -72,7 +72,7 @@ def _make_pending_story(
     domain="example.com",
 ):
     """A PENDING triage-queue story with an explicit tier mix and headline."""
-    created_at = created_at or datetime.now(timezone.utc)
+    created_at = created_at or datetime.now(UTC)
     t1, t2, t3, t4 = tier_counts
     story = Story(
         id=uuid.uuid4(),
@@ -172,7 +172,7 @@ class TestToolbar:
 class TestTierFilter:
     @pytest.mark.asyncio
     async def test_tier_filter_drops_tier3_only_story(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         kept = _make_pending_story(db_session, headline="Summit talks resume in Geneva",
                                    tier_counts=(2, 0, 0, 0), owners=2, created_at=now)
         dropped = _make_pending_story(db_session, headline="Viral rumor spreads on forums",
@@ -198,7 +198,7 @@ class TestTierFilter:
 
     @pytest.mark.asyncio
     async def test_all_tiers_selected_is_the_unfiltered_queue(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_pending_story(db_session, headline="Only tier three here",
                             tier_counts=(0, 0, 2, 0), owners=2, created_at=now)
         await db_session.commit()
@@ -210,7 +210,7 @@ class TestTierFilter:
 class TestWindowFilter:
     @pytest.mark.asyncio
     async def test_window_narrows_the_queue(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         fresh = _make_pending_story(db_session, headline="Fresh overnight report",
                                     tier_counts=(2, 0, 0, 0), owners=2,
                                     created_at=now - timedelta(hours=2))
@@ -231,7 +231,7 @@ class TestWindowFilter:
 class TestSort:
     @pytest.mark.asyncio
     async def test_newest_and_oldest_flip_the_order(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         older = _make_pending_story(db_session, headline="Older story about the bridge",
                                     tier_counts=(2, 0, 0, 0), owners=2,
                                     created_at=now - timedelta(days=3))
@@ -250,7 +250,7 @@ class TestSort:
 
     @pytest.mark.asyncio
     async def test_top_ranks_by_corroboration(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # Newer but uncorroborated, so recency and corroboration disagree.
         weak = _make_pending_story(db_session, headline="Thin coverage, newest of the two",
                                    tier_counts=(0, 0, 1, 0), owners=1,
@@ -272,7 +272,7 @@ class TestSort:
 class TestTopicSearch:
     @pytest.mark.asyncio
     async def test_search_returns_matching_stories(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         hit = _make_pending_story(db_session, headline="Earthquake relief efforts in the valley",
                                   tier_counts=(2, 0, 0, 0), owners=2, created_at=now)
         miss = _make_pending_story(db_session, headline="Harbor bridge reopens to traffic",
@@ -288,7 +288,7 @@ class TestTopicSearch:
     @pytest.mark.asyncio
     async def test_search_keeps_the_chosen_sort_order(self, app_with_db, db_session):
         """Search narrows the queue; the sort control still decides the order."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         older = _make_pending_story(db_session, headline="Earthquake in the northern valley",
                                     tier_counts=(2, 0, 0, 0), owners=2,
                                     created_at=now - timedelta(days=2))
@@ -310,7 +310,7 @@ class TestVerificationBadge:
     @pytest.mark.asyncio
     async def test_card_states_corroboration(self, app_with_db, db_session):
         """The card says in words whether the story is corroborated, and by how many."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         corroborated = _make_pending_story(db_session, headline="Corroborated summit report",
                                            tier_counts=(3, 1, 0, 0), owners=4, created_at=now)
         singleton = _make_pending_story(db_session, headline="Unconfirmed forum sighting",
@@ -398,7 +398,7 @@ class TestFiltersSurviveNavigation:
     async def test_detail_view_of_a_hidden_story_is_still_reachable_directly(self, app_with_db, db_session):
         """Direct navigation is not filtered; only the queue listing is. A curator
         following a link to a story must not get a 404 because a chip is off."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         target = _make_pending_story(db_session, headline="Tier three only",
                                      tier_counts=(0, 0, 3, 0), owners=3, created_at=now)
         await db_session.commit()
@@ -424,7 +424,7 @@ class TestEmptyState:
 
     @pytest.mark.asyncio
     async def test_filtered_empty_queue_says_the_filters_are(self, app_with_db, db_session):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _make_pending_story(db_session, headline="Only tier three here",
                             tier_counts=(0, 0, 2, 0), owners=2, created_at=now)
         await db_session.commit()

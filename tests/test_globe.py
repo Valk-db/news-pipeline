@@ -8,7 +8,7 @@ geocoder, and scripts/backfill_globe_events.py, which is what feeds /map and
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -48,7 +48,7 @@ def test_event_model_fields():
         location_name="New York City",
         location_type="city",
         radius_km=25.0,
-        start_time=datetime.now(timezone.utc),
+        start_time=datetime.now(UTC),
         event_type=Event.EventType.CONFLICT,
         confidence=0.85,
         source_count=5,
@@ -315,7 +315,7 @@ def test_story_event_copies_the_storys_own_numbers():
     """The event carries the story's sourcing, not invented confidence."""
     story = Story(
         id=uuid.uuid4(),
-        day=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        day=datetime(2026, 10, 1, tzinfo=UTC),
         tier1_unit_count=2,
         tier2_unit_count=1,
         tier3_unit_count=1,
@@ -341,7 +341,7 @@ def test_story_event_copies_the_storys_own_numbers():
 
 def test_story_event_keeps_coordinates_off_null_island():
     """An entity on the equator or the prime meridian is still a real point."""
-    story = Story(id=uuid.uuid4(), day=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    story = Story(id=uuid.uuid4(), day=datetime(2026, 10, 1, tzinfo=UTC))
 
     event = story_event(story, located("Ghana", 0.0, 0.0, "country"))
 
@@ -352,7 +352,7 @@ def test_story_event_keeps_coordinates_off_null_island():
 
 def test_group_by_story_collapses_a_storys_entities():
     """One story with three located entities is one story, not three."""
-    story = Story(id=uuid.uuid4(), day=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    story = Story(id=uuid.uuid4(), day=datetime(2026, 10, 1, tzinfo=UTC))
     rows = [(story, located("A", 1.0, 1.0)), (story, located("B", 2.0, 2.0))]
 
     grouped = group_by_story(rows)
