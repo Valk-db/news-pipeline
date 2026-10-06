@@ -88,7 +88,7 @@ class TestAllowlistAgainstTheRealRouteTable:
         path that exists only under a prefix change is a near miss waiting to
         become a real one."""
         real = {row[0] for row in route_table(app)}
-        assert MAP_READ_PATHS <= real
+        assert real >= MAP_READ_PATHS
 
     def test_allowlist_never_names_an_authenticated_route(self):
         """The bug this file exists for: a public Cache-Control on a route that
@@ -99,13 +99,13 @@ class TestAllowlistAgainstTheRealRouteTable:
     def test_allowlist_is_exactly_the_map_reads(self):
         """Pinned as a literal so adding an entry is a deliberate act that shows
         up in the diff, rather than something a refactor can do sideways."""
-        assert MAP_READ_PATHS == frozenset({
+        assert frozenset({
             "/api/globe/events",
             "/api/globe/layers",
             "/api/map/freshness",
             "/api/map/replay",
             "/api/map/stories",
-        })
+        }) == MAP_READ_PATHS
 
     def test_every_allowlisted_route_is_get_only(self):
         """A write on a cached path would be a correctness bug before it was a
