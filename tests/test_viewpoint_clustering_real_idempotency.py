@@ -2,7 +2,7 @@
 
 import pytest
 import json
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from uuid import uuid4
 from sqlalchemy import select
 from unittest.mock import AsyncMock, patch
@@ -24,7 +24,7 @@ async def test_cluster_viewpoints_idempotent_real_db(db_session):
 
     # Create a parent story
     parent_story = Story(
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities={"PERSON": ["Trump"], "ORG": ["White House"], "GPE": ["US", "China"]},
         status=Story.Status.PENDING,
         tier1_unit_count=2,
@@ -51,7 +51,7 @@ async def test_cluster_viewpoints_idempotent_real_db(db_session):
             source_tiers=source_tiers,
             tier1_owner_groups=owner_groups,
             owner_groups=owner_groups,  # Required NOT NULL column
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             article_count=1,
         )
         units.append(unit)

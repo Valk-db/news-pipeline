@@ -8,7 +8,7 @@ prompt contract and the response parsing directly.
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 
@@ -79,7 +79,7 @@ def test_normalize_label(raw, expected):
 @pytest.mark.asyncio
 async def test_recent_stories_excludes_viewpoint_children(db_session):
     """New units must attach to the parent story, never to a viewpoint slice of it."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     parent = Story(
         id=uuid.uuid4(), day=now, primary_entities=["e1", "e2"],
         status=Story.Status.PENDING, updated_at=now,
