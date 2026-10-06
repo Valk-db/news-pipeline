@@ -53,7 +53,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 
 from sqlalchemy import BigInteger, Date, bindparam, text
 from sqlalchemy.exc import ProgrammingError
@@ -375,7 +375,7 @@ _RECORD = text(
 
 def today() -> date:
     """The UTC day a spend belongs to. One definition, so no caller can drift."""
-    return datetime.now(timezone.utc).date()
+    return datetime.now(UTC).date()
 
 
 async def spend(name: str, amount: int, cap: int, *, day: date | None = None) -> int | None:

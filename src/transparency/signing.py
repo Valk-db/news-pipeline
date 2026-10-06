@@ -97,7 +97,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any, Mapping, Sequence
 
 from sqlalchemy import func, select, text
@@ -616,7 +616,7 @@ async def sign_next_checkpoint(
     # bound stops a key being used long past its expiry; it cannot stop a key
     # lying about when it was used. Closing that needs an independent anchor time
     # (DECISIONS.md phase 2, external witnessing), which is out of scope here.
-    signing_time = (timestamp or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    signing_time = (timestamp or datetime.now(UTC)).astimezone(UTC)
     signer_verdict = _check_signer_key(signer, trusted_keys, tree_size, signing_time)
     if isinstance(signer_verdict, SigningResult):
         return signer_verdict
@@ -1109,7 +1109,7 @@ def _check_signer_key(
     # verifier will reject, and the operator would only find out from a third
     # party. It still does not stop a key holder backdating inside the window --
     # see the note in sign_next_checkpoint.
-    moment = signing_time or datetime.now(timezone.utc)
+    moment = signing_time or datetime.now(UTC)
     ok, reason = key.is_within_bounds(tree_size, moment)
     if not ok:
         logger.error(f"REFUSING: the signing key {signer.key_id!r} {reason}")
@@ -1138,8 +1138,8 @@ async def checkpoint_age_hours(
         return None
     moment = newest.timestamp
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    reference = now or datetime.now(timezone.utc)
+        moment = moment.replace(tzinfo=UTC)
+    reference = now or datetime.now(UTC)
     return (reference - moment).total_seconds() / 3600.0
 
 
@@ -1272,8 +1272,8 @@ async def record_alert(
             if newest_created is not None:
                 created = newest_created
                 if created.tzinfo is None:
-                    created = created.replace(tzinfo=timezone.utc)
-                gap = (datetime.now(timezone.utc) - created).total_seconds()
+                    created = created.replace(tzinfo=UTC)
+                gap = (datetime.now(UTC) - created).total_seconds()
                 if gap < min_interval_seconds:
                     logger.info(
                         f"Suppressing a repeat {kind!r} alert: one was recorded "

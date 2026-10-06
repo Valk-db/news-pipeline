@@ -18,7 +18,7 @@ import logging
 import time
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from urllib.parse import urlparse
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
 from src.utils.ner import extract_entities_top_n
@@ -320,7 +320,7 @@ async def _articles_from_doc_response(
         if seendate:
             try:
                 # GDELT format: YYYYMMDDHHMMSS
-                published_at = datetime.strptime(seendate, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                published_at = datetime.strptime(seendate, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
             except ValueError:
                 pass
 
@@ -491,7 +491,7 @@ async def fetch_gkg_geojson_articles(
                             published_at = datetime.fromisoformat(pub.replace("Z", "+00:00"))
                             if published_at.tzinfo is None:
                                 # GKG sometimes omits the offset; assume UTC like the DOC path.
-                                published_at = published_at.replace(tzinfo=timezone.utc)
+                                published_at = published_at.replace(tzinfo=UTC)
                         except ValueError:
                             pass
 
@@ -557,7 +557,7 @@ async def fetch_static_articles(
             from sqlalchemy import select
             from datetime import timedelta
 
-            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            cutoff = datetime.now(UTC) - timedelta(days=30)
             async with get_session() as session:
                 result = await session.execute(
                     select(RawArticle.url_hash).where(RawArticle.fetched_at >= cutoff)

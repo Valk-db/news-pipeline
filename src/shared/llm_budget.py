@@ -21,7 +21,7 @@ the unit that actually exhausts the day.
 from dataclasses import dataclass
 from collections import deque
 from email.utils import parsedate_to_datetime
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import asyncio
 import hashlib
 import random
@@ -356,8 +356,8 @@ def retry_after_seconds(exc: BaseException) -> float | None:
     if when is None:
         return None
     if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, min((when - datetime.now(timezone.utc)).total_seconds(), RETRY_AFTER_MAX))
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, min((when - datetime.now(UTC)).total_seconds(), RETRY_AFTER_MAX))
 
 
 def llm_backoff(retry_state) -> float:

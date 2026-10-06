@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from sqlalchemy import Column, DateTime, Index, Integer, String, Text, desc, select
 from sqlalchemy.dialects.postgresql import UUID
@@ -77,7 +77,7 @@ class TransparencyCheckpoint(TransparencyBase):
     log_id = Column(String(128))  # which log this row covers, matching the note's origin
     tree_scheme = Column(String(32), nullable=False, default=TREE_SCHEME_CT_V1)
     entry_timestamps = Column(String(64))  # hex root over covered (index, timestamp) pairs
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     def to_signed(self) -> SignedCheckpoint:
         return SignedCheckpoint.from_dict(
@@ -139,7 +139,7 @@ class TransparencyQuarantine(TransparencyBase):
     checkpoint_id = Column(String(64), nullable=False, unique=True)
     reason = Column(Text, nullable=False, default="")
     quarantined_by = Column(String(128))
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
 
 async def save_checkpoint(session: AsyncSession, signed: SignedCheckpoint) -> TransparencyCheckpoint:

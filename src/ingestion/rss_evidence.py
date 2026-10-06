@@ -64,7 +64,7 @@ import sys
 import zlib
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
@@ -521,8 +521,8 @@ def parse_published(raw: str | None) -> Optional[datetime]:
         parsed = parsedate_to_datetime(value)
         if parsed is not None:
             if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc)
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
     except (TypeError, ValueError, IndexError):
         pass
     candidate = value.replace("Z", "+00:00")
@@ -531,8 +531,8 @@ def parse_published(raw: str | None) -> Optional[datetime]:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 # -------------------------------------------------------------------- cadence
@@ -644,7 +644,7 @@ async def refresh(
     for feed in feed_list:
         key = feed["key"]
         state = states.setdefault(key, FeedState())
-        now = now_fn(timezone.utc)
+        now = now_fn(UTC)
         now_ts = now.timestamp()
 
         if not should_poll(state, now_ts):
@@ -959,7 +959,7 @@ async def stamp_observations(
             "url": article.url,
             "source_domain": article.source_domain,
             # Inside the payload on purpose: see the docstring.
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "fetched_at": datetime.now(UTC).isoformat(),
             "body_sha256": article.content_hash,
             "title": article.title,
             # Binds the leaf to the article row (S-P1-2). article.id is set:

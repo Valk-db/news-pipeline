@@ -10,7 +10,7 @@ import feedparser
 import httpx
 import logging
 from typing import List, Optional, Callable, Awaitable
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from src.utils.trafilatura_extract import extract_article, compute_url_hash, compute_content_hash
 from src.utils.ner import extract_entities_top_n
 from src.utils.ingest_stats import STATS
@@ -153,9 +153,9 @@ async def process_feed_entry(
     # Parse published date
     published_at = None
     if "published_parsed" in entry and entry.published_parsed:
-        published_at = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)  # type: ignore[arg-type]
+        published_at = datetime(*entry.published_parsed[:6], tzinfo=UTC)  # type: ignore[arg-type]
     elif "updated_parsed" in entry and entry.updated_parsed:
-        published_at = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)  # type: ignore[arg-type]
+        published_at = datetime(*entry.updated_parsed[:6], tzinfo=UTC)  # type: ignore[arg-type]
 
     STATS.record(source_key, "entries_seen")
 

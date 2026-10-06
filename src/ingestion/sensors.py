@@ -24,7 +24,7 @@ import json
 import logging
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Dict, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -109,7 +109,7 @@ def _epoch_ms_to_datetime(value) -> Optional[datetime]:
     if ms is None or ms <= 0:
         return None
     try:
-        return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+        return datetime.fromtimestamp(ms / 1000.0, tz=UTC)
     except (OverflowError, OSError, ValueError):
         return None
 
@@ -124,7 +124,7 @@ def _parse_pubdate(value: str) -> Optional[datetime]:
 
         parsed = parsedate_to_datetime(value)
         if parsed is not None and parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.replace(tzinfo=UTC)
         return parsed
     except (TypeError, ValueError, IndexError):
         return None

@@ -11,6 +11,7 @@ from src.ingestion.source_registry import get_enabled_sources_by_tier, SourceTie
 from src.shared.database import get_session
 from src.schema.models import RawArticle
 from sqlalchemy import select
+from datetime import UTC
 
 
 class RssAdapter:
@@ -43,8 +44,8 @@ class RssAdapter:
         known_url_hashes = set()
         async with get_session() as session:
             # Get URL hashes from last 30 days (covers recent runs)
-            from datetime import datetime, timezone, timedelta
-            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            from datetime import datetime, timedelta
+            cutoff = datetime.now(UTC) - timedelta(days=30)
             stmt = select(RawArticle.url_hash).where(
                 RawArticle.source_tier == self.tier,
                 RawArticle.fetched_at >= cutoff,

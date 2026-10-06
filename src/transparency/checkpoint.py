@@ -74,7 +74,7 @@ import hashlib
 import hmac
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from src.transparency.log import GENESIS_CHAIN_HASH, MerkleLog, canonical_json, verify_chain
@@ -313,7 +313,7 @@ def entry_timestamps_root(entries: Sequence[Any]) -> bytes:
             canonical_json(
                 {
                     "index": entry.index,
-                    "timestamp": entry.timestamp.astimezone(timezone.utc)
+                    "timestamp": entry.timestamp.astimezone(UTC)
                     .isoformat()
                     .replace("+00:00", "Z"),
                 }
@@ -554,7 +554,7 @@ class Checkpoint:
             "chain_hash": self.chain_hash.hex(),
             "hash_scheme": "n1:sha256",
             "merkle_root": self.merkle_root.hex(),
-            "timestamp": self.timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": self.timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z"),
             "tree_size": self.tree_size,
         }
         return CHECKPOINT_DOMAIN + b" " + canonical_json(body)
@@ -583,7 +583,7 @@ class Checkpoint:
         fields: dict[str, Any] = {
             "chain_hash": self.chain_hash.hex(),
             "prev": self.previous_digest.hex() if self.previous_digest else "-",
-            "timestamp": self.timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": self.timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         }
         if self.format == FORMAT_C2SP_V3:
             if not self.key_id:
@@ -622,7 +622,7 @@ class Checkpoint:
         data = {
             "chain_hash": self.chain_hash.hex(),
             "merkle_root": self.merkle_root.hex(),
-            "timestamp": self.timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": self.timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z"),
             "tree_size": self.tree_size,
         }
         if self.format != FORMAT_JSON_V1:
@@ -791,7 +791,7 @@ async def build_checkpoint(
         tree_size=tree_size,
         merkle_root=root_for_scheme(leaves, scheme),
         chain_hash=chain_hash,
-        timestamp=(timestamp or datetime.now(timezone.utc)).astimezone(timezone.utc),
+        timestamp=(timestamp or datetime.now(UTC)).astimezone(UTC),
         origin=origin,
         previous_digest=previous_digest,
         format=format,
