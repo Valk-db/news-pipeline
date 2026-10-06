@@ -13,7 +13,7 @@ way to check the DDL rather than the Python that describes it. It skips without 
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -133,7 +133,7 @@ def test_every_stage_and_its_aliases_resolve():
 
 
 def _article(session, domain="apnews.com", url_id="a", entities=None, body=None, tier=SourceTier.TIER1):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     article = RawArticle(
         id=uuid.uuid4(),
         url=f"https://{domain}/{url_id}",
@@ -152,7 +152,7 @@ def _article(session, domain="apnews.com", url_id="a", entities=None, body=None,
 async def _unit(session, domain="apnews.com", url_id="u", entities=None):
     article = _article(session, domain=domain, url_id=url_id, entities=entities)
     unit = ReportingUnit(
-        day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+        day=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
         representative_article_id=article.id,
         article_count=1,
         source_tiers={"tier1": 1},
@@ -240,7 +240,7 @@ async def test_claims_stamp_claim_and_evidence(db_session):
     unit_a = await _unit(db_session, url_id="c1")
     unit_b = await _unit(db_session, domain="bbc.com", url_id="c2")
     story = Story(
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["Gov"],
         tier1_unit_count=2,
         tier2_unit_count=0,
@@ -321,7 +321,7 @@ async def test_topics_stamp_the_matched_assignment(db_session):
     group = TopicGroup(name=group_name)
     db_session.add(group)
     story = Story(
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[keyword.capitalize()],
         status=Story.Status.QUEUED,
     )
@@ -344,7 +344,7 @@ async def test_topics_stamp_the_fallback_assignment(db_session):
     group = TopicGroup(name=FALLBACK_GROUP)
     db_session.add(group)
     story = Story(
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["Zzzqqq"],
         status=Story.Status.QUEUED,
     )
@@ -362,7 +362,7 @@ async def test_topics_stamp_the_fallback_assignment(db_session):
 
 
 async def test_narrative_stamps_the_story_to_story_edge(db_session):
-    day = datetime.now(timezone.utc)
+    day = datetime.now(UTC)
     older = Story(day=day - timedelta(days=3), primary_entities=["Israel"], status=Story.Status.QUEUED)
     newer = Story(day=day, primary_entities=["Israel", "Gaza"], status=Story.Status.QUEUED)
     db_session.add_all([older, newer])
@@ -388,7 +388,7 @@ async def test_narrative_stamps_the_story_to_story_edge(db_session):
 async def test_reliability_stamps_the_snapshot(db_session):
     from src.reliability.consensus_analyzer import compute_daily_reliability_snapshots
 
-    date = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    date = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     db_session.add(
         RawArticle(
             id=uuid.uuid4(),
@@ -421,7 +421,7 @@ async def test_events_stamp_the_geocoded_point():
     from scripts.backfill_globe_events import story_event
 
     story = Story(
-        id=uuid.uuid4(), day=datetime.now(timezone.utc),
+        id=uuid.uuid4(), day=datetime.now(UTC),
         primary_entities=[], status=Story.Status.QUEUED,
     )
     entity = CanonicalEntity(
@@ -509,22 +509,22 @@ async def test_embed_story_digests_exactly_what_it_sent():
 
 async def test_stale_is_null_or_not_a_current_version(db_session):
     story = Story(
-        id=uuid.uuid4(), day=datetime.now(timezone.utc),
+        id=uuid.uuid4(), day=datetime.now(UTC),
         primary_entities=[], status=Story.Status.QUEUED,
     )
     db_session.add(story)
     await db_session.flush()
 
     current = Story(
-        id=uuid.uuid4(), day=datetime.now(timezone.utc), primary_entities=[],
+        id=uuid.uuid4(), day=datetime.now(UTC), primary_entities=[],
         status=Story.Status.QUEUED, analyzer_version=STORY_VERSION, input_hash="a" * 64,
     )
     viewpoint = Story(
-        id=uuid.uuid4(), day=datetime.now(timezone.utc), primary_entities=[],
+        id=uuid.uuid4(), day=datetime.now(UTC), primary_entities=[],
         status=Story.Status.QUEUED, analyzer_version=VIEWPOINT_VERSION, input_hash="b" * 64,
     )
     old = Story(
-        id=uuid.uuid4(), day=datetime.now(timezone.utc), primary_entities=[],
+        id=uuid.uuid4(), day=datetime.now(UTC), primary_entities=[],
         status=Story.Status.QUEUED, analyzer_version="story/v0", input_hash="c" * 64,
     )
     db_session.add_all([current, viewpoint, old])
@@ -563,11 +563,11 @@ async def test_edges_from_both_writers_count_as_current(db_session):
 
 async def test_audit_counts_current_and_stale_separately(db_session):
     db_session.add_all([
-        Story(id=uuid.uuid4(), day=datetime.now(timezone.utc), primary_entities=[],
+        Story(id=uuid.uuid4(), day=datetime.now(UTC), primary_entities=[],
               status=Story.Status.QUEUED, analyzer_version=STORY_VERSION, input_hash="a" * 64),
-        Story(id=uuid.uuid4(), day=datetime.now(timezone.utc), primary_entities=[],
+        Story(id=uuid.uuid4(), day=datetime.now(UTC), primary_entities=[],
               status=Story.Status.QUEUED, analyzer_version=STORY_VERSION, input_hash="a" * 64),
-        Story(id=uuid.uuid4(), day=datetime.now(timezone.utc), primary_entities=[],
+        Story(id=uuid.uuid4(), day=datetime.now(UTC), primary_entities=[],
               status=Story.Status.QUEUED),
     ])
     await db_session.commit()

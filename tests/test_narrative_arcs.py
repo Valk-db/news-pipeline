@@ -2,7 +2,7 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 from unittest.mock import AsyncMock, MagicMock
 
 from src.verification.narrative import _entity_jaccard, link_narrative_arcs
@@ -55,7 +55,7 @@ async def test_link_narrative_arcs_same_event(mock_session):
     # Target story with entities
     story = Story(
         id=story_id,
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["Israel", "Hamas", "Gaza", "Netanyahu", "Ceasefire"],
         status=Story.Status.QUEUED,
     )
@@ -63,7 +63,7 @@ async def test_link_narrative_arcs_same_event(mock_session):
     # Older story with high overlap (4/5 = 0.8 Jaccard)
     older_story = Story(
         id=older_story_id,
-        day=datetime.now(timezone.utc) - timedelta(days=10),
+        day=datetime.now(UTC) - timedelta(days=10),
         primary_entities=["Israel", "Hamas", "Gaza", "Netanyahu", "Hostages"],
         status=Story.Status.QUEUED,
     )
@@ -110,7 +110,7 @@ async def test_link_narrative_arcs_part_of_narrative(mock_session):
     # Target story
     story = Story(
         id=story_id,
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["Israel", "Hamas", "Gaza", "Economy", "Inflation"],
         status=Story.Status.QUEUED,
     )
@@ -118,7 +118,7 @@ async def test_link_narrative_arcs_part_of_narrative(mock_session):
     # Older story with moderate overlap (2/7 = ~0.28 Jaccard)
     older_story = Story(
         id=older_story_id,
-        day=datetime.now(timezone.utc) - timedelta(days=30),
+        day=datetime.now(UTC) - timedelta(days=30),
         primary_entities=["Israel", "Economy", "Trade", "Markets"],
         status=Story.Status.QUEUED,
     )
@@ -160,7 +160,7 @@ async def test_link_narrative_arcs_no_edge(mock_session):
 
     story = Story(
         id=story_id,
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["Technology", "AI", "Startup", "Funding"],
         status=Story.Status.QUEUED,
     )
@@ -168,7 +168,7 @@ async def test_link_narrative_arcs_no_edge(mock_session):
     # Completely different domain
     older_story = Story(
         id=older_story_id,
-        day=datetime.now(timezone.utc) - timedelta(days=5),
+        day=datetime.now(UTC) - timedelta(days=5),
         primary_entities=["Sports", "Football", "World Cup", "Goal"],
         status=Story.Status.QUEUED,
     )
@@ -220,7 +220,7 @@ async def test_link_narrative_arcs_no_entities(mock_session):
 
     story = Story(
         id=story_id,
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[],
         status=Story.Status.QUEUED,
     )
@@ -243,14 +243,14 @@ async def test_link_narrative_arcs_idempotent(mock_session):
 
     story = Story(
         id=story_id,
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["Israel", "Hamas", "Gaza", "Netanyahu"],
         status=Story.Status.QUEUED,
     )
 
     older_story = Story(
         id=older_story_id,
-        day=datetime.now(timezone.utc) - timedelta(days=10),
+        day=datetime.now(UTC) - timedelta(days=10),
         primary_entities=["Israel", "Hamas", "Gaza", "Netanyahu"],
         status=Story.Status.QUEUED,
     )
@@ -300,7 +300,7 @@ async def test_link_narrative_arcs_self_excluded(mock_session):
 
     story = Story(
         id=story_id,
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["Israel", "Hamas", "Gaza"],
         status=Story.Status.QUEUED,
     )

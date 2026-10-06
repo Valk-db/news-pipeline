@@ -2,7 +2,7 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from unittest.mock import AsyncMock, MagicMock
 
 from src.verification.reliability import compute_source_topic_reliability
@@ -27,7 +27,7 @@ def sample_claim():
         story_id=uuid.uuid4(),
         text="Test claim",
         claim_type=ClaimType.FACT,
-        first_seen_at=datetime.now(timezone.utc),
+        first_seen_at=datetime.now(UTC),
     )
 
 
@@ -238,7 +238,7 @@ async def test_compute_reliability_updates_existing(mock_session):
         topic_group_id=topic_group_id,
         score=50,
         sample_size=1,
-        snapshot_date=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+        snapshot_date=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
     )
     existing_result = MagicMock()
     existing_result.scalar_one_or_none.return_value = existing

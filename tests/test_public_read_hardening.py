@@ -18,7 +18,7 @@ assumes it and tests what those routes do.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 from fastapi.testclient import TestClient
@@ -239,7 +239,7 @@ class TestMapStoriesReportsTheWindowItActuallyUsed:
 
     @pytest.mark.asyncio
     async def test_requested_window_is_echoed_and_clamp_is_reported(self, app_with_db, db_session):
-        _make_story(db_session, day=datetime.now(timezone.utc) - timedelta(hours=2), events=1)
+        _make_story(db_session, day=datetime.now(UTC) - timedelta(hours=2), events=1)
         await db_session.commit()
 
         payload = TestClient(app_with_db).get("/api/map/stories?hours=48").json()
@@ -251,7 +251,7 @@ class TestMapStoriesReportsTheWindowItActuallyUsed:
         """hours=999999 was served a MAP_MAX_WINDOW_HOURS window; say so."""
         from curation_ui.discovery import MAP_MAX_WINDOW_HOURS
 
-        _make_story(db_session, day=datetime.now(timezone.utc) - timedelta(hours=2), events=1)
+        _make_story(db_session, day=datetime.now(UTC) - timedelta(hours=2), events=1)
         await db_session.commit()
 
         payload = TestClient(app_with_db).get("/api/map/stories?hours=999999").json()
@@ -261,7 +261,7 @@ class TestMapStoriesReportsTheWindowItActuallyUsed:
     @pytest.mark.asyncio
     async def test_unbounded_window_reports_none(self, app_with_db, db_session):
         """hours=0 means unbounded, which is not a number of hours."""
-        _make_story(db_session, day=datetime.now(timezone.utc) - timedelta(hours=2), events=1)
+        _make_story(db_session, day=datetime.now(UTC) - timedelta(hours=2), events=1)
         await db_session.commit()
 
         payload = TestClient(app_with_db).get("/api/map/stories?hours=0").json()
@@ -270,7 +270,7 @@ class TestMapStoriesReportsTheWindowItActuallyUsed:
     @pytest.mark.asyncio
     async def test_explicit_window_wins_over_hours(self, app_with_db, db_session):
         """An explicit start/end pair is the whole story of the window."""
-        _make_story(db_session, day=datetime.now(timezone.utc) - timedelta(hours=2), events=1)
+        _make_story(db_session, day=datetime.now(UTC) - timedelta(hours=2), events=1)
         await db_session.commit()
 
         start = "2026-09-30T00:00:00Z"
@@ -283,7 +283,7 @@ class TestMapStoriesReportsTheWindowItActuallyUsed:
     @pytest.mark.asyncio
     async def test_a_half_open_window_is_reported_as_unbounded(self, app_with_db, db_session):
         """start without end has no width to report; None is the honest answer."""
-        _make_story(db_session, day=datetime.now(timezone.utc) - timedelta(hours=2), events=1)
+        _make_story(db_session, day=datetime.now(UTC) - timedelta(hours=2), events=1)
         await db_session.commit()
 
         payload = TestClient(app_with_db).get(
@@ -297,7 +297,7 @@ class TestPublicStoryPageIsCapped:
 
     @pytest.mark.asyncio
     async def test_a_short_story_is_whole_and_says_nothing_about_caps(self, app_with_db, db_session):
-        story = _make_story(db_session, day=datetime.now(timezone.utc) - timedelta(hours=2), events=1)
+        story = _make_story(db_session, day=datetime.now(UTC) - timedelta(hours=2), events=1)
         await db_session.commit()
 
         response = TestClient(app_with_db).get(f"/stories/{story.id}")
@@ -310,7 +310,7 @@ class TestPublicStoryPageIsCapped:
         self, app_with_db, db_session, monkeypatch
     ):
         monkeypatch.setattr("curation_ui.public_pages.PUBLIC_STORY_UNIT_CAP", 3)
-        day = datetime.now(timezone.utc) - timedelta(hours=2)
+        day = datetime.now(UTC) - timedelta(hours=2)
         story = _make_story(db_session, day=day, events=0)
         _add_units(db_session, story, 5, day)
         await db_session.commit()
@@ -328,7 +328,7 @@ class TestPublicStoryPageIsCapped:
         self, app_with_db, db_session, monkeypatch
     ):
         monkeypatch.setattr("curation_ui.public_pages.PUBLIC_STORY_EVENT_CAP", 2)
-        day = datetime.now(timezone.utc) - timedelta(hours=2)
+        day = datetime.now(UTC) - timedelta(hours=2)
         story = _make_story(db_session, day=day, events=5)
         await db_session.commit()
 
@@ -346,7 +346,7 @@ class TestPublicStoryPageIsCapped:
     ):
         """The cap drops the oldest: the newest event is on the page, day+0h is not."""
         monkeypatch.setattr("curation_ui.public_pages.PUBLIC_STORY_EVENT_CAP", 2)
-        day = datetime.now(timezone.utc) - timedelta(hours=10)
+        day = datetime.now(UTC) - timedelta(hours=10)
         story = _make_story(db_session, day=day, events=6)
         await db_session.commit()
 

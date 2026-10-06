@@ -2,7 +2,7 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.verification.stories import cluster_viewpoints
@@ -22,7 +22,7 @@ def sample_story():
     """Create a sample story with multiple units."""
     story = Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["entity1", "entity2"],
         tier1_unit_count=2,
         tier2_unit_count=1,
@@ -42,7 +42,7 @@ def sample_units():
     for i in range(4):
         unit = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             representative_article_id=uuid.uuid4(),
             article_count=1,
             source_tiers={"tier1": 1, "tier2": 0, "tier3": 0} if i < 2 else {"tier2": 1},
@@ -73,7 +73,7 @@ def sample_articles():
             body_text=text,
             source_domain="bbc.com" if i < 2 else ("nytimes.com" if i == 2 else "localnews.com"),
             source_tier=SourceTier.TIER1 if i < 2 else SourceTier.TIER2,
-            published_at=datetime.now(timezone.utc),
+            published_at=datetime.now(UTC),
             entities={"PERSON": ["Official", "Leader"], "ORG": ["Government", "IMF"], "GPE": ["Country"]},
             content_hash=f"content{i}",
         )
@@ -221,7 +221,7 @@ async def test_cluster_viewpoints_insufficient_units(mock_session):
     """Test viewpoint clustering with insufficient units."""
     story = Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["entity1"],
         tier1_unit_count=1,
         tier2_unit_count=0,
@@ -256,7 +256,7 @@ async def test_viewpoint_substories_blocked_by_tier1_gate(mock_session, sample_u
     # Create a parent story with ONLY tier-3 units (no tier-1 units)
     story = Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["entity1"],
         tier1_unit_count=0,
         tier2_unit_count=0,
@@ -272,7 +272,7 @@ async def test_viewpoint_substories_blocked_by_tier1_gate(mock_session, sample_u
     for i in range(4):
         unit = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc),
+            day=datetime.now(UTC),
             representative_article_id=uuid.uuid4(),
             article_count=1,
             source_tiers={"tier3": 1},
@@ -403,7 +403,7 @@ def test_viewpoint_cluster_model_fields():
     """Test that Story model has viewpoint_cluster_id field."""
     story = Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=["entity1"],
         status=Story.Status.PENDING,
     )
@@ -540,7 +540,7 @@ def test_source_registry():
 def test_tiered_scheduler():
     """Test tiered scheduler."""
     from src.ingestion.tiered_scheduler import TieredScheduler, SourceTier
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     scheduler = TieredScheduler()
 
@@ -548,23 +548,23 @@ def test_tiered_scheduler():
     assert scheduler.should_run_tier(SourceTier.TIER1, None) is True
 
     # Recently run - should not run again
-    recent = datetime.now(timezone.utc) - timedelta(minutes=30)
+    recent = datetime.now(UTC) - timedelta(minutes=30)
     assert scheduler.should_run_tier(SourceTier.TIER1, recent) is False
 
     # Hour ago - should run
-    hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    hour_ago = datetime.now(UTC) - timedelta(hours=1)
     assert scheduler.should_run_tier(SourceTier.TIER1, hour_ago) is True
 
     # Tier 2: 4 hours
-    four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=4)
+    four_hours_ago = datetime.now(UTC) - timedelta(hours=4)
     assert scheduler.should_run_tier(SourceTier.TIER2, four_hours_ago) is True
 
     # Tier 3: daily
-    day_ago = datetime.now(timezone.utc) - timedelta(days=1)
+    day_ago = datetime.now(UTC) - timedelta(days=1)
     assert scheduler.should_run_tier(SourceTier.TIER3, day_ago) is True
 
     # Tier 4: 6 hours
-    six_hours_ago = datetime.now(timezone.utc) - timedelta(hours=6)
+    six_hours_ago = datetime.now(UTC) - timedelta(hours=6)
     assert scheduler.should_run_tier(SourceTier.TIER4, six_hours_ago) is True
 
     # Test cron expressions

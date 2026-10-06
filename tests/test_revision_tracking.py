@@ -7,7 +7,7 @@ row missing when one should exist.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import Dict, List, Optional
 
 import pytest
@@ -111,8 +111,8 @@ async def _make_article(
         body_text=body,
         source_domain=domain,
         source_tier=SourceTier.TIER1,
-        published_at=datetime.now(timezone.utc) - timedelta(hours=6),
-        fetched_at=fetched_at or datetime.now(timezone.utc) - timedelta(hours=5),
+        published_at=datetime.now(UTC) - timedelta(hours=6),
+        fetched_at=fetched_at or datetime.now(UTC) - timedelta(hours=5),
         content_hash=content_hash or compute_content_hash(body or ""),
     )
     session.add(article)
@@ -323,7 +323,7 @@ class TestClassification:
         await db_session.commit()
 
         assert outcome.change_kind == ArticleRevision.ChangeKind.ACKNOWLEDGED
-        assert outcome.displayed_at == datetime(2026, 9, 30, 14, 3, tzinfo=timezone.utc)
+        assert outcome.displayed_at == datetime(2026, 9, 30, 14, 3, tzinfo=UTC)
         assert "updated" in [s.label for s in outcome.corrections]
 
     @pytest.mark.asyncio
@@ -331,8 +331,8 @@ class TestClassification:
         """A timestamp newer than the previous revision's acknowledges the edit,
         with no notice in the text to back it up."""
         article = await _make_article(db_session)
-        earlier = datetime(2026, 9, 29, 9, 0, tzinfo=timezone.utc)
-        later = datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc)
+        earlier = datetime(2026, 9, 29, 9, 0, tzinfo=UTC)
+        later = datetime(2026, 10, 1, 8, 0, tzinfo=UTC)
 
         first = await record_revision(
             db_session,
@@ -401,7 +401,7 @@ class TestClassification:
         # The fetch time is inside the payload: the log does not vouch for its own
         # timestamp column, so an entry that claims one must carry it in the hash.
         assert payload["fetched_at"] == revision.fetched_at.replace(
-            tzinfo=timezone.utc
+            tzinfo=UTC
         ).isoformat()
 
     @pytest.mark.asyncio
@@ -556,7 +556,7 @@ class TestScanRevisions:
         old = await _make_article(
             db_session,
             url="https://apnews.com/article/old",
-            fetched_at=datetime.now(timezone.utc) - timedelta(days=30),
+            fetched_at=datetime.now(UTC) - timedelta(days=30),
         )
         recent = await _make_article(db_session, url="https://apnews.com/article/recent")
         await db_session.commit()
@@ -619,7 +619,7 @@ class TestHelpers:
     def test_extract_displayed_timestamp_reads_the_last_match(self):
         content = "Published 2026-01-01\n\nUpdated: 2026-02-02 09:15\n\nUpdated: 2026-03-03 11:00"
         assert extract_displayed_timestamp(content) == datetime(
-            2026, 3, 3, 11, 0, tzinfo=timezone.utc
+            2026, 3, 3, 11, 0, tzinfo=UTC
         )
 
     def test_extract_displayed_timestamp_returns_none_without_a_timestamp(self):

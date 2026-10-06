@@ -12,7 +12,7 @@ malformed `primary_entities` entry is the honest trigger: compute_harm_level() d
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 import sqlalchemy as sa
@@ -37,7 +37,7 @@ MALFORMED_ENTITY = "not-a-uuid"
 
 
 def _utcnow():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 async def _make_article(session, *, domain):

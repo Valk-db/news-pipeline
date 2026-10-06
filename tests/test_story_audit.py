@@ -18,7 +18,7 @@ from scripts.story_audit import (
     format_per_day,
     build_report,
 )
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 
 
 class TestBuildUnitEntitySets:
@@ -27,8 +27,8 @@ class TestBuildUnitEntitySets:
     def test_builds_entity_sets_from_articles(self):
         """Builds entity sets for units from their representative articles."""
         units = [
-            {"id": "unit1", "representative_article_id": "art1", "created_at": datetime.now(timezone.utc)},
-            {"id": "unit2", "representative_article_id": "art2", "created_at": datetime.now(timezone.utc)},
+            {"id": "unit1", "representative_article_id": "art1", "created_at": datetime.now(UTC)},
+            {"id": "unit2", "representative_article_id": "art2", "created_at": datetime.now(UTC)},
         ]
         articles = {
             "art1": {
@@ -68,8 +68,8 @@ class TestBuildUnitEntitySets:
     def test_handles_missing_article(self):
         """Handles units with missing representative articles."""
         units = [
-            {"id": "unit1", "representative_article_id": "art1", "created_at": datetime.now(timezone.utc)},
-            {"id": "unit2", "representative_article_id": "missing", "created_at": datetime.now(timezone.utc)},
+            {"id": "unit1", "representative_article_id": "art1", "created_at": datetime.now(UTC)},
+            {"id": "unit2", "representative_article_id": "missing", "created_at": datetime.now(UTC)},
         ]
         articles = {
             "art1": {"entities": {"PERSON": ["Test Person"]}}
@@ -83,7 +83,7 @@ class TestBuildUnitEntitySets:
     def test_handles_missing_entities(self):
         """Handles articles with no entities field."""
         units = [
-            {"id": "unit1", "representative_article_id": "art1", "created_at": datetime.now(timezone.utc)},
+            {"id": "unit1", "representative_article_id": "art1", "created_at": datetime.now(UTC)},
         ]
         articles = {
             "art1": {}  # No entities
@@ -130,7 +130,7 @@ class TestFindDuplicateTitles:
 
     def test_finds_duplicates(self):
         """Finds (source_domain, title) pairs appearing more than once."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         articles = [
             {"source_domain": "bbc.com", "title": "Test Article", "fetched_at": now - timedelta(hours=2)},
             {"source_domain": "bbc.com", "title": "Test Article", "fetched_at": now - timedelta(hours=1)},
@@ -148,7 +148,7 @@ class TestFindDuplicateTitles:
 
     def test_no_duplicates_returns_empty(self):
         """Returns empty list when no duplicates."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         articles = [
             {"source_domain": "bbc.com", "title": "Article 1", "fetched_at": now},
             {"source_domain": "guardian.com", "title": "Article 2", "fetched_at": now},
@@ -159,7 +159,7 @@ class TestFindDuplicateTitles:
 
     def test_multiple_duplicate_groups(self):
         """Handles multiple duplicate groups."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         articles = [
             {"source_domain": "bbc.com", "title": "Same", "fetched_at": now},
             {"source_domain": "bbc.com", "title": "Same", "fetched_at": now},
@@ -384,7 +384,7 @@ class TestBuildReport:
 
     def test_all_headings_appear_once(self):
         """Each heading appears exactly once in the report."""
-        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
         data = {
             "counts": {
                 "raw_articles": 10, "reporting_units": 5, "story_unit_links": 4,
@@ -419,7 +419,7 @@ class TestBuildReport:
 
     def test_empty_data_renders(self):
         """All-empty data renders without crashing."""
-        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
         data = {
             "counts": {},
             "stories_per_day": [],
@@ -447,7 +447,7 @@ class TestNoPrintInDataLayer:
         """No print() calls inside run_audit or fetch_audit_data."""
         import ast
 
-        with open("scripts/story_audit.py", "r") as f:
+        with open("scripts/story_audit.py") as f:
             source = f.read()
 
         tree = ast.parse(source)
@@ -474,7 +474,7 @@ class TestComputeJaccardHistogram:
 
     def test_basic_histogram_and_near_misses(self):
         """Computes histogram and finds near-misses for disjoint owner groups."""
-        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
         units = [
             {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
             {"id": "unit2", "created_at": now, "representative_article_id": "art2"},
@@ -523,7 +523,7 @@ class TestComputeJaccardHistogram:
 
     def test_same_owner_excluded(self):
         """Units with same owner are excluded from comparison."""
-        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
         units = [
             {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
             {"id": "unit2", "created_at": now, "representative_article_id": "art2"},
@@ -556,7 +556,7 @@ class TestComputeJaccardHistogram:
 
     def test_outside_48h_excluded(self):
         """Units outside 48h window are excluded."""
-        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
         units = [
             {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
             {"id": "unit2", "created_at": now - timedelta(hours=60), "representative_article_id": "art2"},  # 60h ago (inside 3-day window, outside 48h comparison window)
@@ -590,7 +590,7 @@ class TestComputeJaccardHistogram:
 
     def test_units_without_entities_excluded(self):
         """Units with empty entity sets are skipped."""
-        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
         units = [
             {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
             {"id": "unit2", "created_at": now, "representative_article_id": "art2"},
@@ -626,7 +626,7 @@ class TestComputeJaccardHistogram:
 
     def test_hours_window_honored(self):
         """hours_window parameter is honored."""
-        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
         units = [
             {"id": "unit1", "created_at": now, "representative_article_id": "art1"},
             {"id": "unit2", "created_at": now - timedelta(hours=30), "representative_article_id": "art2"},  # 30h ago
@@ -658,7 +658,7 @@ class TestComputeJaccardHistogram:
 
     def test_would_attach_threshold(self):
         """would_attach counts best Jaccard >= 0.4, not 0.39."""
-        now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
         # Jaccard = 0.4 exactly (2 shared out of 5 total = 0.4)
         units = [
             {"id": "unit1", "created_at": now, "representative_article_id": "art1"},

@@ -2,7 +2,7 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from unittest.mock import AsyncMock, MagicMock
 
 from src.verification.topics import (
@@ -46,7 +46,7 @@ def sample_story():
     """Create a sample story with UUID-form entities (Middle East)."""
     return Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[str(eid) for eid in MIDDLE_EAST_EIDS],
         tier1_unit_count=2,
         tier2_unit_count=1,
@@ -62,7 +62,7 @@ def sample_story_economy():
     """Create a sample story with UUID-form entities (economy)."""
     return Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[str(eid) for eid in ECONOMY_EIDS],
         tier1_unit_count=1,
         tier2_unit_count=2,
@@ -78,7 +78,7 @@ def sample_story_no_entities():
     """Create a sample story with no entities."""
     return Story(
         id=uuid.uuid4(),
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[],
         tier1_unit_count=0,
         tier2_unit_count=1,
@@ -320,7 +320,7 @@ async def test_assign_story_topic_groups_already_assigned(mock_session):
     gov_eids = [uuid.uuid4() for _ in range(3)]
     story = Story(
         id=story_id,
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[str(e) for e in gov_eids],
         tier1_unit_count=2,
         tier2_unit_count=1,
@@ -477,7 +477,7 @@ async def test_assign_story_topic_groups_uuid_no_keyword_match(mock_session):
     story_id = uuid.uuid4()
     story = Story(
         id=story_id,
-        day=datetime.now(timezone.utc),
+        day=datetime.now(UTC),
         primary_entities=[str(uuid.uuid4())],
         tier1_unit_count=1,
         tier2_unit_count=0,

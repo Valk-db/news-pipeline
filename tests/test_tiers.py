@@ -7,6 +7,7 @@ import pytest
 from src.verification.tiers import TIER1_DOMAINS, TIER2_DOMAINS, classify_source_tier, evaluate_tier1_gate
 from src.verification.units import get_owner_group
 from src.schema.models import SourceTier
+from datetime import UTC
 
 
 class TestClassifySourceTier:
@@ -142,7 +143,7 @@ class TestGateReasonCountsUnits:
     # corroboration, and the sentence must not claim two.
 
     async def _article(self, session, domain):
-        from datetime import datetime, timezone
+        from datetime import datetime
         from src.schema.models import RawArticle
 
         article = RawArticle(
@@ -153,14 +154,14 @@ class TestGateReasonCountsUnits:
             body_text="Body.",
             source_domain=domain,
             source_tier=SourceTier.TIER1,
-            published_at=datetime.now(timezone.utc),
+            published_at=datetime.now(UTC),
         )
         session.add(article)
         await session.flush()
         return article
 
     async def _unit(self, session, articles):
-        from datetime import datetime, timezone
+        from datetime import datetime
         from src.schema.models import ReportingUnit
 
         source_tiers, owner_groups, tier1_owner_groups = {}, {}, {}
@@ -171,7 +172,7 @@ class TestGateReasonCountsUnits:
             tier1_owner_groups[owner] = tier1_owner_groups.get(owner, 0) + 1
         unit = ReportingUnit(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+            day=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
             representative_article_id=articles[0].id,
             article_count=len(articles),
             source_tiers=source_tiers,
@@ -185,12 +186,12 @@ class TestGateReasonCountsUnits:
         return unit
 
     async def _story(self, session, units):
-        from datetime import datetime, timezone
+        from datetime import datetime
         from src.schema.models import Story, StoryUnitLink
 
         story = Story(
             id=uuid.uuid4(),
-            day=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+            day=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
             primary_entities=[],
             status=Story.Status.PENDING,
         )

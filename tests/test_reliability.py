@@ -2,7 +2,7 @@
 
 import pytest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from unittest.mock import AsyncMock, patch
 
 from src.schema.models import (
@@ -17,7 +17,7 @@ def test_reliability_models_exist():
     # SourceReliabilitySnapshot
     snapshot = SourceReliabilitySnapshot(
         source_domain="example.com",
-        snapshot_date=datetime.now(timezone.utc),
+        snapshot_date=datetime.now(UTC),
         factual_accuracy=85,
         correction_rate=2,
         consensus_alignment=78,
@@ -57,7 +57,7 @@ def test_reliability_models_exist():
         original_text="The economy grew by 5%",
         corrected_text="The economy grew by 3%",
         severity=CorrectionRecord.Severity.MODERATE,
-        correction_date=datetime.now(timezone.utc),
+        correction_date=datetime.now(UTC),
         correction_url="https://example.com/correction",
     )
     assert correction.severity == CorrectionRecord.Severity.MODERATE

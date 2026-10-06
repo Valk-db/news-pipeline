@@ -16,7 +16,7 @@ signer refuses the three ways a log can be equivocated.
 import base64
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -96,7 +96,7 @@ ORIGIN = "procmon.dev/transparency"
 
 
 def _utc(value: datetime) -> datetime:
-    return value.astimezone(timezone.utc)
+    return value.astimezone(UTC)
 
 
 @pytest.fixture
@@ -132,7 +132,7 @@ def _v2_checkpoint(tree_size: int = 3, previous_digest: bytes | None = None) -> 
         tree_size=tree_size,
         merkle_root=bytes(range(32)),
         chain_hash=bytes(range(32, 64)),
-        timestamp=datetime(2026, 10, 2, 6, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 10, 2, 6, 0, tzinfo=UTC),
         origin=ORIGIN,
         previous_digest=previous_digest,
         format=FORMAT_C2SP_V2,
@@ -363,7 +363,7 @@ class TestCheckpointV2:
             tree_size=1,
             merkle_root=b"\x01" * 32,
             chain_hash=b"\x02" * 32,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             format="n9-experimental",
         )
         with pytest.raises(ValueError, match="unknown checkpoint format"):
@@ -375,7 +375,7 @@ class TestCheckpointV2:
                 tree_size=1,
                 merkle_root=b"\x01" * 32,
                 chain_hash=b"\x02" * 32,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 origin=bad,
                 format=FORMAT_C2SP_V2,
             )
@@ -432,7 +432,7 @@ class TestCheckpointV2:
             tree_size=1,
             merkle_root=b"\x01" * 32,
             chain_hash=b"\x02" * 32,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         signer = generate_ed25519_signer(seed=_seed("v1-doc"))
         assert sign_checkpoint(v1, signer).signed_note_document() is None
@@ -449,7 +449,7 @@ class TestCheckpointV2:
             tree_size=2,
             merkle_root=merkle_root([b"\x01" * 32, b"\x02" * 32]),
             chain_hash=b"\x03" * 32,
-            timestamp=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 10, 1, tzinfo=UTC),
         )
         v1_signer = generate_ed25519_signer(seed=_seed("v1-signer"))
         v1_signed = sign_checkpoint(v1_checkpoint, v1_signer)
@@ -514,8 +514,8 @@ class TestKeyBounds:
             self._raw(not_before="2026-01-01T00:00:00Z", not_after="2027-01-01T00:00:00Z", max_tree_size=100)
         )
         key = keys["k1"]
-        assert key.not_before == datetime(2026, 1, 1, tzinfo=timezone.utc)
-        assert key.not_after == datetime(2027, 1, 1, tzinfo=timezone.utc)
+        assert key.not_before == datetime(2026, 1, 1, tzinfo=UTC)
+        assert key.not_after == datetime(2027, 1, 1, tzinfo=UTC)
         assert key.max_tree_size == 100
         assert key.has_bounds()
 
@@ -574,15 +574,15 @@ class TestKeyBounds:
             "k1",
             "ed25519",
             b"\x01" * 32,
-            not_before=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            not_after=datetime(2026, 2, 1, tzinfo=timezone.utc),
+            not_before=datetime(2026, 1, 1, tzinfo=UTC),
+            not_after=datetime(2026, 2, 1, tzinfo=UTC),
             max_tree_size=10,
         )
-        inside = datetime(2026, 1, 15, tzinfo=timezone.utc)
+        inside = datetime(2026, 1, 15, tzinfo=UTC)
         assert key.is_within_bounds(10, inside)[0] is True
         assert key.is_within_bounds(11, inside)[0] is False
-        assert key.is_within_bounds(1, datetime(2025, 12, 31, tzinfo=timezone.utc))[0] is False
-        assert key.is_within_bounds(1, datetime(2026, 3, 1, tzinfo=timezone.utc))[0] is False
+        assert key.is_within_bounds(1, datetime(2025, 12, 31, tzinfo=UTC))[0] is False
+        assert key.is_within_bounds(1, datetime(2026, 3, 1, tzinfo=UTC))[0] is False
 
     @needs_cryptography
     def test_verifier_for_returns_none_outside_the_validity_window(self):
@@ -591,14 +591,14 @@ class TestKeyBounds:
         signed = sign_checkpoint(checkpoint, signer)
         inside = TrustedKey(
             signer.key_id, "ed25519", signer.public_key_bytes(),
-            not_before=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            not_after=datetime(2027, 1, 1, tzinfo=timezone.utc),
+            not_before=datetime(2026, 1, 1, tzinfo=UTC),
+            not_after=datetime(2027, 1, 1, tzinfo=UTC),
         )
         assert verifier_for(signed, {signer.key_id: inside}) is not None
 
         expired = TrustedKey(
             signer.key_id, "ed25519", signer.public_key_bytes(),
-            not_after=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            not_after=datetime(2026, 1, 1, tzinfo=UTC),
         )
         assert verifier_for(signed, {signer.key_id: expired}) is None
 
@@ -676,7 +676,7 @@ class TestSignerRefusals:
             tree_size=3,
             merkle_root=merkle_root([e.leaf_hash for e in await log.entries()]),
             chain_hash=(await log.entries())[-1].chain_hash,
-            timestamp=datetime(2026, 10, 1, 6, 0, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 10, 1, 6, 0, tzinfo=UTC),
         )
         v1_signed = sign_checkpoint(v1, HmacDevSigner(b"legacy-dev-secret", key_id="dev-hmac-legacy"))
         v1_row = await save_checkpoint(db_session, v1_signed)
@@ -809,7 +809,7 @@ class TestSignerRefusals:
             tree_size=2,
             merkle_root=b"\xaa" * 32,
             chain_hash=entries[-1].chain_hash,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             origin=ORIGIN,
             format=FORMAT_C2SP_V2,
         )
@@ -878,7 +878,7 @@ class TestWatchdog:
         assert signing.watchdog_verdict(26.0, max_interval_hours=26)[0] is True
 
     async def test_age_is_measured_from_the_published_timestamp(self, db_session):
-        old = datetime.now(timezone.utc) - timedelta(hours=30)
+        old = datetime.now(UTC) - timedelta(hours=30)
         db_session.add(
             TransparencyCheckpoint(
                 tree_size=4,
