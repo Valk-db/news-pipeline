@@ -5,7 +5,7 @@ FactCheckRecord/CorrectionRecord aren't the source here (they're
 unpopulated in production today).
 """
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import (
@@ -18,7 +18,7 @@ MIN_SAMPLE_SIZE = 3  # don't write a score off fewer than this many evidence row
 
 async def compute_source_topic_reliability(session: AsyncSession, lookback_days: int = 90) -> dict:
     results = {"pairs_scored": 0, "claims_considered": 0, "errors": []}
-    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
 
     stmt = (
         select(
@@ -56,7 +56,7 @@ async def compute_source_topic_reliability(session: AsyncSession, lookback_days:
             else:
                 pair_stats[key]["disagree"] += confidence
 
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     for (source_domain, topic_group_id), stats in pair_stats.items():
         if stats["n"] < MIN_SAMPLE_SIZE:
             continue  # thin-data floor -- no row rather than a noisy one

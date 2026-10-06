@@ -19,7 +19,7 @@ are "space made available", not "disk returned to the OS".
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import List, Optional, Tuple
 
 from sqlalchemy import Text, and_, cast, delete, func, select, update
@@ -253,7 +253,7 @@ async def run_retention(
     body_days = _resolve_days(retention_days, body_text_retention_days, "body_text_retention_days")
 
     result = RetentionResult()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     embedding_cutoff = now - timedelta(days=embedding_days)
     body_cutoff = now - timedelta(days=body_days)
 

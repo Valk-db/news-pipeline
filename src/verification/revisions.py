@@ -44,7 +44,7 @@ import difflib
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import TYPE_CHECKING, Awaitable, Callable, List, Optional, Sequence, Tuple, Union
 from uuid import UUID
 
@@ -91,8 +91,8 @@ def _utc(value: datetime) -> datetime:
     """Normalize to tz-aware UTC. Naive input is read as UTC, which is what SQLite
     hands back for a timezone=True column."""
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @dataclass(frozen=True)
@@ -630,7 +630,7 @@ async def record_revision(
     Returns a RevisionOutcome. A row is written only when the content hash moved.
     """
     row = await _resolve_article(session, article)
-    now = _utc(fetched_at or datetime.now(timezone.utc))
+    now = _utc(fetched_at or datetime.now(UTC))
 
     if not (content or "").strip():
         logger.info(f"{row.url}: empty extraction, no revision recorded")
@@ -836,7 +836,7 @@ async def scan_revisions(
 
     fetcher = default_fetch_text if fetch_text is None else fetch_text
     result = RevisionScanResult()
-    now = _utc(datetime.now(timezone.utc))
+    now = _utc(datetime.now(UTC))
     cutoff = now - timedelta(hours=window_hours)
 
     logger.info(

@@ -15,7 +15,7 @@ from src.shared.analyzer_versions import (
     compute_input_hash,
     hash_id_set,
 )
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 import json
 import re
 import uuid
@@ -160,7 +160,7 @@ async def build_stories(session: AsyncSession) -> list[uuid.UUID]:
             unit_canonical_entities[unit.id] = set()
 
     # Get recent stories (PENDING + BLOCKED) from last 48h with their canonical entities
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+    cutoff = datetime.now(UTC) - timedelta(hours=48)
     recent_stories_list = await _get_recent_stories_with_entities(session, cutoff)
     # Convert to dict for O(1) lookup and so we can add newly created stories
     recent_stories = {story_id: entities for story_id, entities in recent_stories_list}
@@ -447,7 +447,7 @@ async def _update_story_entities(session: AsyncSession, story_id: uuid.UUID, new
         current_entities = set(story.primary_entities or [])
         current_entities.update(new_entities)
         story.primary_entities = sorted(current_entities)[:MAX_PRIMARY_ENTITIES]
-        story.updated_at = datetime.now(timezone.utc)
+        story.updated_at = datetime.now(UTC)
         await session.flush()
 
 

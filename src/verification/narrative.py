@@ -6,7 +6,7 @@ covering the same ongoing situation, beyond the 48h story-grouping window.
 
 import logging
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import Story, EntityEdge, EdgePredicate
@@ -91,7 +91,7 @@ async def link_narrative_arcs(session: AsyncSession, story_id) -> list[dict]:
         return results
 
     # Look back for older stories
-    cutoff = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
+    cutoff = datetime.now(UTC) - timedelta(days=LOOKBACK_DAYS)
     older_stories = await _get_stories_with_entities(session, cutoff, exclude_story_id=story_id)
 
     for older_story_id, older_entities in older_stories:

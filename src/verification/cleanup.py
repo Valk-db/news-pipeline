@@ -1,7 +1,7 @@
 """Cleanup job for stale stories and orphaned reporting units."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import List
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +39,7 @@ async def cleanup_stale_stories(
     POSTED/REJECTED: never expired (curator explicitly acted)
     """
     result = CleanupResult()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Expire PENDING stories
     pending_cutoff = now - timedelta(hours=pending_hours)
@@ -111,7 +111,7 @@ async def cleanup_orphaned_reporting_units(session: AsyncSession) -> CleanupResu
     unlinked_units = result_exec.scalars().all()
 
     # Only remove units that are old (not from current run)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
     for unit in unlinked_units:
         if unit.created_at < cutoff:
             await session.delete(unit)

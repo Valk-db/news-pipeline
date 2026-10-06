@@ -59,7 +59,7 @@ row, and this pass created nothing. Its own record of what it did is the pointer
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import func, or_, select
@@ -157,8 +157,8 @@ def _utc(value: datetime) -> datetime:
     what the column stores.
     """
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _event_start(event: Event) -> datetime:

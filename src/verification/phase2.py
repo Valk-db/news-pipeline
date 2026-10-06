@@ -85,7 +85,7 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import Iterable, Sequence
 
 from sqlalchemy import func, select
@@ -167,7 +167,7 @@ async def select_phase2_stories(
     under it, because this filter counts units while the prompt is built from
     the first max_units of them.
     """
-    cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=hours_back)
+    cutoff = (now or datetime.now(UTC)) - timedelta(hours=hours_back)
     stmt = (
         select(Story)
         .where(Story.status.in_(statuses))
