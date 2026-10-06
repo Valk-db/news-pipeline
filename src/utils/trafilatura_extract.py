@@ -364,9 +364,7 @@ def canonicalize_url_v1(url: str, _depth: int = 0) -> str:
         return raw
 
     scheme = _ascii_lower(parts.scheme)
-    if scheme in ("http", "https"):
-        pass
-    elif scheme == "" and parts.netloc:
+    if scheme in ("http", "https") or scheme == "" and parts.netloc:
         pass
     else:
         return raw

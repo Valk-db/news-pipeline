@@ -584,9 +584,7 @@ def _assess_correction_severity(old: str, new: str) -> str:
     total_changes = added + removed
 
     # Major: large text changes OR numerical changes with large text changes
-    if total_changes > 50:
-        return "major"
-    elif total_changes > 10 and has_numerical_change:
+    if total_changes > 50 or total_changes > 10 and has_numerical_change:
         return "major"
     elif total_changes > 10 or has_numerical_change:
         return "moderate"
