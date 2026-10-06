@@ -37,7 +37,7 @@ import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -287,7 +287,7 @@ def _parse_gdelt_datetime(value: str, fmt: str = "%Y%m%d%H%M%S") -> Optional[dat
     if not value:
         return None
     try:
-        return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+        return datetime.strptime(value, fmt).replace(tzinfo=UTC)
     except ValueError:
         return None
 

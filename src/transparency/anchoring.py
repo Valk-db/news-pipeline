@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Protocol, runtime_checkable
 
 from src.transparency.log import canonical_json
@@ -127,7 +127,7 @@ class OpenTimestampsStubProvider:
         return Attestation(
             provider=self.name,
             digest_hex=digest_hex,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             receipt=receipt,
         )
 

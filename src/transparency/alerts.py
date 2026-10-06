@@ -17,7 +17,7 @@ stay out of scripts/check_schema.py's drift comparison.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from sqlalchemy import Column, DateTime, Index, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -36,7 +36,7 @@ class TransparencyAlert(TransparencyBase):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     kind = Column(String(64), nullable=False)  # e.g. "inconsistent_history"
     detail = Column(JSONB, nullable=False, default=dict)  # structured, never a secret
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
 
 __all__ = ["TransparencyAlert"]

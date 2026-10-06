@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import logging
@@ -409,7 +409,7 @@ async def fact_check_article(
             fact_checker=result["fact_checker"],
             fact_checker_url=None,
             explanation=result.get("explanation"),
-            claim_date=datetime.now(timezone.utc),  # Would be article publish date
+            claim_date=datetime.now(UTC),  # Would be article publish date
         )
 
         session.add(fc)

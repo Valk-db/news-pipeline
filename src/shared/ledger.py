@@ -58,7 +58,7 @@ opening the context manager, and a stage that does not is unaffected.
 
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any, AsyncGenerator, Dict, Optional, cast
 from uuid import UUID, uuid4
 
@@ -81,7 +81,7 @@ MAX_ERROR_CHARS = 2000
 
 def _utcnow() -> datetime:
     """Now, in UTC. Every timestamp this module writes is UTC, aware."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def dropped_state(reason: str) -> str:

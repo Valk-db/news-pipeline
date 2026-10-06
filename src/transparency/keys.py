@@ -49,7 +49,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Mapping
 
 from src.transparency.checkpoint import (
@@ -108,8 +108,8 @@ class TrustedKey:
 def _as_utc(moment: datetime) -> datetime:
     """Aware UTC datetime, assuming UTC when the value came back naive."""
     if moment.tzinfo is None:
-        return moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc)
+        return moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC)
 
 
 class TrustedKeyError(ValueError):

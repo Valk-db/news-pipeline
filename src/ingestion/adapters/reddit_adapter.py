@@ -4,6 +4,7 @@ from src.ingestion import reddit
 from src.shared.database import get_session
 from src.schema.models import RawArticle
 from sqlalchemy import select
+from datetime import UTC
 
 
 class RedditAdapter:
@@ -19,8 +20,8 @@ class RedditAdapter:
         # P1-1: Fetch known URL hashes from DB to dedup before extraction
         known_url_hashes = set()
         async with get_session() as session:
-            from datetime import datetime, timezone, timedelta
-            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            from datetime import datetime, timedelta
+            cutoff = datetime.now(UTC) - timedelta(days=30)
             stmt = select(RawArticle.url_hash).where(
                 RawArticle.source_tier == "tier3",  # Reddit is tier-3
                 RawArticle.fetched_at >= cutoff,

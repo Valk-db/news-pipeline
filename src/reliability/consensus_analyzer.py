@@ -1,6 +1,6 @@
 """Consensus analysis for source reliability - compare source claims against tier-1 baseline."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
 import numpy as np
@@ -42,7 +42,7 @@ class ConsensusAnalyzer:
         Returns:
             Dict with consensus_alignment score (0-100) and details
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+        cutoff = datetime.now(UTC) - timedelta(days=days_back)
 
         # Get tier-1 articles for the same stories as this source
         tier1_articles = await self._get_tier1_articles_for_source(session, source_domain, cutoff)
@@ -233,7 +233,7 @@ async def compute_daily_reliability_snapshots(
         Number of snapshots created
     """
     if date is None:
-        date = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        date = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Get all sources that have articles in the last 30 days
     cutoff = date - timedelta(days=30)
@@ -441,7 +441,7 @@ async def detect_corrections(session: AsyncSession) -> int:
         Number of new corrections detected
     """
     # Get articles that have been in DB for a while
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
 
     stmt = (
         select(RawArticle)
@@ -480,7 +480,7 @@ async def detect_corrections(session: AsyncSession) -> int:
                     original_text=article.body_text[:5000],
                     corrected_text=current_text[:5000],
                     severity=severity,
-                    correction_date=datetime.now(timezone.utc),
+                    correction_date=datetime.now(UTC),
                     correction_url=article.url,
                 )
                 corrections.append(correction)

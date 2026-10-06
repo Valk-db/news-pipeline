@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from enum import Enum as PyEnum
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, Enum, Index, UniqueConstraint, JSON, Boolean, Float
@@ -67,7 +67,7 @@ class RawArticle(Base):
     source_domain = Column(String(255), nullable=False)
     source_tier = Column(Enum(SourceTier), nullable=False, default=SourceTier.TIER3)
     published_at = Column(DateTime(timezone=True), nullable=True)
-    fetched_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    fetched_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
     entities = Column(JSON, nullable=True)  # {"PERSON": [...], "ORG": [...], "GPE": [...]}
     minhash_signature = Column(JSON, nullable=True)  # MinHash serialized
     content_hash = Column(String(64), nullable=True)  # For exact dedup
@@ -131,7 +131,7 @@ class ReportingUnit(DerivedStateMixin, Base):
     source_tiers = Column(JSON, nullable=False)  # {"tier1": 2, "tier2": 1}
     owner_groups = Column(JSON, nullable=False)  # {"AP": 1, "Sinclair": 3, ...}
     tier1_owner_groups = Column(JSON, nullable=False, default={})  # Only owners from tier-1 articles
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     representative = relationship("RawArticle", foreign_keys=[representative_article_id], lazy="selectin")
 
@@ -164,8 +164,8 @@ class Story(DerivedStateMixin, Base):
     viewpoint_cluster_id = Column(UUID(as_uuid=True), nullable=True)  # Groups stories by perspective
     status = Column(Enum(Status), nullable=False, default=Status.PENDING)
     gate_reason = Column(Text, nullable=True)  # Why blocked/queued
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
     # Relationships
     units = relationship(
@@ -220,7 +220,7 @@ class GateDecision(DerivedStateMixin, Base):
     gate_name = Column(Text, nullable=False)
     # GATE_VERSION from src/shared/analyzer_versions.py: the shape of this payload.
     gate_version = Column(String(64), nullable=False)
-    decided_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    decided_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
     passed = Column(Boolean, nullable=False)
     # The admission score and the threshold it was compared against. NULL for the tier1 gate,
     # which has no score -- a boolean rule has nothing to record there.
@@ -281,8 +281,8 @@ class CuratedPost(Base):
     scheduled_at = Column(DateTime(timezone=True), nullable=True)
     posted_at = Column(DateTime(timezone=True), nullable=True)
     error = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
 
 class StatusLog(Base):
@@ -291,7 +291,7 @@ class StatusLog(Base):
     __table_args__ = (Index("ix_status_log_run_at", "run_at"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    run_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    run_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
     phase = Column(String(50), nullable=False)  # ingest, verify, group, curate
     status = Column(String(20), nullable=False)  # ok, warn, error
     details = Column(JSON, nullable=True)
@@ -309,8 +309,8 @@ class CanonicalEntity(DerivedStateMixin, Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     canonical_name = Column(String(255), nullable=False)  # Preferred display name
     entity_type = Column(String(50), nullable=False)  # PERSON, ORG, GPE, LOC, EVENT, PRODUCT
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
     # Geolocation fields for the public map
     latitude = Column(Float, nullable=True)
@@ -337,7 +337,7 @@ class EntityAlias(DerivedStateMixin, Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     canonical_entity_id = Column(UUID(as_uuid=True), ForeignKey("canonical_entities.id", ondelete="CASCADE"), nullable=False)
     alias = Column(String(255), nullable=False)  # Alternative surface form
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     canonical_entity = relationship("CanonicalEntity", back_populates="aliases")
 
@@ -383,7 +383,7 @@ class EventGeometry(DerivedStateMixin, Base):
     geometry_type = Column(Enum(EventGeometryType, name="geometrytype"), nullable=False)
     geojson = Column(JSON, nullable=False)  # Full GeoJSON geometry object
     properties = Column(JSON, nullable=True)  # Additional properties
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     # Relationship - explicitly specify foreign_keys to disambiguate
     event = relationship("Event", back_populates="geometry", foreign_keys="Event.geometry_id")
@@ -406,7 +406,7 @@ class EventLayer(Base):
     min_zoom = Column(Integer, nullable=False, default=0)
     max_zoom = Column(Integer, nullable=False, default=20)
     color = Column(String(7), nullable=False, default="#3b82f6")  # Hex color
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     # Relationship
     events = relationship("Event", back_populates="layer")
@@ -463,7 +463,7 @@ class Event(DerivedStateMixin, Base):
     canonical_event_id = Column(
         UUID(as_uuid=True), ForeignKey("events.id", ondelete="SET NULL"), nullable=True
     )
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     # Relationships - explicitly specify foreign_keys
     story = relationship("Story", backref="events")
@@ -487,7 +487,7 @@ class ArticleEmbedding(DerivedStateMixin, Base):
     model = Column(String(100), nullable=False)  # e.g., "sentence-transformers/all-MiniLM-L6-v2"
     embedding = Column(JSON, nullable=False)  # Vector as JSON array (pgvector handles this)
     dimensions = Column(Integer, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     article = relationship("RawArticle")
 
@@ -505,7 +505,7 @@ class StoryEmbedding(DerivedStateMixin, Base):
     model = Column(String(100), nullable=False)
     embedding = Column(JSON, nullable=False)
     dimensions = Column(Integer, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     story = relationship("Story")
 
@@ -535,7 +535,7 @@ class Snippet(Base):
     entities = Column(JSON, nullable=True)  # Entities mentioned in snippet
     minhash_signature = Column(JSON, nullable=True)  # For dedup
     confidence = Column(Integer, nullable=False, default=100)  # 0-100 confidence
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     story = relationship("Story")
     article = relationship("RawArticle")
@@ -569,7 +569,7 @@ class MediaAsset(Base):
     source = Column(String(100), nullable=True)  # youtube, vimeo, article, etc.
     source_id = Column(String(100), nullable=True)  # Platform-specific ID
     meta_data = Column(JSON, nullable=True)  # Additional platform-specific metadata
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     article = relationship("RawArticle")
     story = relationship("Story")
@@ -607,7 +607,7 @@ class SourceReliabilitySnapshot(DerivedStateMixin, Base):
 
     # Metadata
     tier_at_snapshot = Column(String(20), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
 
 class FactCheckRecord(Base):
@@ -646,7 +646,7 @@ class FactCheckRecord(Base):
     fact_checker_url = Column(Text, nullable=True)  # URL to fact-check source
     explanation = Column(Text, nullable=True)
 
-    checked_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    checked_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
     claim_date = Column(DateTime(timezone=True), nullable=True)  # When claim was made
 
     article = relationship("RawArticle")
@@ -679,7 +679,7 @@ class CorrectionRecord(Base):
     correction_date = Column(DateTime(timezone=True), nullable=False)
     correction_url = Column(Text, nullable=True)  # URL to correction notice
 
-    detected_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    detected_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     article = relationship("RawArticle")
 
@@ -708,8 +708,8 @@ class Claim(DerivedStateMixin, Base):
     story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
     text = Column(Text, nullable=False)
     claim_type = Column(Enum(ClaimType), nullable=False, default=ClaimType.FACT)
-    first_seen_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    first_seen_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     story = relationship("Story")
     evidence = relationship("ClaimEvidence", back_populates="claim", cascade="all, delete-orphan")
@@ -738,7 +738,7 @@ class ClaimEvidence(DerivedStateMixin, Base):
     unit_id = Column(UUID(as_uuid=True), ForeignKey("reporting_units.id", ondelete="CASCADE"), nullable=False)
     stance = Column(Enum(ClaimStance), nullable=False, default=ClaimStance.NEUTRAL)
     confidence = Column(Integer, nullable=False, default=50)  # 0-100, matches FactCheckRecord's convention
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     claim = relationship("Claim", back_populates="evidence")
     unit = relationship("ReportingUnit")
@@ -792,7 +792,7 @@ class EntityEdge(DerivedStateMixin, Base):
     object_id = Column(UUID(as_uuid=True), nullable=False)
     confidence = Column(Integer, nullable=False, default=50)  # 0-100
     source_unit_id = Column(UUID(as_uuid=True), ForeignKey("reporting_units.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
 
 class TopicGroup(Base):
@@ -807,7 +807,7 @@ class TopicGroup(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     parent_group_id = Column(UUID(as_uuid=True), ForeignKey("topic_groups.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     children = relationship("TopicGroup", backref=backref("parent", remote_side=[id]))
 
@@ -821,7 +821,7 @@ class StoryTopicGroup(DerivedStateMixin, Base):
     story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False)
     topic_group_id = Column(UUID(as_uuid=True), ForeignKey("topic_groups.id", ondelete="CASCADE"), nullable=False)
     confidence = Column(Integer, nullable=True)  # 0-100, null if manually assigned
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
 
 class SourceTopicReliability(Base):
@@ -843,7 +843,7 @@ class SourceTopicReliability(Base):
     score = Column(Integer, nullable=False)  # 0-100, same convention as SourceReliabilitySnapshot
     sample_size = Column(Integer, nullable=False, default=0)
     snapshot_date = Column(DateTime(timezone=True), nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
 
 class ArticleRevision(Base):
@@ -894,7 +894,7 @@ class ArticleRevision(Base):
     # merkle_log_entries.index when this revision was appended to the transparency log.
     # Nullable because the log is opt-in and (deliberately) has no migration yet.
     log_index = Column(Integer, nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     article = relationship("RawArticle")
 
@@ -925,7 +925,7 @@ class ArticleCorrection(Base):
     signal = Column(String(50), nullable=False)  # Matched pattern label, e.g. "correction", "erratum"
     location = Column(String(20), nullable=False)  # top, body, corrections_block
     snippet = Column(Text, nullable=False)  # The matched text, capped
-    detected_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    detected_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     article = relationship("RawArticle")
     revision = relationship("ArticleRevision")
@@ -957,7 +957,7 @@ class PipelineRun(Base):
     # grouping has to keep working for a run whose first stage failed before writing anything.
     run_id = Column(UUID(as_uuid=True), nullable=False)
     stage = Column(String(50), nullable=False)  # ingest_rss, dedupe, cluster, geocode, ...
-    started_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
     finished_at = Column(DateTime(timezone=True), nullable=True)  # NULL while the stage is running
     items_in = Column(Integer, nullable=False, default=0)
     items_out = Column(Integer, nullable=False, default=0)
@@ -989,7 +989,7 @@ class DeadLetter(Base):
     reason = Column(Text, nullable=False)  # Machine readable, e.g. parse_failed, geocode_empty
     article_id = Column(UUID(as_uuid=True), ForeignKey("raw_articles.id", ondelete="SET NULL"), nullable=True)
     payload = Column(JSON, nullable=True)  # The item itself, for items with no article row
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     article = relationship("RawArticle")
 
@@ -1021,7 +1021,7 @@ class UrlAlias(Base):
     old_url_hash = Column(String(64), primary_key=True)  # raw_articles.url_hash, frozen
     url_hash_v1 = Column(String(64), nullable=False)  # raw_articles.url_hash_v1
     canonical_url_v1 = Column(Text, nullable=False)  # canonicalize_url_v1 output
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
 
 # ============================================================================

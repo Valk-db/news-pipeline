@@ -43,7 +43,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from sqlalchemy import JSON, Column, DateTime, Index, Integer, String, Text, select
@@ -97,8 +97,8 @@ def _utc(value: datetime) -> datetime:
     """Normalize to tz-aware UTC. Naive input is read as UTC, which is what
     SQLite hands back for a timezone=True column."""
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @dataclass(frozen=True)
@@ -144,7 +144,7 @@ def build_entry(
     chain = compute_chain_hash(previous_chain_hash, leaf)
     return LogEntry(
         index=index,
-        timestamp=_utc(timestamp or datetime.now(timezone.utc)),
+        timestamp=_utc(timestamp or datetime.now(UTC)),
         payload=dict(payload),
         canonical_payload=canonical,
         leaf_hash=leaf,
@@ -259,7 +259,7 @@ class MerkleLogEntry(TransparencyBase):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     index = Column(Integer, nullable=False, unique=True)  # Gapless; entry 0 is the first append
     hash_scheme = Column(String(32), nullable=False, default=HASH_SCHEME)
-    timestamp = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    timestamp = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
     payload = Column(JSON, nullable=False)  # Observation as recorded, e.g. {"url": ..., "fetched_at": ..., "body_sha256": ...}
     canonical_payload = Column(Text, nullable=False)  # Exact UTF-8 bytes that were hashed
     leaf_hash = Column(String(64), nullable=False)  # SHA256 hex of canonical_payload

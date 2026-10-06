@@ -1,6 +1,6 @@
 """Tiered ingestion scheduler for multi-source pipeline."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Optional
 from src.shared.config import get_settings
 from src.ingestion.source_registry import (
@@ -37,7 +37,7 @@ class TieredScheduler:
         if last_run is None:
             return True
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         elapsed_hours = (now - last_run).total_seconds() / 3600
 
         if tier == SourceTier.TIER1:
@@ -57,7 +57,7 @@ class TieredScheduler:
 
     def get_next_run_time(self, tier: SourceTier, last_run: Optional[datetime] = None) -> datetime:
         """Get the next scheduled run time for a tier."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         if tier == SourceTier.TIER1:
             # Next hour boundary

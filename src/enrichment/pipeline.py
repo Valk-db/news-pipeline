@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from typing import List, Dict, Any, Awaitable, Tuple
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.schema.models import (
@@ -423,7 +423,7 @@ async def enrich_recent_stories(
     """
     from datetime import timedelta
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+    cutoff = datetime.now(UTC) - timedelta(hours=hours_back)
 
     # Get recent PENDING/QUEUED stories - use a temporary session for this query
     async with session_factory() as session:

@@ -2,7 +2,7 @@
 
 import os
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import logging
 
 logger = logging.getLogger(__name__)
@@ -269,7 +269,7 @@ class RedditFinder:
                         "score": p["score"],
                         "upvote_ratio": p["upvote_ratio"],
                         "num_comments": p["num_comments"],
-                        "created_at": datetime.fromtimestamp(p["created_utc"], tz=timezone.utc).isoformat(),
+                        "created_at": datetime.fromtimestamp(p["created_utc"], tz=UTC).isoformat(),
                         "url": f"https://reddit.com{p['permalink']}",
                         "source": "reddit",
                     })

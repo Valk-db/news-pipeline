@@ -16,7 +16,7 @@ import asyncio
 import logging
 import sys
 import os
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import List, Dict, Tuple
 from src.ingestion.adapter import SourceHealth
 from src.ingestion.gdelt import GDELT_TIER1_CRITICAL_DOMAINS
@@ -374,7 +374,7 @@ async def run_ingestion(
     # and so a feed that died yesterday is still reported dead today.
     feed_health = load_active()
     results = {
-        "started_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": datetime.now(UTC).isoformat(),
         "phases": {},
     }
 
@@ -686,7 +686,7 @@ async def run_ingestion(
         results["phases"]["gate"] = gated
         await log_status(session, "gate", "ok", gated)
 
-    results["completed_at"] = datetime.now(timezone.utc).isoformat()
+    results["completed_at"] = datetime.now(UTC).isoformat()
     return results
 
 

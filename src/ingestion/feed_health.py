@@ -36,7 +36,7 @@ import logging
 import os
 import tempfile
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +204,7 @@ def record_poll(
     ``detail`` carries why a poll yielded nothing (a fetch error's stat key, or
     "0 entries"), so the dead report says why rather than just that.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     feed = registry.get(url)
     if source_key:
         feed.source_key = source_key
