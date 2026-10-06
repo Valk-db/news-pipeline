@@ -134,7 +134,7 @@ def test_the_schedule_does_not_collide_with_a_scheduled_pipeline(workflow: dict)
     # A cron field order is "min hour dom mon dow", so index 0 is the minute.
     # Getting this backwards is the kind of thing that makes a timing assertion
     # pass for the wrong reason.
-    ingest = "23 6,18 * * *".split(",")[0].split()
+    ingest = ["23 6", "18 * * *"][0].split()
     minute, hour = int(crons[0].split()[0]), int(crons[0].split()[1])
     assert (hour, minute) < (int(ingest[1]), int(ingest[0])), (
         "the check runs at %02d:%02d, which is not before the %02d:%02d daily "

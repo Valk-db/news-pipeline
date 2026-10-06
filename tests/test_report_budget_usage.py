@@ -127,7 +127,7 @@ class TestReportsEveryCounterInItsOwnUnit:
         """MyMemory is keyless and capped in characters. Rendering its 45,000 against a
         token cap would be a category error, so the unit is printed and the number is
         simply its own."""
-        rows = _rows(**{"mymemory_chars": 45_000})
+        rows = _rows(mymemory_chars=45_000)
         text = format_table(rows, flag_token_exhausted(rows))
         assert "EXHAUSTED (chars)" in text
         assert flag_token_exhausted(rows) == []

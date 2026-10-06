@@ -121,7 +121,7 @@ def test_confidence_bands_partition_zero_to_hundred() -> None:
     assert CONFIDENCE_BANDS[-1][1] == 100
     for (_, hi), (lo, _) in zip(CONFIDENCE_BANDS, CONFIDENCE_BANDS[1:]):
         assert lo == hi + 1
-    seen = {confidence_band(v) for v in range(0, 101)}
+    seen = {confidence_band(v) for v in range(101)}
     assert seen == set(range(len(CONFIDENCE_BANDS)))
 
 

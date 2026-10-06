@@ -218,7 +218,7 @@ class TestIngestGdeltCircuitBreaker:
             assert health["fallback_used"] is False
 
             # Verify the tier1 critical domains set is now empty (all have RSS backup)
-            assert GDELT_TIER1_CRITICAL_DOMAINS == set()
+            assert set() == GDELT_TIER1_CRITICAL_DOMAINS
 
     @pytest.mark.asyncio
     async def test_gkg_fallback_engages_when_doc_yields_nothing(self):
@@ -449,7 +449,7 @@ class TestRunIngestionIntegration:
         from src.ingestion.adapter import SourceHealth
         from src.ingestion.gdelt import GDELT_TIER1_CRITICAL_DOMAINS
 
-        assert GDELT_TIER1_CRITICAL_DOMAINS == set()
+        assert set() == GDELT_TIER1_CRITICAL_DOMAINS
 
         ingestion_env.fetch(
             {"gdelt": []},
@@ -573,7 +573,7 @@ class TestConfiguration:
 
     def test_tier1_critical_domains_constant(self):
         """GDELT_TIER1_CRITICAL_DOMAINS is empty since all tier-1 sources have RSS backup."""
-        assert GDELT_TIER1_CRITICAL_DOMAINS == set()
+        assert set() == GDELT_TIER1_CRITICAL_DOMAINS
 
     def test_domain_filters_list(self):
         """DOMAIN_FILTERS has 3 domains (BBC, Guardian, NPR - AP/Reuters use RSS)."""

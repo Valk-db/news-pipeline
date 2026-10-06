@@ -72,9 +72,7 @@ def test_no_product_module_defines_or_calls_the_removed_check(name: str) -> None
                 offenders.append("%s:%d name %s" % (path.name, node.lineno, name))
             elif isinstance(node, ast.Attribute) and node.attr == name:
                 offenders.append("%s:%d attribute %s" % (path.name, node.lineno, name))
-            elif isinstance(node, ast.FunctionDef) and node.name == name:
-                offenders.append("%s:%d def %s" % (path.name, node.lineno, name))
-            elif isinstance(node, ast.AsyncFunctionDef) and node.name == name:
+            elif isinstance(node, ast.FunctionDef) and node.name == name or isinstance(node, ast.AsyncFunctionDef) and node.name == name:
                 offenders.append("%s:%d def %s" % (path.name, node.lineno, name))
     assert offenders == [], (
         "the LLM availability check is back in product code: %s. It had zero callers "

@@ -55,9 +55,7 @@ def path_regex(path: str, wildcard: str = "[^/]+") -> re.Pattern:
     """
     segments = []
     for segment in path.strip("/").split("/") if path.strip("/") else []:
-        if "{{" in segment:
-            segments.append(wildcard)
-        elif segment.startswith("{") and segment.endswith("}"):
+        if "{{" in segment or segment.startswith("{") and segment.endswith("}"):
             segments.append(wildcard)
         else:
             segments.append(re.escape(segment))

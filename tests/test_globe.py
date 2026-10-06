@@ -308,7 +308,7 @@ def test_most_specific_ranks_unknown_labels_last():
     unknown = located("Somewhere", 0.0, 0.0, "wormhole")
 
     assert most_specific([unknown, known]).canonical_name == "Tel Aviv"
-    assert all(UNKNOWN_SPECIFICITY > rank for rank in PLACE_SPECIFICITY.values())
+    assert all(rank < UNKNOWN_SPECIFICITY for rank in PLACE_SPECIFICITY.values())
 
 
 def test_story_event_copies_the_storys_own_numbers():

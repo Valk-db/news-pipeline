@@ -293,9 +293,7 @@ class TestIntegration:
         async def mock_execute(stmt):
             call_count[0] += 1
             result = MagicMock()
-            if call_count[0] == 1:  # PENDING query
-                result.scalars.return_value.all.return_value = []
-            elif call_count[0] == 2:  # BLOCKED query
+            if call_count[0] == 1 or call_count[0] == 2:  # PENDING query
                 result.scalars.return_value.all.return_value = []
             elif call_count[0] == 3:  # QUEUED query - filter by queued_hours (168h)
                 queued_cutoff = now - timedelta(hours=168)
